@@ -1,0 +1,98 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+//! Lamp control: on/off, PWM duty cycle and the `E950` mode.
+//!
+//! Translated from `hp3900` and checked against the HP driver: the start-up
+//! in `00_collegamento` and the lamp switched off and on again during the
+//! calibration of a 300 dpi scan (`04_colore_300dpi_A4`). Only the flatbed
+//! lamp for now: the transparency adapter lamp needs a capture of the HP
+//! driver scanning a slide.
+
+use crate::error::Result;
+use crate::init::Registers;
+use crate::status::Lamp;
+use crate::transport::{Chip, Transport};
+
+impl<T: Transport> Chip<T> {
+    /// Which lamp is on (`Lamp_Status_Get`): reads `E946` and `E954`-`E955`.
+    pub fn lamp_status(&mut self) -> Result<Lamp> {
+        let e946 = self.read_byte(0xe946)?;
+        let e955 = self.read_word(0xe954)?.to_le_bytes()[1];
+        Ok(Lamp::from_registers(e946, e955))
+    }
+
+    /// Switches the flatbed lamp on or off (`Lamp_Status_Set` with
+    /// `FLB_LAMP`, chipsets other than the RTS8822BL-03A): reads the whole
+    /// block, sets bit 6 of `E946` and, when switching on, clears bit 4 of
+    /// `E955` (flatbed, not transparency adapter). Updates `init` like
+    /// hp3900.
+    ///
+    /// hp3900 waits 200 ms between the two writes; the HP driver does not
+    /// (3 ms apart in every capture), and neither does this.
+    pub fn lamp_flatbed(&mut self, init: &mut Registers, on: bool) -> Result<()> {
+        let mut regs = self.read_block()?;
+        regs.set_bits(0x146, 0x40, u8::from(on));
+        if regs.get(0x146) & 0x40 != 0 {
+            regs.set_bits(0x155, 0x10, 0);
+        }
+        init.0[0x146] = (init.get(0x146) & 0x9f) | (regs.get(0x146) & 0x60);
+        init.0[0x155] = regs.get(0x155);
+        self.write_byte(0xe946, regs.get(0x146))?;
+        self.write_registers(0xe954, &regs.0[0x154..0x156])
+    }
+
+    /// Lets the chip drive the lamp with its PWM (`Lamp_PWM_use`, with
+    /// `PwmLampLevel=0` as in the HP configuration): bit 6 of `E948` on,
+    /// bits 6-7 of `E9E0` off; `enable = false` clears both.
+    pub fn lamp_pwm_use(&mut self, init: &mut Registers, enable: bool) -> Result<()> {
+        let mut a = self.read_byte(0xe948)?;
+        let mut b = self.read_byte(0xe9e0)?;
+        if enable {
+            a |= 0x40;
+            b &= 0x3f;
+            init.0[0x148] |= 0x40;
+            init.0[0x1e0] &= 0x3f;
+        } else {
+            b &= 0x7f;
+            a &= 0xbf;
+        }
+        self.write_byte(0xe948, a)?;
+        self.write_byte(0xe9e0, b)
+    }
+
+    /// Duty cycle of the lamp PWM, 0-63 (`Lamp_PWM_DutyCycle_Get`, low 6
+    /// bits of `E948`).
+    pub fn lamp_pwm_duty_cycle(&mut self) -> Result<u8> {
+        Ok(self.read_byte(0xe948)? & 0x3f)
+    }
+
+    /// Sets the duty cycle of the lamp PWM (`Lamp_PWM_DutyCycle_Set`, with
+    /// `PwmLampLevel=0`). Updates `init` like hp3900.
+    pub fn set_lamp_pwm_duty_cycle(&mut self, init: &mut Registers, duty: u8) -> Result<()> {
+        let mut regs = self.read_block()?;
+        regs.set_bits(0x148, 0x3f, duty);
+        regs.set_bits(0x148, 0x40, 0);
+        regs.0[0x1e0] |= (duty >> 1) & 0x40;
+        init.set_bits(0x148, 0x7f, regs.get(0x148));
+        init.set_bits(0x1e0, 0x3f, regs.get(0x1e0));
+        self.write_byte(0xe948, regs.get(0x148))?;
+        self.write_byte(0xe9e0, regs.get(0x1e0))
+    }
+
+    /// Prepares the lamp PWM with a fixed duty cycle (`Lamp_PWM_Setup`):
+    /// enables the PWM and changes the duty cycle only if it differs.
+    pub fn lamp_pwm_setup(&mut self, init: &mut Registers, fixed_pwm: u8) -> Result<()> {
+        self.lamp_pwm_use(init, true)?;
+        if self.lamp_pwm_duty_cycle()? != fixed_pwm {
+            self.set_lamp_pwm_duty_cycle(init, fixed_pwm)?;
+        }
+        Ok(())
+    }
+
+    /// Sets or clears bit 6 of `E950` (`Set_E950_Mode`). hp3900 clears it
+    /// at the end of `RTS_Scanner_Init`; its meaning is unknown.
+    pub fn set_e950_mode(&mut self, set: bool) -> Result<()> {
+        let data = self.read_word(0xe950)?;
+        let data = if set { data | 0x40 } else { data & 0xffbf };
+        self.write_word(0xe950, data)
+    }
+}

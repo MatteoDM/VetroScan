@@ -317,9 +317,11 @@ impl<T: Transport> Chip<T> {
         self.write_word(0xe946, u16::from_le_bytes([low, high]))
     }
 
-    /// Start-up of the scanner (`IsScannerLinked`), in the order of the HP
-    /// driver: `Init_USBData`, wait for the chip, warm reset, check the
-    /// carriage, enable the buttons, set the lamp timer.
+    /// Start-up of the scanner (`IsScannerLinked` and the end of
+    /// `RTS_Scanner_Init`), in the order of the HP driver: `Init_USBData`,
+    /// wait for the chip, warm reset, check the carriage, enable the
+    /// buttons, set the lamp timer, prepare the lamp PWM, clear the `E950`
+    /// mode bit.
     ///
     /// Differences from hp3900, all to match the HP driver or to stay safe:
     /// - the HP driver enables the buttons and sets the lamp timer at every
@@ -328,7 +330,8 @@ impl<T: Transport> Chip<T> {
     ///   `E946` before the timer, and writes the timer twice;
     /// - nothing is written to the EEPROM: hp3900 clears the gain/offset
     ///   counters there on the first connection, and the HP driver writes
-    ///   the lamp PWM status (`Lamp_PWM_SaveStatus`, EEPROM 0x7B) next;
+    ///   the lamp PWM status (`Lamp_PWM_SaveStatus`, EEPROM 0x7B) before
+    ///   `Lamp_PWM_Setup`;
     /// - the carriage is not moved. If it is not at home, [`Link::at_home`]
     ///   says so and parking is left to the caller (`Head_ParkHome` needs
     ///   the motor code).
@@ -346,6 +349,11 @@ impl<T: Transport> Chip<T> {
         self.read_word(0xe946)?;
         self.lamp_status_timer_set(&mut registers, profile.lamp_timer_minutes)?;
         self.lamp_status_timer_set(&mut registers, profile.lamp_timer_minutes)?;
+        // The HP driver writes EEPROM 0x7B here (Lamp_PWM_SaveStatus):
+        // left out.
+        self.lamp_pwm_setup(&mut registers, profile.fixed_pwm)?;
+        // RTS_Scanner_Init, right after IsScannerLinked.
+        self.set_e950_mode(false)?;
         Ok(Link {
             registers,
             link_word,

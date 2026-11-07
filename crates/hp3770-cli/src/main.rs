@@ -53,6 +53,15 @@ enum Command {
     /// buttons, lamp timer) with the values the HP driver uses. Never writes
     /// the EEPROM and never moves the carriage.
     Init,
+    /// Switch the flatbed lamp on or off.
+    ///
+    /// Writes E946 and E954 like the HP driver. The lamp also switches off
+    /// by itself after the timer set by `init` (13 minutes).
+    Lamp {
+        /// on or off.
+        #[arg(value_enum)]
+        state: LampState,
+    },
     /// Print the front-panel buttons as they are pressed.
     Buttons {
         /// Stop after this many presses (default: run until Ctrl+C).
@@ -66,6 +75,12 @@ enum Command {
         #[arg(long)]
         raw: bool,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum LampState {
+    On,
+    Off,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -83,6 +98,7 @@ fn main() -> ExitCode {
         Command::List => list(),
         Command::Status => open(cli.backend).and_then(status),
         Command::Init => open(cli.backend).and_then(init),
+        Command::Lamp { state } => open(cli.backend).and_then(|s| lamp(s, state)),
         Command::Probe { output } => open(cli.backend).and_then(|s| probe(s, output)),
         Command::Buttons { count, method, raw } => {
             open(cli.backend).and_then(|s| buttons(s, count, method, raw))
@@ -173,6 +189,16 @@ fn init(scanner: Scanner) -> CliResult {
         regs.get(0x146),
         regs.get(0x147)
     );
+    Ok(())
+}
+
+fn lamp(scanner: Scanner, state: LampState) -> CliResult {
+    let mut chip = Chip::new(scanner);
+    // The block kept in memory by a long-running driver; this one-shot
+    // command has none, and lamp_flatbed reads the chip anyway.
+    let mut init = hp3770_core::init::Registers::default();
+    chip.lamp_flatbed(&mut init, state == LampState::On)?;
+    println!("lamp             {}", chip.lamp_status()?);
     Ok(())
 }
 
@@ -348,5 +374,12 @@ mod tests {
         let cli = Cli::parse_from(["hp3770", "--backend", "usbscan", "probe", "-o", "x.txt"]);
         assert_eq!(cli.backend, BackendArg::Usbscan);
         assert!(matches!(cli.command, Command::Probe { output: Some(_) }));
+        let cli = Cli::parse_from(["hp3770", "lamp", "off"]);
+        assert!(matches!(
+            cli.command,
+            Command::Lamp {
+                state: LampState::Off
+            }
+        ));
     }
 }
