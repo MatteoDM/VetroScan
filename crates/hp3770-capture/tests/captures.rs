@@ -128,3 +128,28 @@ fn gray_and_lineart_transfer_colour_data() {
         assert!((b / c - 1.0).abs() < 0.02, "{name}: {b} vs colour {c}");
     }
 }
+
+#[test]
+fn execute_matches_the_hp_driver() {
+    use hp3770_capture::replay::Replay;
+    use hp3770_core::transport::Chip;
+
+    // Cut from 04_colore_300dpi_A4.pcap (2.480-2.623 s): the first
+    // RTS_Execute of a 300 dpi scan.
+    let mut chip = Chip::new(Replay::from_trace(&fixture("04_execute.pcap")));
+    chip.execute().unwrap();
+    chip.transport_mut().finish().unwrap();
+}
+
+#[test]
+fn executions_of_a_full_scan() {
+    let Some(trace) = full_capture("04_colore_300dpi_A4.pcap") else {
+        return;
+    };
+    let executions = trace.executions();
+    assert_eq!(executions.len(), 10);
+    for ex in &executions {
+        let block = ex.bytes().expect("the HP driver writes the whole block");
+        assert_eq!(block[0] & 0x80, 0x80);
+    }
+}

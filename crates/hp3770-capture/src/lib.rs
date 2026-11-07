@@ -10,10 +10,16 @@
 //! 3. [`trace`] pairs each request with its completion and decodes control
 //!    requests with [`hp3770_core::protocol::Command`].
 //!
+//! On top of a trace, [`registers`] rebuilds the chip state at each
+//! execution, and [`replay::Replay`] plays the capture back as a fake
+//! scanner that checks every request of the Rust driver.
+//!
 //! The resulting [`trace::Trace`] is the reference the Rust driver is tested
 //! against: the same scan settings must produce the same register writes.
 
 pub mod pcap;
+pub mod registers;
+pub mod replay;
 pub mod trace;
 pub mod usbpcap;
 

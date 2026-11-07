@@ -173,6 +173,22 @@ impl<T: Transport> Chip<T> {
         self.write_registers(address, &value.to_le_bytes())
     }
 
+    /// Starts the operation programmed in the registers (`RTS_Execute`).
+    ///
+    /// Pulses bit 6 of `E800` with bit 6 of `E813` cleared then set, waits
+    /// 100 ms and sets bit 7 of `E800`. Same sequence as `hp3900` and as the
+    /// HP driver in the captures.
+    pub fn execute(&mut self) -> Result<()> {
+        let e800 = self.read_byte(0xe800)?;
+        let e813 = self.read_byte(0xe813)? & 0xbf;
+        self.write_byte(0xe813, e813)?;
+        self.write_byte(0xe800, e800 | 0x40)?;
+        self.write_byte(0xe813, e813 | 0x40)?;
+        self.write_byte(0xe800, e800 & 0xbf)?;
+        std::thread::sleep(Duration::from_millis(100));
+        self.write_byte(0xe800, (e800 & 0xbf) | 0x80)
+    }
+
     /// Reads a 16-bit EEPROM word.
     pub fn read_eeprom_word(&mut self, address: u16) -> Result<u16> {
         let b = self.fetch(&Command::ReadEeprom { address, length: 2 }, 2)?;

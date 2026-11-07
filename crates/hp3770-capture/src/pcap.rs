@@ -26,6 +26,8 @@ pub struct Record<'a> {
     pub timestamp: f64,
     /// Captured bytes (may be shorter than the original packet).
     pub data: &'a [u8],
+    /// The whole record as stored in the file, header included.
+    pub raw: &'a [u8],
 }
 
 impl<'a> Pcap<'a> {
@@ -71,6 +73,22 @@ impl<'a> Pcap<'a> {
         }
     }
 
+    /// A new pcap file holding the records captured between `from` and `to`
+    /// seconds after the first record. Used to cut small test fixtures out
+    /// of long captures.
+    pub fn slice(&self, from: f64, to: f64) -> Result<Vec<u8>> {
+        let mut out = self.bytes[..GLOBAL_HEADER_LEN].to_vec();
+        let mut start = None;
+        for record in self.records() {
+            let record = record?;
+            let t = record.timestamp - *start.get_or_insert(record.timestamp);
+            if (from..to).contains(&t) {
+                out.extend_from_slice(record.raw);
+            }
+        }
+        Ok(out)
+    }
+
     /// Iterates over the records. A truncated last record ends the iteration
     /// with an error.
     pub fn records(&self) -> Records<'_, 'a> {
@@ -113,6 +131,7 @@ impl<'a> Iterator for Records<'_, 'a> {
         Some(Ok(Record {
             timestamp: f64::from(secs) + f64::from(frac) * scale,
             data,
+            raw: &bytes[start - RECORD_HEADER_LEN..start + incl],
         }))
     }
 }
