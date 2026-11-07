@@ -18,6 +18,7 @@
 pub mod calibration;
 pub mod device;
 pub mod error;
+pub mod geometry;
 pub mod init;
 pub mod lamp;
 pub mod motor;

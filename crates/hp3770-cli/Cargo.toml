@@ -12,6 +12,7 @@ authors.workspace = true
 hp3770-core.workspace = true
 hp3770-usb.workspace = true
 clap = { version = "4.5", features = ["derive"] }
+png = "0.18"
 
 [[bin]]
 name = "hp3770"

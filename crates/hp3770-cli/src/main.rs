@@ -78,28 +78,35 @@ enum Command {
         #[arg(value_enum)]
         state: LampState,
     },
-    /// Scan an area of the glass in colour at 300 dpi and save it as a PPM
-    /// image.
+    /// Scan an area of the glass in colour and save it as PNG (or PPM if
+    /// the file name ends in .ppm).
     ///
     /// Runs `init`, parks the carriage if needed, calibrates and scans
-    /// exactly as the HP driver does (capture-verified), then parks. The
+    /// exactly as the HP driver does (capture-verified), then stops. The
     /// area is in millimetres from the top left corner of the glass. Never
     /// writes the EEPROM.
     Scan {
-        /// Output file (binary PPM, P6).
+        /// Output file.
         output: PathBuf,
+        /// Resolution: 200, 300, 600 or 1200 dpi.
+        #[arg(long, default_value_t = 300)]
+        dpi: u16,
         /// Left edge, mm.
-        #[arg(long, default_value_t = 80.0)]
+        #[arg(long, default_value_t = 0.0)]
         left: f64,
         /// Top edge, mm.
-        #[arg(long, default_value_t = 123.5)]
+        #[arg(long, default_value_t = 0.0)]
         top: f64,
-        /// Width, mm.
-        #[arg(long, default_value_t = 50.0)]
+        /// Width, mm (default: A4).
+        #[arg(long, default_value_t = 210.0)]
         width: f64,
-        /// Height, mm.
-        #[arg(long, default_value_t = 50.0)]
+        /// Height, mm (default: A4).
+        #[arg(long, default_value_t = 297.0)]
         height: f64,
+        /// Save the chip's linear samples, without the host gamma 2.2 the
+        /// HP driver applies.
+        #[arg(long)]
+        linear: bool,
     },
     /// Print the front-panel buttons as they are pressed.
     Buttons {
@@ -143,11 +150,16 @@ fn main() -> ExitCode {
         Command::Probe { output } => open(cli.backend).and_then(|s| probe(s, output)),
         Command::Scan {
             output,
+            dpi,
             left,
             top,
             width,
             height,
-        } => open(cli.backend).and_then(|s| scan(s, &output, [left, top, width, height])),
+            linear,
+        } => open(cli.backend).and_then(|s| {
+            let area = hp3770_core::geometry::Area::from_mm(dpi, left, top, width, height);
+            scan(s, &output, dpi, area, linear)
+        }),
         Command::Buttons { count, method, raw } => {
             open(cli.backend).and_then(|s| buttons(s, count, method, raw))
         }
@@ -291,49 +303,17 @@ fn forward(scanner: Scanner, steps: u16) -> CliResult {
     Ok(())
 }
 
-/// Resolution of `scan`: the only one whose window the captures pin down.
-const SCAN_DPI: u16 = 300;
-/// First pixel and line of the glass at 300 dpi, from the chip's origin
-/// (captures 04 and 09: A4 at 65, 102; 80 mm, 123.5 mm at 1009, 1561).
-const GLASS_ORIGIN: (u32, u32) = (65, 102);
-/// Size of the glass at 300 dpi (A4 in capture 04).
-const GLASS_SIZE: (u32, u32) = (2480, 3508);
-
-fn scan(scanner: Scanner, output: &std::path::Path, area_mm: [f64; 4]) -> CliResult {
-    use hp3770_core::setup::{ArrangeLine, Hardware, ScanParams};
+fn scan(
+    scanner: Scanner,
+    output: &std::path::Path,
+    dpi: u16,
+    area: hp3770_core::geometry::Area,
+    linear: bool,
+) -> CliResult {
+    use hp3770_core::geometry;
     let profile = &hp3770_core::profile::HP3770;
-    let px = |mm: f64| (mm * f64::from(SCAN_DPI) / 25.4).round().max(0.0) as u32;
-    let [left, top, width, height] = area_mm.map(px);
-    // Even widths, as the HP driver (5 cm -> 592 in capture 09).
-    let width = width.next_multiple_of(2);
-    if width == 0 || height == 0 || left + width > GLASS_SIZE.0 || top + height > GLASS_SIZE.1 {
-        return Err("the area must be inside the glass (216 x 297 mm)".into());
-    }
-    let params = ScanParams {
-        depth: 8,
-        resolution_x: SCAN_DPI,
-        resolution_y: SCAN_DPI,
-        left: GLASS_ORIGIN.0 + left,
-        top: GLASS_ORIGIN.1 + top,
-        width,
-        height,
-    };
-    // The HP driver's 300 dpi scan of capture 04: shading and gamma, lines
-    // arranged by the chip.
-    let hw = Hardware {
-        black_shading: true,
-        white_shading: true,
-        gamma: true,
-        gamma_size: 0,
-        backward: false,
-        static_head: false,
-        dummy_scan: false,
-        compression: false,
-        arrange_line: ArrangeLine::Hardware,
-        high_resolution: false,
-    };
-    // Identity gamma, as the HP driver sends with default settings.
-    let gamma: Vec<u8> = (0..768).map(|i| i as u8).collect();
+    let (params, hw) = geometry::scan_window(dpi, area)?;
+    let gamma = geometry::identity_gamma();
 
     let start = Instant::now();
     let mut chip = Chip::new(scanner);
@@ -389,25 +369,44 @@ fn scan(scanner: Scanner, output: &std::path::Path, area_mm: [f64; 4]) -> CliRes
         image.extend_from_slice(&piece);
     }
     let parked = chip.stop_scan(&mut init, profile)?;
-    // The chip brings the carriage back by itself at 300 dpi; make sure.
+    // The chip brings the carriage back by itself below 600 dpi; make sure.
     chip.head_park_home(&hp3770_core::motor::park_registers(&init), &profile.park)?;
     let pixels = job.bytes_per_line / 3;
     let lines = image.len() / job.bytes_per_line;
-    let mut file = format!(
-        "P6
-{pixels} {lines}
-255
-"
-    )
-    .into_bytes();
-    file.extend_from_slice(&image[..lines * job.bytes_per_line]);
-    std::fs::write(output, file)?;
+    image.truncate(lines * job.bytes_per_line);
+    if !linear {
+        let lut = geometry::host_gamma(2.2);
+        for sample in &mut image {
+            *sample = lut[usize::from(*sample)];
+        }
+    }
+    save_image(output, pixels, lines, &image)?;
     println!(
         "scanned          {pixels} x {lines} pixels in {:.1} s{}",
         start.elapsed().as_secs_f32(),
         if parked { " (parked)" } else { "" }
     );
     println!("saved            {}", output.display());
+    Ok(())
+}
+
+/// Writes an 8-bit RGB image as PNG, or as binary PPM if the name ends in
+/// `.ppm`.
+fn save_image(path: &std::path::Path, width: usize, height: usize, rgb: &[u8]) -> CliResult {
+    let ppm = path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("ppm"));
+    if ppm {
+        let mut file = format!("P6\n{width} {height}\n255\n").into_bytes();
+        file.extend_from_slice(rgb);
+        std::fs::write(path, file)?;
+        return Ok(());
+    }
+    let file = std::io::BufWriter::new(std::fs::File::create(path)?);
+    let mut encoder = png::Encoder::new(file, u32::try_from(width)?, u32::try_from(height)?);
+    encoder.set_color(png::ColorType::Rgb);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.write_header()?.write_image_data(rgb)?;
     Ok(())
 }
 
