@@ -27,6 +27,54 @@ pub trait Transport {
     fn interrupt_in(&mut self, timeout: Duration) -> Result<Option<u8>>;
 }
 
+impl<T: Transport + ?Sized> Transport for &mut T {
+    fn control_in(&mut self, setup: SetupPacket) -> Result<Vec<u8>> {
+        (**self).control_in(setup)
+    }
+    fn control_out(&mut self, setup: SetupPacket, data: &[u8]) -> Result<()> {
+        (**self).control_out(setup, data)
+    }
+    fn bulk_in(&mut self, buf: &mut [u8]) -> Result<usize> {
+        (**self).bulk_in(buf)
+    }
+    fn bulk_out(&mut self, data: &[u8]) -> Result<()> {
+        (**self).bulk_out(data)
+    }
+    fn interrupt_in(&mut self, timeout: Duration) -> Result<Option<u8>> {
+        (**self).interrupt_in(timeout)
+    }
+}
+
+/// A transport that refuses every host-to-device transfer.
+///
+/// Used by diagnostic commands that must never change the scanner state:
+/// control OUT and bulk OUT fail with [`Error::ReadOnly`] before anything
+/// reaches the device. Control IN requests are limited to register and
+/// EEPROM reads, the only ones known to have no side effects.
+#[derive(Debug)]
+pub struct ReadOnly<T>(pub T);
+
+impl<T: Transport> Transport for ReadOnly<T> {
+    fn control_in(&mut self, setup: SetupPacket) -> Result<Vec<u8>> {
+        match Command::decode(setup, &[]) {
+            Command::ReadRegisters { .. } | Command::ReadEeprom { .. } => self.0.control_in(setup),
+            other => Err(Error::ReadOnly(other.to_string())),
+        }
+    }
+    fn control_out(&mut self, setup: SetupPacket, data: &[u8]) -> Result<()> {
+        Err(Error::ReadOnly(Command::decode(setup, data).to_string()))
+    }
+    fn bulk_in(&mut self, buf: &mut [u8]) -> Result<usize> {
+        self.0.bulk_in(buf)
+    }
+    fn bulk_out(&mut self, data: &[u8]) -> Result<()> {
+        Err(Error::ReadOnly(format!("bulk OUT of {} bytes", data.len())))
+    }
+    fn interrupt_in(&mut self, timeout: Duration) -> Result<Option<u8>> {
+        self.0.interrupt_in(timeout)
+    }
+}
+
 /// RTS8822 operations over a [`Transport`].
 #[derive(Debug)]
 pub struct Chip<T> {
@@ -205,6 +253,39 @@ mod tests {
         fn interrupt_in(&mut self, _timeout: Duration) -> Result<Option<u8>> {
             Ok(None)
         }
+    }
+
+    #[test]
+    fn read_only_blocks_writes() {
+        let mut chip = Chip::new(ReadOnly(Mock {
+            answers: VecDeque::from([vec![0x13, 0x02], vec![0x00, 0x55]]),
+            ..Default::default()
+        }));
+        assert_eq!(chip.read_word(0xfe3a).unwrap(), 0x0213);
+        assert_eq!(chip.read_eeprom_word(0x7c).unwrap(), 0x5500);
+        assert!(matches!(
+            chip.write_registers(0xe800, &[0x44, 0x5c]),
+            Err(Error::ReadOnly(_))
+        ));
+        assert!(matches!(chip.chipset_reset(), Err(Error::ReadOnly(_))));
+        assert!(matches!(
+            chip.transport_mut().bulk_out(&[0; 4]),
+            Err(Error::ReadOnly(_))
+        ));
+        // A vendor IN request that is not a register or EEPROM read.
+        let odd = SetupPacket {
+            request_type: 0xc0,
+            request: 0x04,
+            value: 0,
+            index: 0x0300,
+            length: 2,
+        };
+        assert!(matches!(
+            chip.transport_mut().control_in(odd),
+            Err(Error::ReadOnly(_))
+        ));
+        // Only the two reads reached the device.
+        assert_eq!(chip.into_inner().0.sent.len(), 2);
     }
 
     #[test]

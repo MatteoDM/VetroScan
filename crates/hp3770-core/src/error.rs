@@ -20,6 +20,9 @@ pub enum Error {
     },
     /// An argument is outside what the hardware accepts.
     InvalidArgument(String),
+    /// A write was attempted through a [`crate::transport::ReadOnly`]
+    /// transport. Carries the refused request.
+    ReadOnly(String),
 }
 
 impl fmt::Display for Error {
@@ -30,6 +33,7 @@ impl fmt::Display for Error {
                 write!(f, "short transfer: expected {expected} bytes, got {actual}")
             }
             Self::InvalidArgument(msg) => write!(f, "invalid argument: {msg}"),
+            Self::ReadOnly(req) => write!(f, "refused in read-only mode: {req}"),
         }
     }
 }
