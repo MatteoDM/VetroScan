@@ -1,0 +1,23 @@
+[package]
+name = "hp3770-app"
+description = "Desktop application for the HP Scanjet 3770"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+hp3770-core.workspace = true
+hp3770-usb.workspace = true
+iced = { version = "0.14", features = ["image", "canvas", "tokio"] }
+rfd = "0.18"
+png = "0.18"
+
+[[bin]]
+name = "hp3770-app"
+path = "src/main.rs"
+
+[lints]
+workspace = true

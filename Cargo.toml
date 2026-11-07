@@ -5,6 +5,7 @@ members = [
     "crates/hp3770-capture",
     "crates/hp3770-usb",
     "crates/hp3770-cli",
+    "crates/hp3770-app",
 ]
 
 [workspace.package]
