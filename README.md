@@ -48,12 +48,17 @@ cargo run --release --bin hp3770 -- status                   # lampada, carrello
 cargo run --release --bin hp3770 -- probe -o probe.txt       # registri ed EEPROM, sola lettura
 cargo run --release --bin hp3770 -- buttons                  # stampa i pulsanti premuti (letti dal registro del chip)
 cargo run --release --bin hp3770 -- buttons -m interrupt     # oppure dagli eventi USB del pulsante
+cargo run --release --bin hp3770 -- init                     # inizializza il chip come il driver HP
 ```
 
 `probe` passa da un filtro che rifiuta ogni scrittura prima che arrivi allo scanner:
 non accende la lampada, non muove il carrello e non tocca l'EEPROM. Con `--backend nusb`
 o `--backend usbscan` si sceglie il backend; di base su Windows si prova prima
 `usbscan.sys`.
+
+`init` scrive nei registri del chip gli stessi valori che il driver HP scrive a ogni
+pressione di un pulsante (clock USB, tipo di RAM, corrente del motore, reset, pulsanti,
+timer della lampada). Non scrive mai l'EEPROM e non muove il carrello.
 
 `buttons` di base legge il registro dei pulsanti del chip ogni 50 ms: su Windows il servizio
 immagini (WIA) resta in ascolto degli eventi USB dei pulsanti e se ne prende una parte,

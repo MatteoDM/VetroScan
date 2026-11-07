@@ -47,6 +47,12 @@ enum Command {
     /// Print the scanner state: lamp, carriage, transparency adapter, buttons.
     /// Register reads only.
     Status,
+    /// Initialise the chip like the HP driver does after a button press.
+    ///
+    /// Writes registers (USB clock, RAM type, motor current, warm reset,
+    /// buttons, lamp timer) with the values the HP driver uses. Never writes
+    /// the EEPROM and never moves the carriage.
+    Init,
     /// Print the front-panel buttons as they are pressed.
     Buttons {
         /// Stop after this many presses (default: run until Ctrl+C).
@@ -76,6 +82,7 @@ fn main() -> ExitCode {
     let result = match cli.command {
         Command::List => list(),
         Command::Status => open(cli.backend).and_then(status),
+        Command::Init => open(cli.backend).and_then(init),
         Command::Probe { output } => open(cli.backend).and_then(|s| probe(s, output)),
         Command::Buttons { count, method, raw } => {
             open(cli.backend).and_then(|s| buttons(s, count, method, raw))
@@ -144,6 +151,28 @@ fn status(scanner: Scanner) -> CliResult {
         }
     );
     println!("link word (E829)   {:04X}", s.link_word);
+    Ok(())
+}
+
+fn init(scanner: Scanner) -> CliResult {
+    let start = Instant::now();
+    let link = Chip::new(scanner).link(&hp3770_core::profile::HP3770)?;
+    let regs = &link.registers;
+    println!("done in          {:.1} s", start.elapsed().as_secs_f32());
+    println!("link word (E829) {:04X}", link.link_word);
+    println!(
+        "carriage         {}",
+        if link.at_home {
+            "at home"
+        } else {
+            "NOT at home (parking not implemented yet)"
+        }
+    );
+    println!(
+        "lamp timer       {:02X} {:02X} (E946 E947)",
+        regs.get(0x146),
+        regs.get(0x147)
+    );
     Ok(())
 }
 
