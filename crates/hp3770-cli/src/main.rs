@@ -53,6 +53,12 @@ enum Command {
     /// buttons, lamp timer) with the values the HP driver uses. Never writes
     /// the EEPROM and never moves the carriage.
     Init,
+    /// Bring the carriage home if it is not there.
+    ///
+    /// Runs `init`, then, only if the carriage is away from home, moves it
+    /// back with the motor table and the register block the HP driver uses
+    /// (capture-verified). Does nothing else if it is already home.
+    Park,
     /// Switch the flatbed lamp on or off.
     ///
     /// Writes E946 and E954 like the HP driver. The lamp also switches off
@@ -98,6 +104,7 @@ fn main() -> ExitCode {
         Command::List => list(),
         Command::Status => open(cli.backend).and_then(status),
         Command::Init => open(cli.backend).and_then(init),
+        Command::Park => open(cli.backend).and_then(park),
         Command::Lamp { state } => open(cli.backend).and_then(|s| lamp(s, state)),
         Command::Probe { output } => open(cli.backend).and_then(|s| probe(s, output)),
         Command::Buttons { count, method, raw } => {
@@ -181,7 +188,7 @@ fn init(scanner: Scanner) -> CliResult {
         if link.at_home {
             "at home"
         } else {
-            "NOT at home (parking not implemented yet)"
+            "NOT at home (run `park` to bring it back)"
         }
     );
     println!(
@@ -189,6 +196,27 @@ fn init(scanner: Scanner) -> CliResult {
         regs.get(0x146),
         regs.get(0x147)
     );
+    Ok(())
+}
+
+fn park(scanner: Scanner) -> CliResult {
+    let profile = &hp3770_core::profile::HP3770;
+    let mut chip = Chip::new(scanner);
+    let link = chip.link(profile)?;
+    let start = Instant::now();
+    let base = hp3770_core::motor::park_registers(&link.registers);
+    if chip.head_park_home(&base, &profile.park)? {
+        println!(
+            "carriage         parked in {:.1} s",
+            start.elapsed().as_secs_f32()
+        );
+        println!(
+            "at home now      {}",
+            if chip.head_is_at_home()? { "yes" } else { "NO" }
+        );
+    } else {
+        println!("carriage         already at home, not moved");
+    }
     Ok(())
 }
 
@@ -374,6 +402,8 @@ mod tests {
         let cli = Cli::parse_from(["hp3770", "--backend", "usbscan", "probe", "-o", "x.txt"]);
         assert_eq!(cli.backend, BackendArg::Usbscan);
         assert!(matches!(cli.command, Command::Probe { output: Some(_) }));
+        let cli = Cli::parse_from(["hp3770", "park"]);
+        assert!(matches!(cli.command, Command::Park));
         let cli = Cli::parse_from(["hp3770", "lamp", "off"]);
         assert!(matches!(
             cli.command,

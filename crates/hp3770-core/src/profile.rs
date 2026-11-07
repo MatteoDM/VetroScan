@@ -14,6 +14,9 @@
 //! captures, where the first configuration of the file says 0, 0, 0 and
 //! 127, 128. "Configuration" below means that one.
 
+use crate::motor::{MotorMove, StepType};
+use crate::motor_curves;
+
 /// Spread-spectrum clock generator settings (`SSCGEnable`, `SSCGMode`,
 /// `SSCGClockControl` in `[SCAN_PARAM]`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +60,9 @@ pub struct Profile {
     /// Fixed duty cycle of the lamp PWM set at start-up
     /// (`cfg_fixedpwm_get`, flatbed).
     pub fixed_pwm: u8,
+    /// How the motor runs when the carriage goes home
+    /// (`ParkHomeMotorMove` in `[MoveMotorSetting]`).
+    pub park: MotorMove,
 }
 
 /// HP Scanjet 3770.
@@ -105,4 +111,15 @@ pub const HP3770: Profile = Profile {
     // of the file has T6_USB2FixedPwm=0 (T_ and S_ variants: 22), and the
     // HP driver writes EEPROM 0x7B = 80, which is Lamp_PWM_Save(0).
     fixed_pwm: 0,
+    // [MoveMotorSetting] ParkHomeMotorMove=1, counted from 1: [MotorMove1]
+    // SystemClock=0x4, CTPC=1991 2999 3983 (first value), ScanMotorStepType=1,
+    // MotorCurve=9 3 10 3 2 (first value). The same as the motormove of the
+    // hp3800 table in hp3900 but for the curves. Captures 05, 06 and 11:
+    // E800 low bits 4, E830 = 1991, E8D9 = 10, steps of setting 9.
+    park: MotorMove {
+        system_clock: 4,
+        ctpc: 1991,
+        step_type: StepType::Half,
+        setting: Some(&motor_curves::SETTING_9),
+    },
 };
