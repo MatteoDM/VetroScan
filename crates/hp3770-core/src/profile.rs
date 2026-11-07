@@ -14,6 +14,7 @@
 //! captures, where the first configuration of the file says 0, 0, 0 and
 //! 127, 128. "Configuration" below means that one.
 
+use crate::calibration::CalibrationConfig;
 use crate::motor::{MotorMove, StepType};
 use crate::motor_curves;
 
@@ -63,6 +64,8 @@ pub struct Profile {
     /// How the motor runs when the carriage goes home
     /// (`ParkHomeMotorMove` in `[MoveMotorSetting]`).
     pub park: MotorMove,
+    /// Calibration parameters (flatbed).
+    pub calibration: CalibrationConfig,
 }
 
 /// HP Scanjet 3770.
@@ -121,5 +124,32 @@ pub const HP3770: Profile = Profile {
         ctpc: 1991,
         step_type: StepType::Half,
         setting: Some(&motor_curves::SETTING_9),
+    },
+    // [CalibReflective] of the configuration file (lines ~140-260 of the
+    // extracted INI). Checked against captures 01, 02, 04-11.
+    calibration: CalibrationConfig {
+        // Not in the file: every capture probes at 300 then 350 (E81A-E825),
+        // which are AdcOffPredictStart=300 and 300 + 50.
+        offset_probes: (300, 350),
+        // OffsetAvgTargetR/G/B=10 20.
+        offset_target: 10,
+        // OffsetTuneStep1=5. Captures 01, 02, 05, 07, 08, 10, 11: +5.
+        offset_step: 5,
+        // Not in the file: captures 06 and 06b (1200 dpi) raise odd pixels
+        // by 3.
+        offset_step_even_odd: 3,
+        // GainHeight=10 30.
+        gain_lines: 10,
+        // WRefR=245 233, WRefG=245 238 230, WRefB=245 233 222.
+        white_ref: [245, 245, 245],
+        // GainTargetFactor=80 90.
+        gain_target_percent: 80,
+        // BShadingHeight=10 20 30.
+        black_lines: 10,
+        // U2_S_8B_24D_Cut_R/G/B=-6 (USB 2, 8 bits per sample, 24-bit
+        // colour).
+        black_cut_hundredths: [-6, -6, -6],
+        // WShadingHeight=24.
+        white_lines: 24,
     },
 };
