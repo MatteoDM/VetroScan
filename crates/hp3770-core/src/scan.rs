@@ -34,6 +34,12 @@ const LAST_MARGIN: usize = 0x450;
 /// capture 09).
 const DATA_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// Longest wait for the first data while the chip is still running. At
+/// 2400 dpi the carriage travels to the top of the area at scan speed:
+/// about 7.5 s per centimetre (capture 06b), so more than 3 minutes for the
+/// bottom of an A4.
+const TRAVEL_TIMEOUT: Duration = Duration::from_secs(600);
+
 /// DMA channel of the image data.
 const IMAGE_CHANNEL: u16 = 8;
 
@@ -252,7 +258,8 @@ impl<T: Transport> Chip<T> {
     /// chip has stopped.
     fn wait_scan_data(&mut self, size: usize, near_end: bool) -> Result<()> {
         let mut last = usize::MAX;
-        let mut deadline = Instant::now() + DATA_TIMEOUT;
+        let start = Instant::now();
+        let mut deadline = start + DATA_TIMEOUT;
         loop {
             let amount = 3 * 32 * self.read_u32(0xef16)? as usize;
             if near_end && (amount + LAST_MARGIN >= size || self.read_byte(0xe800)? & 0x80 == 0) {
@@ -265,10 +272,22 @@ impl<T: Transport> Chip<T> {
                 last = amount;
                 deadline = Instant::now() + DATA_TIMEOUT;
             } else if Instant::now() >= deadline {
-                return Err(Error::Transport(format!(
-                    "scan data: {amount} of {size} bytes after {} s",
-                    DATA_TIMEOUT.as_secs()
-                )));
+                // No new data for a while: fine as long as the chip is still
+                // running (the carriage on its way), up to TRAVEL_TIMEOUT.
+                // Never reached in the captures.
+                let running = self.read_byte(0xe800)? & 0x80 != 0;
+                if !running || start.elapsed() >= TRAVEL_TIMEOUT {
+                    return Err(Error::Transport(format!(
+                        "scan data: {amount} of {size} bytes after {} s{}",
+                        start.elapsed().as_secs(),
+                        if running {
+                            ""
+                        } else {
+                            ", the chip has stopped"
+                        }
+                    )));
+                }
+                deadline = Instant::now() + DATA_TIMEOUT;
             }
         }
     }

@@ -88,7 +88,7 @@ enum Command {
     Scan {
         /// Output file.
         output: PathBuf,
-        /// Resolution: 200, 300, 600 or 1200 dpi.
+        /// Resolution: 200, 300, 600, 1200 or 2400 dpi.
         #[arg(long, default_value_t = 300)]
         dpi: u16,
         /// Left edge, mm.
@@ -371,9 +371,17 @@ fn scan(
     let parked = chip.stop_scan(&mut init, profile)?;
     // The chip brings the carriage back by itself below 600 dpi; make sure.
     chip.head_park_home(&hp3770_core::motor::park_registers(&init), &profile.park)?;
-    let pixels = job.bytes_per_line / 3;
-    let lines = image.len() / job.bytes_per_line;
+    let mut pixels = job.bytes_per_line / 3;
+    let mut lines = image.len() / job.bytes_per_line;
     image.truncate(lines * job.bytes_per_line);
+    if hw.arrange_line == hp3770_core::setup::ArrangeLine::Software {
+        // 2400 dpi: lines arranged here, width doubled.
+        use hp3770_core::arrange;
+        let d = arrange::Distances::of(profile, &params, hw.high_resolution);
+        lines = params.height as usize;
+        image = arrange::double_width(&arrange::arrange(&image, pixels, lines, &d), pixels);
+        pixels *= 2;
+    }
     if !linear {
         let lut = geometry::host_gamma(2.2);
         for sample in &mut image {

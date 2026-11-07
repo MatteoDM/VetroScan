@@ -15,6 +15,7 @@
 //! implemented by a real USB backend in another crate, and by a replay of
 //! recorded captures in tests.
 
+pub mod arrange;
 pub mod calibration;
 pub mod device;
 pub mod error;

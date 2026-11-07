@@ -17,19 +17,21 @@
 //! | 09      | 300  | 945, 1459, 591, 591  | 1009, 592, 1561, 591          |
 //! | 05      | 600  | 0, 0, 1181, 1181     | 129, 1180, 198, 1180          |
 //! | 06      | 1200 | 0, 0, 945, 945       | 259, 944, 373, 944            |
+//! | 06b     | 2400 | 0, 0, 1890, 1890     | 259, 944, 746, 1896           |
 //!
 //! The height the HP driver gives the chip is one line less than asked in
 //! some captures (01, 02, 05, 06) and not in others (04, 09); the rule is
 //! not known. This module asks the chip for the lines asked.
 //!
-//! 2400 dpi (1200 on the sensor, 2400 lines per inch, lines arranged by the
-//! host, capture 06b) is not supported yet.
+//! At 2400 dpi the chip reads 1200 pixels per inch across and 2400 lines
+//! per inch down, and the host arranges the lines and doubles the width
+//! (see [`crate::arrange`]): the window across is in 1200 dpi pixels.
 
 use crate::error::{Error, Result};
 use crate::setup::{ArrangeLine, Hardware, ScanParams};
 
-/// Resolutions the HP driver offers for a colour scan, but 2400.
-pub const RESOLUTIONS: [u16; 4] = [200, 300, 600, 1200];
+/// Resolutions the HP driver offers for a colour scan.
+pub const RESOLUTIONS: [u16; 5] = [200, 300, 600, 1200, 2400];
 
 /// Width and height of the glass in inches (`8.5 × 11.7`, the largest area
 /// the HP driver accepts).
@@ -70,6 +72,7 @@ fn origin(dpi: u16) -> Option<(u32, u32)> {
         300 => Some((65, 102)),
         600 => Some((129, 198)),
         1200 => Some((259, 373)),
+        2400 => Some((259, 746)),
         _ => None,
     }
 }
@@ -90,7 +93,9 @@ pub fn scan_window(dpi: u16, area: Area) -> Result<(ScanParams, Hardware)> {
     })?;
     let max_w = (GLASS_INCHES.0 * f64::from(dpi)).round() as u32;
     let max_h = (GLASS_INCHES.1 * f64::from(dpi)).round() as u32;
-    let width = round4(area.width);
+    // Across, the sensor's 1200 dpi at most.
+    let across = if dpi > 1200 { 2 } else { 1 };
+    let width = round4(area.width / across);
     if width == 0 || area.height == 0 || area.x + area.width > max_w || area.y + area.height > max_h
     {
         return Err(Error::InvalidArgument(format!(
@@ -99,9 +104,9 @@ pub fn scan_window(dpi: u16, area: Area) -> Result<(ScanParams, Hardware)> {
     }
     let params = ScanParams {
         depth: 8,
-        resolution_x: dpi,
+        resolution_x: dpi / across as u16,
         resolution_y: dpi,
-        left: left + round4(area.x),
+        left: left + round4(area.x / across),
         top: top + area.y,
         width,
         height: area.height,
@@ -115,7 +120,12 @@ pub fn scan_window(dpi: u16, area: Area) -> Result<(ScanParams, Hardware)> {
         static_head: false,
         dummy_scan: false,
         compression: false,
-        arrange_line: ArrangeLine::Hardware,
+        // The chip's line delays are 6 bits: too short at 2400 dpi.
+        arrange_line: if dpi > 1200 {
+            ArrangeLine::Software
+        } else {
+            ArrangeLine::Hardware
+        },
         high_resolution: dpi >= 1200,
     };
     Ok((params, hw))
@@ -158,6 +168,7 @@ mod tests {
         assert_eq!(window(300, 945, 1459, 591, 591), (1009, 592, 1561));
         assert_eq!(window(600, 0, 0, 1181, 1181), (129, 1180, 198));
         assert_eq!(window(1200, 0, 0, 945, 945), (259, 944, 373));
+        assert_eq!(window(2400, 0, 0, 1890, 1890), (259, 944, 746));
         // Heights the HP driver kept.
         let a = Area {
             x: 945,
@@ -183,7 +194,7 @@ mod tests {
             width: 100,
             height: 100,
         };
-        assert!(scan_window(2400, a).is_err());
+        assert!(scan_window(4800, a).is_err());
         assert!(scan_window(150, a).is_err());
         let too_wide = Area { width: 1701, ..a };
         assert!(scan_window(200, too_wide).is_err());
