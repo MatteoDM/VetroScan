@@ -24,6 +24,8 @@ pub mod motor;
 pub mod motor_curves;
 pub mod profile;
 pub mod protocol;
+pub mod read;
+pub mod scan;
 pub mod scan_modes;
 pub mod setup;
 pub mod status;

@@ -261,7 +261,9 @@ impl<T: Transport> Chip<T> {
     }
 
     /// Sets the motor current bits of `E954` (`Motor_Change`). Like the HP
-    /// driver, writes the word just read instead of re-reading `E955`.
+    /// driver, writes the word just read instead of re-reading `E955`, and
+    /// keeps both bytes in `regs`: the park after a scan writes them in its
+    /// block (capture 06: 70 00).
     pub fn motor_change(&mut self, regs: &mut Registers, value: u8) -> Result<()> {
         let mut data = self.read_word(0xe954)? & 0xffcf;
         data |= match value {
@@ -270,7 +272,7 @@ impl<T: Transport> Chip<T> {
             1 => 0x10,
             _ => 0,
         };
-        regs.0[0x154] = data as u8;
+        regs.0[0x154..0x156].copy_from_slice(&data.to_le_bytes());
         self.write_word(0xe954, data)
     }
 

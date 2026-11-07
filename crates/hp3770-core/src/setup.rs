@@ -131,6 +131,9 @@ pub struct SetupInfo {
     /// Where the step tables go in the chip RAM, in units of 16 bytes
     /// (`v15f8` in hp3900).
     pub tables_start: u16,
+    /// Lines the chip sends beyond the height when the host arranges the
+    /// colour lines ([`ArrangeLine::Software`]); 0 otherwise.
+    pub extra_lines: u32,
 }
 
 /// Sets the analog front end (`RTS_Setup_GainOffset`, calibrating branch).
@@ -378,6 +381,7 @@ pub fn setup(
         bytes_per_line,
         step_tables,
         tables_start,
+        extra_lines: line_distance,
     })
 }
 
