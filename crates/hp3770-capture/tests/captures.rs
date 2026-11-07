@@ -153,3 +153,22 @@ fn executions_of_a_full_scan() {
         assert_eq!(block[0] & 0x80, 0x80);
     }
 }
+
+#[test]
+fn init_usb_data_matches_the_hp_driver() {
+    use hp3770_capture::replay::Replay;
+    use hp3770_core::profile::HP3770;
+    use hp3770_core::transport::Chip;
+
+    // 00_collegamento.pcap, after a button press: Read_FE3E, then the
+    // register traffic of Init_USBData up to Motor_Release (45.864-45.982 s).
+    let trace = fixture("00_collegamento.pcap");
+    let mut chip = Chip::new(Replay::window(&trace, 45.863, 45.983));
+    chip.read_fe3e().unwrap();
+    let regs = chip.init_usb_data(&HP3770).unwrap();
+    chip.transport_mut().finish().unwrap();
+    // The block as read, with the RAM type and motor current applied.
+    assert_eq!(regs.get(0x000), 0x04);
+    assert_eq!(regs.get(0x708), 0x08);
+    assert_eq!(regs.get(0x154), 0xb0);
+}
