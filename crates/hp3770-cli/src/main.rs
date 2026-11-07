@@ -103,8 +103,8 @@ enum Command {
         /// Height, mm (default: A4).
         #[arg(long, default_value_t = 297.0)]
         height: f64,
-        /// Save the chip's linear samples, without the host gamma 2.2 the
-        /// HP driver applies.
+        /// Save the chip's linear samples, without the tone curve the HP
+        /// driver applies on the host (white at 196, gamma 2.2).
         #[arg(long)]
         linear: bool,
     },
@@ -383,7 +383,7 @@ fn scan(
         pixels *= 2;
     }
     if !linear {
-        let lut = geometry::host_gamma(2.2);
+        let lut = geometry::host_tone(geometry::host_white(profile), 2.2);
         for sample in &mut image {
             *sample = lut[usize::from(*sample)];
         }

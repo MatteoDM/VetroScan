@@ -139,10 +139,28 @@ pub fn identity_gamma() -> Vec<u8> {
     (0..768).map(|i| i as u8).collect()
 }
 
-/// Host gamma of the HP driver's default settings (the WIA property
-/// `Gamma` = 2200): 8-bit lookup table from the chip's linear samples.
-pub fn host_gamma(gamma: f64) -> [u8; 256] {
-    std::array::from_fn(|i| (255.0 * (i as f64 / 255.0).powf(1.0 / gamma)).round() as u8)
+/// Tone curve the HP driver applies on the host with its default
+/// settings, as an 8-bit lookup table from the chip's linear samples:
+/// `255 × (x / white)^(1 / gamma)`, 255 from `white` up.
+///
+/// Fitted on the same 5 × 5 cm scanned by both drivers (2026-11-07): with
+/// `white` = 196 (the white reference 245 × the gain target 80 %) and
+/// gamma 2.2 the HP image is matched within 8.7 levels (RMS, all channels;
+/// most of the rest is the HP driver's sharpening), against 24 for a plain
+/// gamma 2.2. The HP driver's own whites are 196, 186 and 184 for red,
+/// green and blue on that sheet (7.8 levels), which tints the paper blue.
+pub fn host_tone(white: f64, gamma: f64) -> [u8; 256] {
+    std::array::from_fn(|i| {
+        let x = (i as f64 / white).min(1.0);
+        (255.0 * x.powf(1.0 / gamma)).round() as u8
+    })
+}
+
+/// White level of [`host_tone`] for a profile: where the gain calibration
+/// puts the white strip.
+pub fn host_white(profile: &crate::profile::Profile) -> f64 {
+    let c = &profile.calibration;
+    f64::from(c.white_ref[0]) * f64::from(c.gain_target_percent) / 100.0
 }
 
 #[cfg(test)]
@@ -205,8 +223,11 @@ mod tests {
         let g = identity_gamma();
         assert_eq!(g.len(), 768);
         assert_eq!(&g[254..258], &[254, 255, 0, 1]);
-        let h = host_gamma(2.2);
-        assert_eq!((h[0], h[255]), (0, 255));
-        assert_eq!(h[100], 167);
+        let white = host_white(&crate::profile::HP3770);
+        assert_eq!(white, 196.0);
+        let h = host_tone(white, 2.2);
+        assert_eq!((h[0], h[196], h[255]), (0, 255, 255));
+        // Half the white: 255 x 0.5^(1/2.2).
+        assert_eq!(h[98], 186);
     }
 }
