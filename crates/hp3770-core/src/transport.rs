@@ -200,8 +200,9 @@ impl<T: Transport> Chip<T> {
     }
 
     /// Buttons released since the last call (`Buttons_Released`): one bit per
-    /// button. The chip clears the register when it is read, so a press is
-    /// reported once even if it was shorter than the polling interval.
+    /// button, cleared when read. On the 3770 with the HP driver installed
+    /// this register always read 0 in the hardware test: use
+    /// [`Chip::buttons_held`] to detect presses.
     pub fn buttons_released(&mut self) -> Result<u8> {
         Ok(self.read_byte(0xe96a)? & BUTTON_BITS)
     }

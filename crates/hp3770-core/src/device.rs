@@ -51,13 +51,18 @@ impl Button {
         }
     }
 
-    /// The bit of this button in the button registers (`E968`, `E96A`).
+    /// The bit of this button in the button status register `E968`, where
+    /// the chip shows a held button as 0.
     ///
-    /// Assumed to be `1 << code`: the interrupt codes 0, 2 and 3 look like
-    /// bit numbers, and `hp3900` uses one bit per button. Still to be
-    /// confirmed on the hardware with `hp3770 buttons --method poll`.
+    /// Measured on the hardware (2026-11-07, `hp3770 buttons --raw`): idle
+    /// `E968 = BF`, Scan `BD`, Copy `BE`, Instant Share `BB`. The order differs
+    /// from the interrupt codes.
     pub fn mask(self) -> u8 {
-        1 << self.code()
+        match self {
+            Self::Scan => 0x02,
+            Self::Copy => 0x01,
+            Self::InstantShare => 0x04,
+        }
     }
 
     /// The button whose bit is `mask` (see [`Button::mask`]).
@@ -80,6 +85,18 @@ impl Button {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn button_masks_match_the_hardware() {
+        // E968 values read while each button was held.
+        for (e968, button) in [
+            (0xbd, Button::Scan),
+            (0xbe, Button::Copy),
+            (0xbb, Button::InstantShare),
+        ] {
+            assert_eq!(Button::from_mask(!e968 & 0x3f), Some(button));
+        }
+    }
 
     #[test]
     fn button_codes_round_trip() {

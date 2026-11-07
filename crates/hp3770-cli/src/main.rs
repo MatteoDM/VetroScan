@@ -214,7 +214,8 @@ fn buttons(scanner: Scanner, count: Option<u32>, method: ButtonMethod, raw: bool
         ButtonMethod::Poll => {
             // Register reads only, through ReadOnly. E968 holds the buttons
             // pressed now (0 = pressed), E96A the ones released since the
-            // last read (it clears itself when read).
+            // last read (always 0 in the hardware test, kept as a fallback
+            // for presses shorter than the polling interval).
             let mut chip = Chip::new(ReadOnly(scanner));
             let first = chip.read_registers(0xe968, 3)?;
             if raw {
