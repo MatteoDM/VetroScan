@@ -329,130 +329,56 @@ fn scan(
     area: hp3770_core::geometry::Area,
     (mode, threshold, linear, sharpen): (Mode, u8, bool, f32),
 ) -> CliResult {
-    use hp3770_core::geometry;
+    use hp3770_core::session::{self, Request, Stage};
     let profile = &hp3770_core::profile::HP3770;
-    let (params, hw) = geometry::scan_window(dpi, area)?;
-    let gamma = geometry::identity_gamma();
-
+    let request = Request {
+        sharpen,
+        linear,
+        ..Request::new(
+            dpi,
+            area,
+            match mode {
+                Mode::Colour => session::Mode::Colour,
+                Mode::Grey => session::Mode::Grey,
+                Mode::Lineart => session::Mode::Lineart { threshold },
+            },
+        )
+    };
     let start = Instant::now();
     let mut chip = Chip::new(scanner);
-    let link = chip.link(profile)?;
-    let mut init = link.registers.clone();
-    if !link.at_home {
-        chip.head_park_home(&hp3770_core::motor::park_registers(&init), &profile.park)?;
-    }
-    chip.prepare_scan(&mut init, profile)?;
-    if !link.lamp_was_on {
-        // The start-up switched the lamp on: let it warm up.
-        eprintln!(
-            "lamp             was off, warming up for {} s",
-            hp3770_core::scan::LAMP_WARMUP.as_secs()
-        );
-        std::thread::sleep(hp3770_core::scan::LAMP_WARMUP);
-    }
-    let calibration = chip.calibrate(&mut init, profile, &params)?;
-    eprintln!(
-        "calibrated in    {:.1} s (offsets {:?}, gains {:?})",
-        start.elapsed().as_secs_f32(),
-        calibration.gain_offset.even_offset,
-        calibration.gain_offset.gain
-    );
-    let average = |table: &[u8]| {
-        let words: Vec<f64> = table
-            .chunks(2)
-            .map(|w| f64::from(u16::from_le_bytes([w[0], w[1]])))
-            .collect();
-        words.iter().sum::<f64>() / words.len().max(1) as f64
-    };
-    eprintln!(
-        "shading          black {:.1} {:.1} {:.1}, white x{:.3} x{:.3} x{:.3}",
-        average(&calibration.black[0]) / 256.0,
-        average(&calibration.black[1]) / 256.0,
-        average(&calibration.black[2]) / 256.0,
-        average(&calibration.white[0]) / 8192.0,
-        average(&calibration.white[1]) / 8192.0,
-        average(&calibration.white[2]) / 8192.0,
-    );
-    let tables = calibration.tables(Some(&gamma));
-    let mut job = chip.start_scan(
-        &init,
-        profile,
-        &params,
-        &hw,
-        &calibration.gain_offset,
-        &tables,
-    )?;
-    let mut image = Vec::with_capacity(job.total());
-    let mut piece = Vec::new();
-    while chip.read_scan(&mut job, &mut piece)? > 0 {
-        image.extend_from_slice(&piece);
-    }
-    let parked = chip.stop_scan(&mut init, profile)?;
-    // The chip brings the carriage back by itself below 600 dpi; make sure.
-    chip.head_park_home(&hp3770_core::motor::park_registers(&init), &profile.park)?;
-    let mut pixels = job.bytes_per_line / 3;
-    let mut lines = image.len() / job.bytes_per_line;
-    image.truncate(lines * job.bytes_per_line);
-    if hw.arrange_line == hp3770_core::setup::ArrangeLine::Software {
-        // 2400 dpi: lines arranged here, width doubled.
-        use hp3770_core::arrange;
-        let d = arrange::Distances::of(profile, &params, hw.high_resolution);
-        lines = params.height as usize;
-        image = arrange::double_width(&arrange::arrange(&image, pixels, lines, &d), pixels);
-        pixels *= 2;
-    }
-    use hp3770_core::convert;
-    let identity: [u8; 256] = std::array::from_fn(|i| i as u8);
-    let tone = |white: f64| {
-        if linear {
-            identity
-        } else {
-            geometry::host_tone(white, 2.2)
-        }
-    };
-    let grey_tone = tone(geometry::host_white(profile));
-    let (data, format) = match mode {
-        Mode::Colour => {
-            let tones = geometry::HP_WHITE.map(tone);
-            for (i, sample) in image.iter_mut().enumerate() {
-                *sample = tones[i % 3][usize::from(*sample)];
+    let mut last_percent = None;
+    let (image, report) = session::scan(&mut chip, profile, &request, &mut |stage| {
+        match stage {
+            Stage::Starting => eprintln!("starting"),
+            Stage::WarmingUp => eprintln!(
+                "lamp             was off, warming up for {} s",
+                hp3770_core::scan::LAMP_WARMUP.as_secs()
+            ),
+            Stage::Calibrating => eprintln!("calibrating"),
+            Stage::Scanning { done, total } => {
+                let percent = done * 100 / total.max(1) / 10 * 10;
+                if last_percent != Some(percent) {
+                    last_percent = Some(percent);
+                    eprintln!("scanning         {percent} %");
+                }
             }
-            convert::sharpen(&mut image, pixels, 3, sharpen);
-            (image, Format::Rgb)
+            Stage::Finishing => eprintln!("finishing"),
         }
-        Mode::Grey => {
-            let mut grey = convert::to_grey(&image, &grey_tone);
-            convert::sharpen(&mut grey, pixels, 1, sharpen);
-            (grey, Format::Grey)
-        }
-        Mode::Lineart => {
-            let mut grey = convert::to_grey(&image, &grey_tone);
-            convert::sharpen(&mut grey, pixels, 1, sharpen);
-            (
-                convert::to_lineart(&grey, pixels, threshold),
-                Format::Lineart,
-            )
-        }
-    };
-    save_image(output, pixels, lines, &data, format)?;
+        true
+    })?;
+    eprintln!(
+        "calibration      offsets {:?}, gains {:?}",
+        report.offsets, report.gains
+    );
+    save_image(output, image.width, image.height, &image.data, image.format)?;
     println!(
-        "scanned          {pixels} x {lines} pixels in {:.1} s{}",
-        start.elapsed().as_secs_f32(),
-        if parked { " (parked)" } else { "" }
+        "scanned          {} x {} pixels in {:.1} s",
+        image.width,
+        image.height,
+        start.elapsed().as_secs_f32()
     );
     println!("saved            {}", output.display());
     Ok(())
-}
-
-/// Pixel layout of an image to save.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Format {
-    /// 3 bytes per pixel.
-    Rgb,
-    /// 1 byte per pixel.
-    Grey,
-    /// 1 bit per pixel, lines padded to a byte, 1 = white.
-    Lineart,
 }
 
 /// Writes an image as PNG, or as binary PNM (PPM, PGM or PBM) if the name
@@ -462,8 +388,9 @@ fn save_image(
     width: usize,
     height: usize,
     data: &[u8],
-    format: Format,
+    format: hp3770_core::session::Format,
 ) -> CliResult {
+    use hp3770_core::session::Format;
     let ext = path
         .extension()
         .and_then(|e| e.to_str())

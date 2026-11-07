@@ -30,6 +30,7 @@ pub mod protocol;
 pub mod read;
 pub mod scan;
 pub mod scan_modes;
+pub mod session;
 pub mod setup;
 pub mod status;
 pub mod transport;

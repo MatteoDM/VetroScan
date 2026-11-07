@@ -26,6 +26,8 @@ pub enum Error {
     /// The calibration found the scanner unable to give a usable image
     /// (lamp off or too weak, offsets that never settle).
     Calibration(String),
+    /// The caller cancelled a scan, at the stage named.
+    Cancelled(&'static str),
 }
 
 impl fmt::Display for Error {
@@ -38,6 +40,7 @@ impl fmt::Display for Error {
             Self::InvalidArgument(msg) => write!(f, "invalid argument: {msg}"),
             Self::ReadOnly(req) => write!(f, "refused in read-only mode: {req}"),
             Self::Calibration(msg) => write!(f, "calibration failed: {msg}"),
+            Self::Cancelled(stage) => write!(f, "cancelled during the {stage}"),
         }
     }
 }
