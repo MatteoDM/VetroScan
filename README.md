@@ -45,13 +45,18 @@ HP3770_CAPTURES=/percorso/catture cargo test
 ```sh
 cargo run --release --bin hp3770 -- list                     # scanner visti da ogni backend
 cargo run --release --bin hp3770 -- probe -o probe.txt       # registri ed EEPROM, sola lettura
-cargo run --release --bin hp3770 -- buttons                  # stampa i pulsanti premuti
+cargo run --release --bin hp3770 -- buttons                  # stampa i pulsanti premuti (letti dal registro del chip)
+cargo run --release --bin hp3770 -- buttons -m interrupt     # oppure dagli eventi USB del pulsante
 ```
 
 `probe` passa da un filtro che rifiuta ogni scrittura prima che arrivi allo scanner:
 non accende la lampada, non muove il carrello e non tocca l'EEPROM. Con `--backend nusb`
 o `--backend usbscan` si sceglie il backend; di base su Windows si prova prima
 `usbscan.sys`.
+
+`buttons` di base legge il registro dei pulsanti del chip ogni 50 ms: su Windows il servizio
+immagini (WIA) resta in ascolto degli eventi USB dei pulsanti e se ne prende una parte,
+mentre il registro risponde a chiunque lo legga.
 
 Su Linux l'utente deve poter aprire il dispositivo, per esempio con una regola udev:
 

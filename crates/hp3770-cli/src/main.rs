@@ -49,7 +49,23 @@ enum Command {
         /// Stop after this many presses (default: run until Ctrl+C).
         #[arg(short = 'n', long)]
         count: Option<u32>,
+        /// How to detect the presses.
+        #[arg(short, long, value_enum, default_value_t = ButtonMethod::Poll)]
+        method: ButtonMethod,
+        /// With `--method poll`, also print every change of the button
+        /// registers (E968-E96A).
+        #[arg(long)]
+        raw: bool,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum ButtonMethod {
+    /// Read the chip's button register every 50 ms. Works even when another
+    /// program (e.g. the Windows WIA service) listens for button events.
+    Poll,
+    /// Wait for the event the scanner sends on its interrupt endpoint.
+    Interrupt,
 }
 
 fn main() -> ExitCode {
@@ -57,7 +73,9 @@ fn main() -> ExitCode {
     let result = match cli.command {
         Command::List => list(),
         Command::Probe { output } => open(cli.backend).and_then(|s| probe(s, output)),
-        Command::Buttons { count } => open(cli.backend).and_then(|s| buttons(s, count)),
+        Command::Buttons { count, method, raw } => {
+            open(cli.backend).and_then(|s| buttons(s, count, method, raw))
+        }
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -176,19 +194,55 @@ fn probe(scanner: Scanner, output: Option<PathBuf>) -> CliResult {
     Ok(())
 }
 
-fn buttons(mut scanner: Scanner, count: Option<u32>) -> CliResult {
+fn buttons(scanner: Scanner, count: Option<u32>, method: ButtonMethod, raw: bool) -> CliResult {
     eprintln!("Press a button on the scanner (Ctrl+C to stop).");
     let start = Instant::now();
     let mut seen = 0;
-    while count.is_none_or(|n| seen < n) {
-        let Some(code) = scanner.interrupt_in(Duration::from_secs(1))? else {
-            continue;
-        };
-        seen += 1;
-        let t = start.elapsed().as_secs_f32();
-        match Button::from_code(code) {
-            Some(b) => println!("{t:8.3}  {code:02X}  {}", b.name()),
-            None => println!("{t:8.3}  {code:02X}  unknown"),
+    match method {
+        ButtonMethod::Interrupt => {
+            let mut scanner = scanner;
+            while count.is_none_or(|n| seen < n) {
+                let Some(code) = scanner.interrupt_in(Duration::from_secs(1))? else {
+                    continue;
+                };
+                seen += 1;
+                let t = start.elapsed().as_secs_f32();
+                let name = Button::from_code(code).map_or("unknown", Button::name);
+                println!("{t:8.3}  code {code:02X}  {name}");
+            }
+        }
+        ButtonMethod::Poll => {
+            // Register reads only, through ReadOnly. E968 holds the buttons
+            // pressed now (0 = pressed), E96A the ones released since the
+            // last read (always 0 in the hardware test, kept as a fallback
+            // for presses shorter than the polling interval).
+            let mut chip = Chip::new(ReadOnly(scanner));
+            let first = chip.read_registers(0xe968, 3)?;
+            if raw {
+                println!("   0.000  E968-E96A {}", hex(&first));
+            }
+            let mut last = first.clone();
+            let mut held = !first[0] & 0x3f;
+            while count.is_none_or(|n| seen < n) {
+                std::thread::sleep(Duration::from_millis(50));
+                let regs = chip.read_registers(0xe968, 3)?;
+                let t = start.elapsed().as_secs_f32();
+                if raw && regs != last {
+                    println!("{t:8.3}  E968-E96A {}", hex(&regs));
+                }
+                let now = !regs[0] & 0x3f;
+                let released = regs[2] & 0x3f;
+                // A press seen in E968, or one so short that only the
+                // release latch in E96A caught it.
+                let pressed = (now & !held) | (released & !held & !now);
+                for bit in (0..6).map(|i| 1u8 << i).filter(|b| pressed & b != 0) {
+                    seen += 1;
+                    let name = Button::from_mask(bit).map_or("unknown", Button::name);
+                    println!("{t:8.3}  bit {bit:02X}  {name}");
+                }
+                held = now;
+                last = regs;
+            }
         }
     }
     Ok(())

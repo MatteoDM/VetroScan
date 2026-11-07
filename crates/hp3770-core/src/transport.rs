@@ -75,6 +75,9 @@ impl<T: Transport> Transport for ReadOnly<T> {
     }
 }
 
+/// The six button bits of `E968` / `E96A`.
+const BUTTON_BITS: u8 = 0x3f;
+
 /// RTS8822 operations over a [`Transport`].
 #[derive(Debug)]
 pub struct Chip<T> {
@@ -187,6 +190,21 @@ impl<T: Transport> Chip<T> {
         self.write_byte(0xe800, e800 & 0xbf)?;
         std::thread::sleep(Duration::from_millis(100));
         self.write_byte(0xe800, (e800 & 0xbf) | 0x80)
+    }
+
+    /// Buttons held down right now (`Buttons_Status`): one bit per button,
+    /// up to six. The chip reports 0 for a pressed button; this returns the
+    /// pressed ones as 1.
+    pub fn buttons_held(&mut self) -> Result<u8> {
+        Ok(!self.read_byte(0xe968)? & BUTTON_BITS)
+    }
+
+    /// Buttons released since the last call (`Buttons_Released`): one bit per
+    /// button, cleared when read. On the 3770 with the HP driver installed
+    /// this register always read 0 in the hardware test: use
+    /// [`Chip::buttons_held`] to detect presses.
+    pub fn buttons_released(&mut self) -> Result<u8> {
+        Ok(self.read_byte(0xe96a)? & BUTTON_BITS)
     }
 
     /// Reads a 16-bit EEPROM word.
@@ -302,6 +320,26 @@ mod tests {
         ));
         // Only the two reads reached the device.
         assert_eq!(chip.into_inner().0.sent.len(), 2);
+    }
+
+    #[test]
+    fn button_registers() {
+        // Idle value seen on the hardware: E968 = BF (bit 6 is not a button).
+        let mut chip = Chip::new(Mock {
+            answers: VecDeque::from([vec![0xbf, 0xed], vec![0xbe, 0xed], vec![0x04, 0x00]]),
+            ..Default::default()
+        });
+        assert_eq!(chip.buttons_held().unwrap(), 0);
+        assert_eq!(chip.buttons_held().unwrap(), 0x01);
+        assert_eq!(chip.buttons_released().unwrap(), 0x04);
+        let sent = chip.into_inner().sent;
+        assert_eq!(
+            sent[2],
+            Command::ReadRegisters {
+                address: 0xe96a,
+                length: 2
+            }
+        );
     }
 
     #[test]
