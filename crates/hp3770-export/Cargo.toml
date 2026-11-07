@@ -1,0 +1,20 @@
+[package]
+name = "hp3770-export"
+description = "Image, PDF and multi-page export of HP Scanjet 3770 scans"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+hp3770-core.workspace = true
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "avif", "bmp", "tiff", "rayon"] }
+tiff = "0.11"
+png = "0.18"
+flate2 = "1"
+zip = { version = "9", default-features = false, features = ["deflate"] }
+
+[lints]
+workspace = true

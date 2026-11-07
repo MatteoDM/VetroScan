@@ -6,6 +6,7 @@ members = [
     "crates/hp3770-usb",
     "crates/hp3770-cli",
     "crates/hp3770-app",
+    "crates/hp3770-export",
 ]
 
 [workspace.package]
@@ -19,6 +20,7 @@ authors = ["Matteo"]
 [workspace.dependencies]
 hp3770-core = { path = "crates/hp3770-core" }
 hp3770-usb = { path = "crates/hp3770-usb" }
+hp3770-export = { path = "crates/hp3770-export" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

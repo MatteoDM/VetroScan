@@ -13,7 +13,7 @@ hp3770-core.workspace = true
 hp3770-usb.workspace = true
 iced = { version = "0.14", features = ["image", "canvas", "tokio"] }
 rfd = "0.18"
-png = "0.18"
+hp3770-export.workspace = true
 
 [[bin]]
 name = "hp3770-app"
