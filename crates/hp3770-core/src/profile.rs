@@ -5,6 +5,14 @@
 //! (`hpgt3770.dll`, same key names as the tables of `hp3900_config.c`) and
 //! are checked against the USB captures of the HP driver. Only the numbers
 //! are copied, with their source, as `hp3900` does for its models.
+//!
+//! The DLL holds six configurations (one `[SCAN_PARAM]` and `[PlatForm]`
+//! each). The one this scanner uses is the pair whose `[SCAN_PARAM]` starts
+//! with `PID&VID=0x05DA5004` (the two differ only in values hp3900 does not
+//! read): its reference voltages (2, 3, 2), binary threshold (99, 100) and
+//! park motor timing (`CTPC=1991`) are what the HP driver writes in the
+//! captures, where the first configuration of the file says 0, 0, 0 and
+//! 127, 128. "Configuration" below means that one.
 
 /// Spread-spectrum clock generator settings (`SSCGEnable`, `SSCGMode`,
 /// `SSCGClockControl` in `[SCAN_PARAM]`).
@@ -35,6 +43,9 @@ pub struct Profile {
     pub ref_voltages: [u8; 3],
     /// SDRAM clock setting (`MCLKIOC` in `[SCAN_PARAM]`).
     pub mclkioc: u8,
+    /// Binary threshold, low and high (`BinaryThresholdL/H` in
+    /// `[PlatForm]`), written to `E99E` and `E9A0` by `Init_Registers`.
+    pub binary_threshold: (u16, u16),
     /// Value of register `E951` in the initial block.
     pub e951: u8,
     /// Motor resource table copied to `E904`-`E923` at start-up
@@ -50,7 +61,8 @@ pub struct Profile {
 
 /// HP Scanjet 3770.
 pub const HP3770: Profile = Profile {
-    // [SCAN_PARAM] SSCGEnable=1, SSCGMode=1, SSCGClockControl=0.
+    // [SCAN_PARAM] SSCGEnable=1, SSCGMode=1, SSCGClockControl=0 (same in
+    // every configuration of the file).
     // Capture 00_collegamento, 45.882 s: FE39 written as A3 13.
     sscg: Sscg {
         enable: true,
@@ -62,18 +74,21 @@ pub const HP3770: Profile = Profile {
     // [MoveMotorSetting] ChangeMotorCurrent=1; hp3900 calls
     // Motor_Change(init_regs, 3). Capture 00, 45.972 s: E954 = B0.
     motor_current: Some(3),
-    // [SCAN_PARAM] CRVS=12 6 8; hp3900 reads only the first value.
+    // [SCAN_PARAM] CRVS=12 31 12; hp3900 reads only the first value.
     // Initial block of the HP driver (capture 04, 2.156 s): E810 = 0C.
     crvs: 12,
-    // The HP configuration has VRTS=VRMS=VRBS=0 and so does the hp3970
-    // table of hp3900, but the initial block of the HP driver and every
-    // execution block in the captures have E814-E816 = 40 60 40: 2, 3, 2.
+    // [SCAN_PARAM] VRTS=2 4 2 0, VRMS=3 0, VRBS=2 4 2 0: first values. The
+    // hp3970 table of hp3900 has 0, 0, 0. The initial block of the HP driver
+    // and every execution block have E814-E816 = 40 60 40: 2, 3, 2.
     ref_voltages: [2, 3, 2],
-    // No MCLKIOC key in the HP configuration: hp3900 default 8.
+    // No MCLKIOC key in any configuration of the file: hp3900 default 8.
     // Initial block of the HP driver: E987 = 88.
     mclkioc: 8,
     // hp3900 writes 0x13. The initial block of the HP driver has 03.
     e951: 0x03,
+    // [PlatForm] BinaryThresholdL=99, BinaryThresholdH=100. Initial block of
+    // the HP driver: E99E-E9A1 = 63 00 64 00.
+    binary_threshold: (99, 100),
     // Default table of hp3900 (all models but BQ5550). Same bytes in the
     // initial block of the HP driver at E904-E923; the chip starts with the
     // BQ5550-like table (B4 at E905, 34 at E90D, 24 at E915, A4 at E91D).
@@ -83,11 +98,11 @@ pub const HP3770: Profile = Profile {
         0x98, 0xb8,
     ],
     // hp3900 passes 13. Capture 00, 48.669 s: E947 written as 22, which is
-    // 13 minutes (13 * 2.68 = 34.9). [PlatForm] LampOffTimer=15 would give 28.
+    // 13 minutes (13 * 2.68 = 34.9). [PlatForm] LampOffTimer=15 would give 40.
     lamp_timer_minutes: 13,
     // Capture 00, 48.718 s: the HP driver reads E948 & 3F = 0 after enabling
-    // the PWM and leaves it, so its fixed value is 0. The HP configuration
-    // has T6_USB2FixedPwm=0 (T_ and S_ variants: 22), and the HP driver
-    // writes EEPROM 0x7B = 80, which is Lamp_PWM_Save(0).
+    // the PWM and leaves it, so its fixed value is 0. The [PLATFORM] header
+    // of the file has T6_USB2FixedPwm=0 (T_ and S_ variants: 22), and the
+    // HP driver writes EEPROM 0x7B = 80, which is Lamp_PWM_Save(0).
     fixed_pwm: 0,
 };
