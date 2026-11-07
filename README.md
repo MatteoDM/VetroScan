@@ -65,7 +65,15 @@ SUBSYSTEM=="usb", ATTR{idVendor}=="03f0", ATTR{idProduct}=="2505", MODE="0660", 
 cargo run --release --bin hp3770-decode -- cattura.pcap          # tutte le operazioni
 cargo run --release --bin hp3770-decode -- --writes cattura.pcap # solo ciò che modifica lo scanner
 cargo run --release --bin hp3770-decode -- --summary *.pcap      # totali per file
+cargo run --release --bin hp3770-decode -- --executions cattura.pcap
+    # registri del chip a ogni avvio (bit 7 di E800): il primo completo, poi le differenze
+cargo run --release --bin hp3770-decode -- --slice 2.48 2.623 piccola.pcap cattura.pcap
+    # ritaglia un intervallo di tempo in una cattura più piccola (per i test)
 ```
+
+Nei test, `hp3770_capture::replay::Replay` fa da finto scanner: risponde con i dati
+della cattura e controlla che il nostro driver faccia esattamente le stesse richieste
+del driver HP, fermandosi alla prima differenza.
 
 Esempio di output:
 
