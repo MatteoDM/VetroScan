@@ -44,6 +44,7 @@ HP3770_CAPTURES=/percorso/catture cargo test
 
 ```sh
 cargo run --release --bin hp3770 -- list                     # scanner visti da ogni backend
+cargo run --release --bin hp3770 -- status                   # lampada, carrello, adattatore trasparenti, pulsanti
 cargo run --release --bin hp3770 -- probe -o probe.txt       # registri ed EEPROM, sola lettura
 cargo run --release --bin hp3770 -- buttons                  # stampa i pulsanti premuti (letti dal registro del chip)
 cargo run --release --bin hp3770 -- buttons -m interrupt     # oppure dagli eventi USB del pulsante

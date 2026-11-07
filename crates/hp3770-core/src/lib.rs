@@ -18,6 +18,7 @@
 pub mod device;
 pub mod error;
 pub mod protocol;
+pub mod status;
 pub mod transport;
 
 pub use error::{Error, Result};
