@@ -26,6 +26,9 @@ pub struct Replay {
     bulk_offset: usize,
     /// Button codes, delivered in order whenever asked.
     buttons: VecDeque<u8>,
+    /// Accept any value in a DMA control request (see
+    /// [`Replay::any_dma_control_value`]).
+    any_dma_control: bool,
 }
 
 impl Replay {
@@ -52,7 +55,17 @@ impl Replay {
             pos: 0,
             bulk_offset: 0,
             buttons,
+            any_dma_control: false,
         }
+    }
+
+    /// Accepts any value in a DMA control request where the HP driver sent
+    /// one. Before reading the chip RAM back the HP driver resets the DMA
+    /// engine with a word it never sets (`F7 00` and `76 02` in every
+    /// capture, `54 00` once); hp3900 and this driver send 0.
+    pub fn any_dma_control_value(mut self) -> Self {
+        self.any_dma_control = true;
+        self
     }
 
     /// Replays a whole trace.
@@ -116,8 +129,37 @@ impl Replay {
         else {
             return Err(self.diverged(&format!("`{actual}`"), expected));
         };
-        if *command != actual {
-            return Err(self.diverged(&format!("`{actual}`"), expected));
+        let same = match (command, &actual) {
+            (Command::DmaControl { .. }, Command::DmaControl { .. }) => {
+                self.any_dma_control || *command == actual
+            }
+            _ => *command == actual,
+        };
+        if !same {
+            let mut got = format!("`{actual}`");
+            // Same register write with other data: name the bytes that differ.
+            if let (
+                Command::WriteRegisters {
+                    address: a,
+                    data: want,
+                },
+                Command::WriteRegisters { address: b, data },
+            ) = (command, &actual)
+            {
+                if a == b && want.len() == data.len() {
+                    let bytes: Vec<String> = want
+                        .iter()
+                        .zip(data)
+                        .enumerate()
+                        .filter(|(_, (w, d))| w != d)
+                        .map(|(i, (w, d))| {
+                            format!("{:04X}: {w:02X} != {d:02X}", usize::from(*a) + i)
+                        })
+                        .collect();
+                    got = format!("{got} (expected != got at {})", bytes.join(", "));
+                }
+            }
+            return Err(self.diverged(&got, expected));
         }
         let response = response.clone();
         self.pos += 1;
