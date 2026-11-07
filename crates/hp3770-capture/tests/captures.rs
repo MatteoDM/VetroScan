@@ -638,3 +638,379 @@ fn calibration_of_every_scan_capture() {
         check_calibration(&trace, name, dpi, colour);
     }
 }
+
+/// Full register blocks the HP driver wrote (`WriteRegisters` of the 1818
+/// bytes at `E800`), in order, with the value of `E954`-`E955` it last read
+/// from the chip before each one (`Motor_Change` reads it between the two
+/// writes of a read).
+fn register_blocks(trace: &Trace) -> Vec<(Vec<u8>, Option<[u8; 2]>)> {
+    let mut out = Vec::new();
+    let mut e954 = None;
+    for event in &trace.events {
+        match event {
+            Event::Control {
+                command:
+                    Command::WriteRegisters {
+                        address: 0xe800,
+                        data,
+                    },
+                ..
+            } if data.len() == 0x71a => out.push((data.clone(), e954)),
+            Event::Control {
+                command:
+                    Command::ReadRegisters {
+                        address: 0xe954, ..
+                    },
+                response,
+                ..
+            } if response.len() == 2 => e954 = Some([response[0], response[1]]),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// One read the HP driver set up with two block writes: what we give our
+/// set-up, and which blocks of the capture it must give.
+struct BlockRead {
+    /// Index of the first of the two blocks among the full block writes.
+    block: usize,
+    /// A scan (else a calibration read, `RTS_GetImage`).
+    scan: bool,
+    /// The lamp is off (black shading strip).
+    lamp_off: bool,
+    params: hp3770_core::setup::ScanParams,
+    hw: hp3770_core::setup::Hardware,
+}
+
+/// The analog front-end settings in a block: offsets of even and odd
+/// pixels (9 bits) and gains (5 bits). Our calibration module decides them
+/// (`calibration_matches_the_hp_driver`); here they are only an input.
+fn gain_offset_of(block: &[u8]) -> hp3770_core::setup::GainOffset {
+    let nine = |o: usize| u16::from(block[o]) | u16::from(block[o + 1] & 0x80) << 1;
+    hp3770_core::setup::GainOffset {
+        even_offset: [nine(0x1a), nine(0x1e), nine(0x22)],
+        odd_offset: [nine(0x1c), nine(0x20), nine(0x24)],
+        even_fine: [0; 3],
+        odd_fine: [0; 3],
+        gain: [block[0x14] & 0x1f, block[0x15] & 0x1f, block[0x16] & 0x1f],
+        gain2: [4; 3],
+        pga: [3; 3],
+    }
+}
+
+fn diff(ours: &[u8], hp: &[u8]) -> String {
+    (0..hp.len())
+        .filter(|&i| ours[i] != hp[i])
+        .map(|i| format!("E{:03X}: {:02x}/{:02x}", 0x800 + i, ours[i], hp[i]))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Rebuilds both blocks of each read from its parameters and checks them
+/// byte for byte against the HP driver's.
+fn check_blocks(trace: &Trace, name: &str, reads: &[BlockRead]) {
+    use hp3770_core::init::Registers;
+    use hp3770_core::profile::HP3770;
+    use hp3770_core::setup::{
+        finish_image_registers, finish_scan_registers, image_registers, scan_registers,
+    };
+
+    let blocks = register_blocks(trace);
+    // The initial block, as the HP driver keeps it in memory once the
+    // calibration has enabled the three CCD channels (RTS_Enable_CCD:
+    // bits 5-7 of E810, bit 7 of E813).
+    let mut init = Registers::default();
+    init.0.copy_from_slice(&blocks[0].0);
+    init.0[0x10] |= 0xe0;
+    init.0[0x13] |= 0x80;
+    for read in reads {
+        let (first, _) = &blocks[read.block];
+        let (second, e954) = &blocks[read.block + 1];
+        let mut base = init.clone();
+        if read.lamp_off {
+            // Lamp_Status_Set off: bit 6 of E946 in the in-memory block.
+            base.0[0x146] &= !0x40;
+        }
+        // E954-E955 are not set up: the HP driver leaves the motor current
+        // and lamp bits of the previous read in its in-memory block.
+        base.0[0x154..0x156].copy_from_slice(&first[0x154..0x156]);
+        let go = gain_offset_of(second);
+        let (mut regs, params, _) = if read.scan {
+            scan_registers(&base, &HP3770, &read.params, &read.hw, &go)
+        } else {
+            image_registers(&base, &HP3770, &read.params, &read.hw, &go)
+        }
+        .unwrap();
+        assert!(
+            regs.0[..] == first[..],
+            "{name}, block {} (ours/HP): {}",
+            read.block,
+            diff(&regs.0[..], first)
+        );
+        let e954 = e954.expect("E954 read before the second block");
+        if read.scan {
+            finish_scan_registers(&mut regs, &HP3770, e954, &params);
+        } else {
+            finish_image_registers(&mut regs, &HP3770, e954, &params);
+        }
+        assert!(
+            regs.0[..] == second[..],
+            "{name}, block {} (ours/HP): {}",
+            read.block + 1,
+            diff(&regs.0[..], second)
+        );
+    }
+}
+
+/// The reads of a calibration and scan, as the HP driver sets them up at
+/// `dpi` (the sensor resolution: 1200 for a 2400 dpi scan, which is
+/// 1200 x 2400 on the chip). `first` is the index of the first probe block,
+/// `checks` the number of offset checks (one more each time a channel is
+/// still too dark), `scan` the window of the scan (left, width, top,
+/// height) and `y` its vertical resolution.
+fn hp_reads(
+    first: usize,
+    checks: usize,
+    dpi: u16,
+    probe_left: u32,
+    scan: (u32, u32, u32, u32),
+    y: u16,
+    scan_hw: hp3770_core::setup::Hardware,
+) -> Vec<BlockRead> {
+    use hp3770_core::setup::{ArrangeLine, Hardware, ScanParams};
+    let read = |left, width, height, resolution_y| ScanParams {
+        depth: 8,
+        resolution_x: dpi,
+        resolution_y,
+        left,
+        top: 1,
+        width,
+        height,
+    };
+    let off = Hardware {
+        black_shading: false,
+        white_shading: false,
+        gamma: false,
+        gamma_size: 0,
+        backward: false,
+        static_head: true,
+        dummy_scan: false,
+        compression: false,
+        arrange_line: ArrangeLine::None,
+        high_resolution: false,
+    };
+    let (left, width, top, height) = scan;
+    let calibration_y = if y > dpi { y } else { dpi };
+    let mut reads = Vec::new();
+    // Offset probes at 300 and 350 (twice below 1200 dpi), one line each,
+    // then the check, ten lines.
+    let probes = if dpi < 1200 { 4 } else { 2 };
+    for i in 0..probes {
+        reads.push(BlockRead {
+            block: first + 2 * i,
+            scan: false,
+            lamp_off: false,
+            params: read(probe_left, 100, 1, calibration_y),
+            hw: off,
+        });
+    }
+    for i in 0..checks {
+        reads.push(BlockRead {
+            block: first + 2 * (probes + i),
+            scan: false,
+            lamp_off: false,
+            params: read(probe_left, 100, 10, calibration_y),
+            hw: off,
+        });
+    }
+    let next = first + 2 * (probes + checks - 1);
+    // Gain, black (lamp off) over the scan width, ten lines; then the white
+    // strip, 24 lines at 200 dpi with the head moving and black shading on.
+    for (block, lamp_off) in [(next + 2, false), (next + 4, true)] {
+        reads.push(BlockRead {
+            block,
+            scan: false,
+            lamp_off,
+            params: read(left, width, 10, calibration_y),
+            hw: off,
+        });
+    }
+    reads.push(BlockRead {
+        block: next + 6,
+        scan: false,
+        lamp_off: false,
+        params: read(left, width, 24, 200),
+        hw: Hardware {
+            black_shading: true,
+            static_head: false,
+            ..off
+        },
+    });
+    // After a carriage move (one block), the scan.
+    reads.push(BlockRead {
+        block: next + 9,
+        scan: true,
+        lamp_off: false,
+        params: ScanParams {
+            top,
+            height,
+            ..read(left, width, height, y)
+        },
+        hw: scan_hw,
+    });
+    reads
+}
+
+/// The scan of the HP driver: shading and gamma on, lines arranged by the
+/// chip (by the host at 2400 dpi), even and odd pixels apart from 1200 dpi.
+fn hp_scan_hardware(
+    dpi: u16,
+    arrange_line: hp3770_core::setup::ArrangeLine,
+    gamma: bool,
+) -> hp3770_core::setup::Hardware {
+    hp3770_core::setup::Hardware {
+        black_shading: true,
+        white_shading: true,
+        gamma,
+        gamma_size: 0,
+        backward: false,
+        static_head: false,
+        dummy_scan: false,
+        compression: false,
+        arrange_line,
+        high_resolution: dpi >= 1200,
+    }
+}
+
+#[test]
+fn register_blocks_match_the_hp_driver() {
+    use hp3770_core::setup::ArrangeLine;
+    // 09_calibrazione: a 300 dpi scan of 5 x 5 cm in the middle of the
+    // glass. The HP driver arranged its lines by software (it keeps doing
+    // so after a 2400 dpi scan: 06b came before 09); we arrange them by
+    // hardware up to 1200 dpi, as in 04, which this also checks below.
+    check_blocks(
+        &fixture("09_calibrazione.pcap"),
+        "09_calibrazione",
+        &hp_reads(
+            1,
+            1,
+            300,
+            7,
+            (1009, 592, 1561, 591),
+            300,
+            hp_scan_hardware(300, ArrangeLine::Software, true),
+        ),
+    );
+}
+
+#[test]
+fn register_blocks_of_every_scan_capture() {
+    use hp3770_core::setup::ArrangeLine::{Hardware, Software};
+    // (capture, offset checks, sensor dpi, probe left, scan window,
+    // vertical dpi, scan hardware). Grey (07) and lineart (08) scan in
+    // colour without gamma.
+    let captures = [
+        (
+            "01_anteprima.pcap",
+            2,
+            200,
+            7,
+            (43, 1656, 69, 2338),
+            200,
+            hp_scan_hardware(200, Hardware, true),
+        ),
+        (
+            "02_colore_200dpi_A4.pcap",
+            3,
+            200,
+            7,
+            (43, 1656, 69, 2338),
+            200,
+            hp_scan_hardware(200, Hardware, true),
+        ),
+        (
+            "04_colore_300dpi_A4.pcap",
+            1,
+            300,
+            7,
+            (65, 2480, 102, 3508),
+            300,
+            hp_scan_hardware(300, Hardware, true),
+        ),
+        (
+            "05_colore_600dpi_5x5cm.pcap",
+            2,
+            600,
+            17,
+            (129, 1180, 198, 1180),
+            600,
+            hp_scan_hardware(600, Hardware, true),
+        ),
+        (
+            "06_colore_1200dpi_2x2cm.pcap",
+            2,
+            1200,
+            15,
+            (259, 944, 373, 944),
+            1200,
+            hp_scan_hardware(1200, Hardware, true),
+        ),
+        (
+            "06b_colore_2400dpi_2x2cm.pcap",
+            2,
+            1200,
+            15,
+            (259, 944, 746, 1896),
+            2400,
+            hp_scan_hardware(1200, Software, true),
+        ),
+        (
+            "07_grigio_300dpi_A4.pcap",
+            2,
+            300,
+            7,
+            (65, 2480, 102, 3508),
+            300,
+            hp_scan_hardware(300, Software, false),
+        ),
+        (
+            "08_bn_300dpi_A4.pcap",
+            2,
+            300,
+            7,
+            (65, 2480, 102, 3508),
+            300,
+            hp_scan_hardware(300, Software, false),
+        ),
+        (
+            "10_colore_300dpi_luminosita.pcap",
+            2,
+            300,
+            7,
+            (65, 2480, 102, 3508),
+            300,
+            hp_scan_hardware(300, Software, true),
+        ),
+        (
+            "11_annulla.pcap",
+            2,
+            300,
+            7,
+            (65, 2480, 102, 3508),
+            300,
+            hp_scan_hardware(300, Software, true),
+        ),
+    ];
+    for (name, checks, dpi, probe_left, scan, y, hw) in captures {
+        let Some(trace) = full_capture(name) else {
+            return;
+        };
+        check_blocks(
+            &trace,
+            name,
+            &hp_reads(1, checks, dpi, probe_left, scan, y, hw),
+        );
+    }
+}
