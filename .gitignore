@@ -1,0 +1,9 @@
+/target
+**/*.rs.bk
+*.swp
+.DS_Store
+
+# Full USB captures are large (up to ~27 MB each): keep them out of git.
+# Only the small fixtures under crates/*/tests/fixtures are versioned.
+/captures/
+*.pcapng
