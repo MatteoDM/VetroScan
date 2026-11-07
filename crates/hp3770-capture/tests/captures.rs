@@ -167,8 +167,70 @@ fn init_usb_data_matches_the_hp_driver() {
     chip.read_fe3e().unwrap();
     let regs = chip.init_usb_data(&HP3770).unwrap();
     chip.transport_mut().finish().unwrap();
-    // The block as read, with the RAM type and motor current applied.
-    assert_eq!(regs.get(0x000), 0x04);
+    assert_eq!(regs.get(0x000), 0x05);
     assert_eq!(regs.get(0x708), 0x08);
     assert_eq!(regs.get(0x154), 0xb0);
+}
+
+#[test]
+fn init_regs_match_the_hp_driver() {
+    use hp3770_capture::replay::Replay;
+    use hp3770_core::profile::HP3770;
+    use hp3770_core::transport::Chip;
+
+    // Our initial block, computed from the block read in 00_collegamento.
+    let trace = fixture("00_collegamento.pcap");
+    let mut chip = Chip::new(Replay::window(&trace, 45.863, 45.983));
+    chip.read_fe3e().unwrap();
+    let ours = chip.init_usb_data(&HP3770).unwrap();
+
+    // The HP driver's initial block, written at the start of every scan
+    // (cut from 04_colore_300dpi_A4.pcap, 2.130-2.2155 s; the same 1818
+    // bytes in all scan captures 01-11).
+    let hp = fixture("04_init_regs.pcap")
+        .events
+        .into_iter()
+        .find_map(|e| match e {
+            Event::Control {
+                command:
+                    Command::WriteRegisters {
+                        address: 0xe800,
+                        data,
+                    },
+                ..
+            } if data.len() == 0x71a => Some(data),
+            _ => None,
+        })
+        .expect("block write");
+
+    let differences: Vec<u16> = (0xe800u16..)
+        .zip(ours.0.iter().zip(&hp))
+        .filter(|(_, (a, b))| a != b)
+        .map(|(address, _)| address)
+        .collect();
+    // Every other register (1794 of 1818) is the same. The rest are not set
+    // by the start-up code:
+    let expected = [
+        // Unknown: bit 6 of E813, and E969 (ED in the chip, CC in the HP
+        // block and in every execution).
+        0xe813, 0xe969, //
+        // Scan geometry, resolution ratio, dummy lines, motor options and
+        // curve steps. hp3900 writes them into init_regs when it prepares a
+        // scan (SetScanParams and the motor code): the HP block carries the
+        // values of an earlier scan, and every scan writes its own.
+        0xe8b0, 0xe8b1, 0xe8b2, 0xe8b3, 0xe8c0, 0xe8d2, 0xe8d3, 0xe8d6, 0xe8dd, 0xe8e0, 0xe8e4,
+        0xe8e5, 0xe8e7, 0xe8ea, 0xe8eb, 0xe8f0, 0xe8f1, 0xe9cf, //
+        // Lamp timer: set later by Lamp_Status_Timer_Set and the lamp code.
+        0xe946, 0xe947,
+    ];
+    let mut expected = expected.to_vec();
+    expected.sort_unstable();
+    let report: Vec<String> = differences
+        .iter()
+        .map(|&a| {
+            let i = usize::from(a - 0xe800);
+            format!("{a:04X}: ours {:02X}, HP {:02X}", ours.0[i], hp[i])
+        })
+        .collect();
+    assert_eq!(differences, expected, "\n{}", report.join("\n"));
 }
