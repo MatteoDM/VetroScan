@@ -1,0 +1,30 @@
+[package]
+name = "hp3770-usb"
+description = "USB backends for the HP Scanjet 3770: nusb (Linux, macOS, WinUSB) and usbscan.sys (Windows with the HP driver)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+hp3770-core.workspace = true
+nusb = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Threading",
+] }
+
+# Same lints as the workspace, except that `unsafe` is denied instead of
+# forbidden: the Windows usbscan.sys backend needs FFI and opts in locally.
+[lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

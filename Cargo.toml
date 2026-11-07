@@ -3,18 +3,21 @@ resolver = "2"
 members = [
     "crates/hp3770-core",
     "crates/hp3770-capture",
+    "crates/hp3770-usb",
+    "crates/hp3770-cli",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.85"
 license = "GPL-2.0-or-later"
 repository = "https://github.com/MatteoDM/scanner"
 authors = ["Matteo"]
 
 [workspace.dependencies]
 hp3770-core = { path = "crates/hp3770-core" }
+hp3770-usb = { path = "crates/hp3770-usb" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

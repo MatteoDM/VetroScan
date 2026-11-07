@@ -1,0 +1,21 @@
+[package]
+name = "hp3770-cli"
+description = "Command line tool for the HP Scanjet 3770"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+hp3770-core.workspace = true
+hp3770-usb.workspace = true
+clap = { version = "4.5", features = ["derive"] }
+
+[[bin]]
+name = "hp3770"
+path = "src/main.rs"
+
+[lints]
+workspace = true
