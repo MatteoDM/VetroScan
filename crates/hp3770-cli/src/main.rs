@@ -52,6 +52,10 @@ enum Command {
         /// How to detect the presses.
         #[arg(short, long, value_enum, default_value_t = ButtonMethod::Poll)]
         method: ButtonMethod,
+        /// With `--method poll`, also print every change of the button
+        /// registers (E968-E96A).
+        #[arg(long)]
+        raw: bool,
     },
 }
 
@@ -69,8 +73,8 @@ fn main() -> ExitCode {
     let result = match cli.command {
         Command::List => list(),
         Command::Probe { output } => open(cli.backend).and_then(|s| probe(s, output)),
-        Command::Buttons { count, method } => {
-            open(cli.backend).and_then(|s| buttons(s, count, method))
+        Command::Buttons { count, method, raw } => {
+            open(cli.backend).and_then(|s| buttons(s, count, method, raw))
         }
     };
     match result {
@@ -190,7 +194,7 @@ fn probe(scanner: Scanner, output: Option<PathBuf>) -> CliResult {
     Ok(())
 }
 
-fn buttons(scanner: Scanner, count: Option<u32>, method: ButtonMethod) -> CliResult {
+fn buttons(scanner: Scanner, count: Option<u32>, method: ButtonMethod, raw: bool) -> CliResult {
     eprintln!("Press a button on the scanner (Ctrl+C to stop).");
     let start = Instant::now();
     let mut seen = 0;
@@ -208,19 +212,35 @@ fn buttons(scanner: Scanner, count: Option<u32>, method: ButtonMethod) -> CliRes
             }
         }
         ButtonMethod::Poll => {
-            // Only register reads: the button register clears itself when read.
+            // Register reads only, through ReadOnly. E968 holds the buttons
+            // pressed now (0 = pressed), E96A the ones released since the
+            // last read (it clears itself when read).
             let mut chip = Chip::new(ReadOnly(scanner));
-            // Drop a release that happened before we started.
-            chip.buttons_released()?;
+            let first = chip.read_registers(0xe968, 3)?;
+            if raw {
+                println!("   0.000  E968-E96A {}", hex(&first));
+            }
+            let mut last = first.clone();
+            let mut held = !first[0] & 0x3f;
             while count.is_none_or(|n| seen < n) {
                 std::thread::sleep(Duration::from_millis(50));
-                let released = chip.buttons_released()?;
-                for bit in (0..6).map(|i| 1u8 << i).filter(|b| released & b != 0) {
+                let regs = chip.read_registers(0xe968, 3)?;
+                let t = start.elapsed().as_secs_f32();
+                if raw && regs != last {
+                    println!("{t:8.3}  E968-E96A {}", hex(&regs));
+                }
+                let now = !regs[0] & 0x3f;
+                let released = regs[2] & 0x3f;
+                // A press seen in E968, or one so short that only the
+                // release latch in E96A caught it.
+                let pressed = (now & !held) | (released & !held & !now);
+                for bit in (0..6).map(|i| 1u8 << i).filter(|b| pressed & b != 0) {
                     seen += 1;
-                    let t = start.elapsed().as_secs_f32();
                     let name = Button::from_mask(bit).map_or("unknown", Button::name);
                     println!("{t:8.3}  bit {bit:02X}  {name}");
                 }
+                held = now;
+                last = regs;
             }
         }
     }
