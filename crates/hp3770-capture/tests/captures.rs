@@ -376,3 +376,265 @@ fn park_before_high_resolution_scans() {
         chip.transport_mut().finish().unwrap();
     }
 }
+
+/// Image reads of a capture: each `DMA enable read` on channel 8 and the
+/// bulk IN data that follows it, as `(time, data)`.
+fn image_reads(trace: &Trace) -> Vec<(f64, Vec<u8>)> {
+    use hp3770_core::protocol::DmaDirection;
+    let mut out = Vec::new();
+    let mut want: Option<(f64, usize, Vec<u8>)> = None;
+    for event in &trace.events {
+        match event {
+            Event::Control {
+                time,
+                command:
+                    Command::DmaEnable {
+                        direction: DmaDirection::Read,
+                        channel: 8,
+                        size,
+                        ..
+                    },
+                ..
+            } => want = Some((*time, *size as usize, Vec::new())),
+            Event::BulkIn { data, .. } => {
+                if let Some((time, size, buf)) = want.as_mut() {
+                    buf.extend_from_slice(data);
+                    if buf.len() >= *size {
+                        out.push((*time, std::mem::take(buf)));
+                        want = None;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Table writes of a capture: each `DMA enable write` and the bulk OUT data
+/// that follows it, as `(time, channel, data)`.
+fn table_writes(trace: &Trace) -> Vec<(f64, u16, Vec<u8>)> {
+    use hp3770_core::protocol::DmaDirection;
+    let mut out = Vec::new();
+    let mut pending: Option<(f64, u16)> = None;
+    for event in &trace.events {
+        match event {
+            Event::Control {
+                time,
+                command:
+                    Command::DmaEnable {
+                        direction: DmaDirection::Write,
+                        channel,
+                        ..
+                    },
+                ..
+            } => pending = Some((*time, *channel)),
+            Event::BulkOut { data, .. } => {
+                if let Some((time, channel)) = pending.take() {
+                    out.push((time, channel, data.clone()));
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Replays the HP driver's calibration decisions on a capture: from the
+/// images the scanner sent, our calibration code must give the offsets and
+/// gains of the following reads and the shading tables the HP driver wrote.
+fn check_calibration(trace: &Trace, name: &str, dpi: u16, colour: bool) {
+    use hp3770_core::calibration::{
+        black_level, dark_sum, gain_peak, gain_value, offset_too_dark, predict_offset,
+        white_coefficients, Image, Pixels,
+    };
+    use hp3770_core::profile::HP3770;
+
+    let cfg = &HP3770.calibration;
+    let executions = trace.executions();
+    let reads = image_reads(trace);
+    let tables = table_writes(trace);
+    // The register block each read ran with.
+    let block = |time: f64| -> Vec<u8> {
+        let e = executions
+            .iter()
+            .rev()
+            .find(|e| e.time < time)
+            .expect("execution before the read");
+        e.block.iter().map(|b| b.expect("known register")).collect()
+    };
+    let width = |b: &[u8]| {
+        let x0 = u16::from_le_bytes([b[0xb0], b[0xb1]]);
+        let x1 = u16::from_le_bytes([b[0xb2], b[0xb3]]);
+        usize::from(x1 - x0)
+    };
+    // Offsets as [channel][parity].
+    let offsets = |b: &[u8]| -> [[u16; 2]; 3] {
+        std::array::from_fn(|c| {
+            std::array::from_fn(|p| {
+                let r = 0x1a + 4 * c + 2 * p;
+                u16::from(b[r]) | (u16::from(b[r + 1] & 0x80) << 1)
+            })
+        })
+    };
+    let gains = |b: &[u8]| -> [u8; 3] { std::array::from_fn(|c| b[0x14 + c] & 0x1f) };
+
+    let even_odd = cfg.even_odd(dpi);
+    let n = cfg.offset_pixels(dpi);
+    let probes = 2 * cfg.offset_probe_rounds(dpi);
+    for (_, data) in &reads[..probes] {
+        assert_eq!(data.len(), 300, "{name}: probe size");
+    }
+
+    // 1. Offset prediction from the last pair of probes.
+    let low = Image::new(&reads[probes - 2].1, 100);
+    let high = Image::new(&reads[probes - 1].1, 100);
+    let mut expected: [[u16; 2]; 3] = std::array::from_fn(|c| {
+        let o = predict_offset(
+            cfg,
+            dark_sum(&low, c, n, Pixels::All),
+            dark_sum(&high, c, n, Pixels::All),
+        )
+        .unwrap();
+        [o, o]
+    });
+
+    // 2. Checks: raise the channels found too dark until none is.
+    let mut next = probes;
+    loop {
+        let (time, data) = &reads[next];
+        assert_eq!(data.len(), 3000, "{name}: check {next}");
+        assert_eq!(
+            offsets(&block(*time)),
+            expected,
+            "{name}: offsets of read {next}"
+        );
+        let img = Image::new(data, 100);
+        let mut changed = false;
+        for (c, channel) in expected.iter_mut().enumerate() {
+            if even_odd {
+                for (p, which) in [Pixels::Even, Pixels::Odd].into_iter().enumerate() {
+                    if offset_too_dark(cfg, dark_sum(&img, c, n, which)) {
+                        channel[p] += cfg.offset_raise(dpi);
+                        changed = true;
+                    }
+                }
+            } else if offset_too_dark(cfg, dark_sum(&img, c, n, Pixels::All)) {
+                channel[0] += cfg.offset_raise(dpi);
+                channel[1] += cfg.offset_raise(dpi);
+                changed = true;
+            }
+        }
+        next += 1;
+        if !changed {
+            break;
+        }
+    }
+
+    // 3. Gain, from the next read; the black read runs with the result.
+    let (gain_time, gain_data) = &reads[next];
+    let gain_block = block(*gain_time);
+    assert_eq!(
+        offsets(&gain_block),
+        expected,
+        "{name}: offsets of the gain read"
+    );
+    let img = Image::new(gain_data, width(&gain_block));
+    assert_eq!(img.lines(), usize::from(cfg.gain_lines), "{name}");
+    let current = gains(&gain_block);
+    let new_gains: [u8; 3] =
+        std::array::from_fn(|c| gain_value(cfg, c, gain_peak(&img, c), current[c]));
+    let (black_time, black_data) = &reads[next + 1];
+    let black_block = block(*black_time);
+    assert_eq!(black_block[0x146] & 0x40, 0, "{name}: lamp off for black");
+    assert_eq!(gains(&black_block), new_gains, "{name}: gains");
+
+    // 4. Black shading: one level per channel (and parity at 1200 dpi),
+    // in the tables written after the black read.
+    let img = Image::new(black_data, width(&black_block));
+    assert_eq!(img.lines(), usize::from(cfg.black_lines), "{name}");
+    for c in 0..3 {
+        let (_, _, table) = tables
+            .iter()
+            .find(|(t, ch, _)| t > black_time && *ch == 0x10 + c as u16)
+            .expect("black table");
+        let levels = if even_odd {
+            [
+                black_level(cfg, &img, c, Pixels::Even),
+                black_level(cfg, &img, c, Pixels::Odd),
+            ]
+        } else {
+            let l = black_level(cfg, &img, c, Pixels::All);
+            [l, l]
+        };
+        for (i, word) in table.chunks(2).enumerate() {
+            let v = u16::from_le_bytes([word[0], word[1]]);
+            assert_eq!(v, levels[i % 2], "{name}: black {c} pixel {i}");
+        }
+    }
+
+    // 5. White shading: one multiplier per pixel, in the tables written
+    // after the white read.
+    if !colour {
+        return;
+    }
+    let (white_time, white_data) = &reads[next + 2];
+    let white_block = block(*white_time);
+    let img = Image::new(white_data, width(&white_block));
+    assert_eq!(img.lines(), usize::from(cfg.white_lines), "{name}");
+    for c in 0..3 {
+        let (_, _, table) = tables
+            .iter()
+            .find(|(t, ch, _)| t > white_time && *ch == 0x14 + c as u16)
+            .expect("white table");
+        let coefficients = white_coefficients(cfg, &img, c);
+        assert_eq!(
+            hp3770_core::calibration::table_bytes(&coefficients),
+            *table,
+            "{name}: white {c}"
+        );
+    }
+}
+
+#[test]
+fn calibration_matches_the_hp_driver() {
+    // Cut from 09_colore_300dpi_area_centro.pcap (2.0-6.95 s): initial
+    // block, offset probes and check, gain, black and white shading.
+    check_calibration(
+        &fixture("09_calibrazione.pcap"),
+        "09_calibrazione",
+        300,
+        true,
+    );
+}
+
+#[test]
+fn calibration_of_every_scan_capture() {
+    // Every scan capture, with the resolution the HP driver calibrated at
+    // (01 and 02 are 200 dpi, 06b is a 2400 dpi scan on the 1200 dpi
+    // sensor).
+    //
+    // In gray and lineart (07, 08) the HP driver makes the chip send each
+    // channel at a third of its level, through the white shading table, and
+    // adds them up; we scan in colour and convert ourselves, so those white
+    // tables are not ours to match.
+    let captures = [
+        ("01_anteprima.pcap", 200, true),
+        ("02_colore_200dpi_A4.pcap", 200, true),
+        ("04_colore_300dpi_A4.pcap", 300, true),
+        ("05_colore_600dpi_5x5cm.pcap", 600, true),
+        ("06_colore_1200dpi_2x2cm.pcap", 1200, true),
+        ("06b_colore_2400dpi_2x2cm.pcap", 1200, true),
+        ("07_grigio_300dpi_A4.pcap", 300, false),
+        ("08_bn_300dpi_A4.pcap", 300, false),
+        ("09_colore_300dpi_area_centro.pcap", 300, true),
+        ("10_colore_300dpi_luminosita.pcap", 300, true),
+        ("11_annulla.pcap", 300, true),
+    ];
+    for (name, dpi, colour) in captures {
+        let Some(trace) = full_capture(name) else {
+            return;
+        };
+        check_calibration(&trace, name, dpi, colour);
+    }
+}
