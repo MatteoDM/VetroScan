@@ -8,9 +8,11 @@ Lo scanner usa un ASIC **Realtek RTS8822**, lo stesso pilotato dal backend SANE
 3770, completata con i parametri estratti dal driver HP originale e verificata
 sulle catture USB del driver HP.
 
-> Stato: fase iniziale. Ci sono il nucleo del protocollo USB, il decodificatore delle
-> catture, l'accesso USB allo scanner e un comando di sola lettura per i primi test
-> sull'hardware; la scansione vera non è ancora implementata.
+> Stato: il comando `hp3770 scan` scansiona davvero, a colori, in grigio e in bianco e
+> nero, a 200, 300, 600, 1200 e 2400 dpi (provato sullo scanner, Windows con il driver
+> HP installato). Avvio, calibrazione e scansione sono verificati byte per byte sulle
+> catture del driver HP. Mancano ancora l'app desktop, il backend SANE e l'adattatore
+> per trasparenti.
 
 ## Struttura
 
@@ -51,7 +53,16 @@ cargo run --release --bin hp3770 -- buttons -m interrupt     # oppure dagli even
 cargo run --release --bin hp3770 -- init                     # inizializza il chip come il driver HP
 cargo run --release --bin hp3770 -- lamp off                 # spegne (o accende, `on`) la lampada del piano
 cargo run --release --bin hp3770 -- park                     # riporta a casa il carrello, se non c'è già
+cargo run --release --bin hp3770 -- scan foglio.png          # A4 a colori, 300 dpi
+cargo run --release --bin hp3770 -- scan foto.png --dpi 1200 --left 80 --top 120 --width 50 --height 50
+cargo run --release --bin hp3770 -- scan testo.png --mode lineart   # anche --mode grey
 ```
+
+`scan` fa tutto quello che fa il driver HP: avvio, riscaldamento della lampada se era spenta,
+calibrazione (offset, guadagno, shading nero e bianco), scansione, ritorno del carrello. L'area
+è in millimetri dall'angolo in alto a sinistra del vetro (di base un A4). L'immagine esce in PNG
+(o PPM/PGM/PBM) con la stessa curva tonale del driver HP; `--linear` salva i dati grezzi del
+chip. Non scrive mai l'EEPROM.
 
 `probe` passa da un filtro che rifiuta ogni scrittura prima che arrivi allo scanner:
 non accende la lampada, non muove il carrello e non tocca l'EEPROM. Con `--backend nusb`

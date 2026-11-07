@@ -43,9 +43,9 @@ Note:
 - Il blocco completo dei registri parte da `0xE800`: il driver HP lo legge con
   lunghezza `0x0719` (1817 byte) e lo scrive con 1818 byte.
 - Altre zone usate: `0xEF08`-`0xEF09`, `0xF8FF`-`0xF910`, `0xFE11`-`0xFE3E`.
-- Il driver HP **scrive l'EEPROM** durante le scansioni (es. indirizzi `0x78`,
-  `0x79`), probabilmente contatori. Il nostro driver non deve scrivere l'EEPROM
-  finché non sappiamo cosa contiene.
+- Il driver HP **scrive l'EEPROM** durante le scansioni (indirizzi `0x78`, `0x79`
+  e il contatore delle scansioni in `0x21`-`0x24`). Il nostro driver non scrive mai
+  l'EEPROM.
 
 ## Pulsanti
 
@@ -63,6 +63,42 @@ registri, compreso il blocco da `0xE800`.
   10 minuti senza traffico USB (timer interno).
 - Con un alimentatore troppo debole la lampada si accende ma le immagini sono
   nere e la striscia bianca di calibrazione legge circa 87/255.
+
+## Una scansione, passo per passo
+
+Sequenza del driver HP, riprodotta dal nostro driver e verificata byte per byte sulle
+catture 01, 02, 04, 05, 06, 06b, 09 e 10 (test `whole_scan_session_matches_the_hp_driver`).
+
+1. **Preparazione** (`prepare_scan`): stato della lampada, blocco iniziale dei registri,
+   timer della lampada spento, canali CCD accesi, attesa del carrello a casa, reset DMA
+   con una lettura di 512 byte della RAM del chip che viene scartata, PWM della lampada.
+   Il driver HP qui legge e scrive l'EEPROM (contatori): noi no.
+2. **Offset** dell'ADC: due letture di una riga (offset 300 e 350, due volte sotto i
+   1200 dpi), previsione lineare, poi controlli di 10 righe che alzano di 5 (3 a 1200 dpi)
+   i canali ancora sotto il livello 10 dei pixel neri ottici.
+3. **Guadagno**: 10 righe sulla striscia bianca, il guadagno porta il decimo più chiaro
+   delle colonne all'80 % di 245.
+4. **Shading nero**: lampada spenta, 10 righe, un livello per canale (e per parità a 1200 dpi).
+5. **Shading bianco**: lampada accesa, 24 righe a 200 dpi con il carrello in movimento e lo
+   shading nero attivo, un moltiplicatore per pixel (8192 = 1).
+6. **Ritorno a casa** a velocità costante (`[MotorMove2]`: clock 2, CTPC 1991).
+7. **Scansione**: tabelle dei passi, gamma identità, shading, avvio, dati a pezzi di
+   64512 byte, arresto (con ritorno a casa da 600 dpi in su).
+
+Ogni fase lavora su una propria copia del blocco dei registri; il bit 3 di `E955` (stato
+del chip dopo lo spegnimento della lampada) non entra mai nei blocchi.
+
+## Dall'area al chip e dal chip all'immagine
+
+- Origine del vetro (pixel, righe dalla posizione di casa): 200 dpi 43, 69; 300 dpi 65,
+  102; 600 dpi 129, 198; 1200 dpi 259, 373; 2400 dpi 259, 746. Bordo sinistro e larghezza
+  su multipli di 4.
+- 2400 dpi: il chip legge 1200 pixel per pollice e 2400 righe; le righe dei colori (48 di
+  distanza) e dei pixel pari/dispari (8) le riallinea l'host, che poi raddoppia la larghezza.
+  Il carrello raggiunge l'area alla velocità di scansione, circa 7,5 s/cm.
+- Curva tonale dell'host, come il driver HP: `255 × (x / 196)^(1/2.2)` (196 = 245 × 80 %).
+- Grigio: media dei tre canali lineari. Bianco e nero: bianco da `255 − 55` in su
+  (soglia WIA predefinita 55).
 
 ## Catture di riferimento
 
