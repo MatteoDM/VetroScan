@@ -44,6 +44,9 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the scanner state: lamp, carriage, transparency adapter, buttons.
+    /// Register reads only.
+    Status,
     /// Print the front-panel buttons as they are pressed.
     Buttons {
         /// Stop after this many presses (default: run until Ctrl+C).
@@ -72,6 +75,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
         Command::List => list(),
+        Command::Status => open(cli.backend).and_then(status),
         Command::Probe { output } => open(cli.backend).and_then(|s| probe(s, output)),
         Command::Buttons { count, method, raw } => {
             open(cli.backend).and_then(|s| buttons(s, count, method, raw))
@@ -113,6 +117,33 @@ fn list() -> CliResult {
             None => println!("{:<12} {}", f.backend, f.location),
         }
     }
+    Ok(())
+}
+
+fn status(scanner: Scanner) -> CliResult {
+    let s = Chip::new(ReadOnly(scanner)).status()?;
+    let yes_no = |b: bool| if b { "yes" } else { "no" };
+    let held: Vec<&str> = [Button::Scan, Button::Copy, Button::InstantShare]
+        .into_iter()
+        .filter(|b| s.buttons_held & b.mask() != 0)
+        .map(Button::name)
+        .collect();
+    println!("USB speed          {}", if s.usb2 { "2.0" } else { "1.1" });
+    println!("chipset id         {:02X}", s.chipset_id);
+    println!("initialised        {}", yes_no(s.init_done));
+    println!("operation running  {}", yes_no(s.executing));
+    println!("carriage at home   {}", yes_no(s.head_at_home));
+    println!("lamp               {}", s.lamp);
+    println!("TMA plugged in     {}", yes_no(s.tma_attached));
+    println!(
+        "buttons held       {}",
+        if held.is_empty() {
+            "none".to_owned()
+        } else {
+            held.join(", ")
+        }
+    );
+    println!("link word (E829)   {:04X}", s.link_word);
     Ok(())
 }
 
