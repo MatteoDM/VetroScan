@@ -71,11 +71,10 @@ impl Registers {
     /// The in-memory part of `Init_Registers`: the values hp3900 puts in the
     /// block it has just read, before any of them is written back.
     ///
-    /// Differences from hp3900, to match the HP driver: the binary threshold
-    /// (`E99E`-`E9A1`) keeps the chip's value, the high bits of `E963` and
-    /// `E965` are not cleared, and only the CCD branch is translated (the
+    /// Differences from hp3900, to match the HP driver: the high bits of
+    /// `E963` and `E965` are not cleared, and only the CCD branch is translated (the
     /// 3770 has a CCD sensor, `SensorType=1`).
-    pub fn init_registers(&mut self) {
+    pub fn init_registers(&mut self, profile: &Profile) {
         // CCD sensor.
         self.set_bits(0x11, 0xc0, 0);
         self.set_bits(0x146, 0x80, 1);
@@ -91,9 +90,9 @@ impl Registers {
         // MSI.
         self.0[0xda] = 0x02;
         self.set_bits(0xdd, 0x03, 0);
-        // hp3900 writes the binary threshold here (BinaryThresholdL/H, 127
-        // and 128 in the HP configuration). The initial block of the HP
-        // driver keeps the chip's 63 00 64 00: left as read.
+        // Binary threshold, low and high.
+        self.set_lsb(0x19e, u32::from(profile.binary_threshold.0), 2);
+        self.set_lsb(0x1a0, u32::from(profile.binary_threshold.1), 2);
         self.set_bits(0x01, 0x08, 0);
         self.set_bits(0x16f, 0x40, 0);
         self.0[0xbf] = (self.0[0xbf] & 0xe0) | 0x20;
@@ -376,7 +375,7 @@ impl<T: Transport> Chip<T> {
         self.sscg_enable(profile.sscg)?;
         let mut regs = self.read_block()?;
         self.read_fe3e()?;
-        regs.init_registers();
+        regs.init_registers(profile);
         // hp3900 probes the RAM type (RTS_DMA_CheckType); the HP driver sets
         // it directly.
         self.dma_set_type(&mut regs, profile.ram_type)?;
