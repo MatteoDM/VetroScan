@@ -50,6 +50,7 @@ cargo run --release --bin hp3770 -- buttons                  # stampa i pulsanti
 cargo run --release --bin hp3770 -- buttons -m interrupt     # oppure dagli eventi USB del pulsante
 cargo run --release --bin hp3770 -- init                     # inizializza il chip come il driver HP
 cargo run --release --bin hp3770 -- lamp off                 # spegne (o accende, `on`) la lampada del piano
+cargo run --release --bin hp3770 -- park                     # riporta a casa il carrello, se non c'è già
 ```
 
 `probe` passa da un filtro che rifiuta ogni scrittura prima che arrivi allo scanner:
@@ -60,6 +61,10 @@ o `--backend usbscan` si sceglie il backend; di base su Windows si prova prima
 `init` scrive nei registri del chip gli stessi valori che il driver HP scrive a ogni
 pressione di un pulsante (clock USB, tipo di RAM, corrente del motore, reset, pulsanti,
 timer della lampada, PWM della lampada). Non scrive mai l'EEPROM e non muove il carrello.
+
+`park` fa `init` e poi, solo se il carrello non è a casa, lo riporta indietro con la stessa
+tabella dei passi e lo stesso blocco di registri che il driver HP usa nelle catture 05, 06
+e 11 (i test li confrontano byte per byte). Se il carrello è già a casa non lo muove.
 
 `buttons` di base legge il registro dei pulsanti del chip ogni 50 ms: su Windows il servizio
 immagini (WIA) resta in ascolto degli eventi USB dei pulsanti e se ne prende una parte,

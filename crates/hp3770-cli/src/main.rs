@@ -53,6 +53,22 @@ enum Command {
     /// buttons, lamp timer) with the values the HP driver uses. Never writes
     /// the EEPROM and never moves the carriage.
     Init,
+    /// Bring the carriage home if it is not there.
+    ///
+    /// Runs `init`, then, only if the carriage is away from home, moves it
+    /// back with the motor table and the register block the HP driver uses
+    /// (capture-verified). Does nothing else if it is already home.
+    Park,
+    /// Move the carriage away from home by a few full motor steps (test).
+    ///
+    /// Runs `init`, then the same move as `park` towards the far end. The
+    /// HP driver does not move forward this way in the captures, so the
+    /// direction bit is hp3900's, not verified. Limited to 600 steps.
+    Forward {
+        /// Full motor steps (at most 600).
+        #[arg(value_parser = clap::value_parser!(u16).range(1..=600))]
+        steps: u16,
+    },
     /// Switch the flatbed lamp on or off.
     ///
     /// Writes E946 and E954 like the HP driver. The lamp also switches off
@@ -98,6 +114,8 @@ fn main() -> ExitCode {
         Command::List => list(),
         Command::Status => open(cli.backend).and_then(status),
         Command::Init => open(cli.backend).and_then(init),
+        Command::Park => open(cli.backend).and_then(park),
+        Command::Forward { steps } => open(cli.backend).and_then(|s| forward(s, steps)),
         Command::Lamp { state } => open(cli.backend).and_then(|s| lamp(s, state)),
         Command::Probe { output } => open(cli.backend).and_then(|s| probe(s, output)),
         Command::Buttons { count, method, raw } => {
@@ -181,13 +199,64 @@ fn init(scanner: Scanner) -> CliResult {
         if link.at_home {
             "at home"
         } else {
-            "NOT at home (parking not implemented yet)"
+            "NOT at home (run `park` to bring it back)"
         }
     );
     println!(
         "lamp timer       {:02X} {:02X} (E946 E947)",
         regs.get(0x146),
         regs.get(0x147)
+    );
+    Ok(())
+}
+
+fn park(scanner: Scanner) -> CliResult {
+    let profile = &hp3770_core::profile::HP3770;
+    let mut chip = Chip::new(scanner);
+    let link = chip.link(profile)?;
+    let start = Instant::now();
+    let base = hp3770_core::motor::park_registers(&link.registers);
+    if chip.head_park_home(&base, &profile.park)? {
+        println!(
+            "carriage         parked in {:.1} s",
+            start.elapsed().as_secs_f32()
+        );
+        println!(
+            "at home now      {}",
+            if chip.head_is_at_home()? { "yes" } else { "NO" }
+        );
+    } else {
+        println!("carriage         already at home, not moved");
+    }
+    Ok(())
+}
+
+fn forward(scanner: Scanner, steps: u16) -> CliResult {
+    use hp3770_core::motor::{park_registers, Direction, MotorPosition};
+    let profile = &hp3770_core::profile::HP3770;
+    let mut chip = Chip::new(scanner);
+    let link = chip.link(profile)?;
+    // Head_Relocate in hp3900: forward, E801 bit 2 clear.
+    let position = MotorPosition {
+        direction: Direction::Forward,
+        e801_bit2: false,
+        steps,
+    };
+    let start = Instant::now();
+    let base = park_registers(&link.registers);
+    let finished = chip.motor_move(&base, &profile.park, &position)?;
+    println!(
+        "moved            {steps} steps in {:.1} s{}",
+        start.elapsed().as_secs_f32(),
+        if finished {
+            ""
+        } else {
+            " (still running after 30 s)"
+        }
+    );
+    println!(
+        "at home now      {}",
+        if chip.head_is_at_home()? { "yes" } else { "no" }
     );
     Ok(())
 }
@@ -374,6 +443,11 @@ mod tests {
         let cli = Cli::parse_from(["hp3770", "--backend", "usbscan", "probe", "-o", "x.txt"]);
         assert_eq!(cli.backend, BackendArg::Usbscan);
         assert!(matches!(cli.command, Command::Probe { output: Some(_) }));
+        assert!(Cli::try_parse_from(["hp3770", "forward", "601"]).is_err());
+        let cli = Cli::parse_from(["hp3770", "forward", "300"]);
+        assert!(matches!(cli.command, Command::Forward { steps: 300 }));
+        let cli = Cli::parse_from(["hp3770", "park"]);
+        assert!(matches!(cli.command, Command::Park));
         let cli = Cli::parse_from(["hp3770", "lamp", "off"]);
         assert!(matches!(
             cli.command,

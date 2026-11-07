@@ -68,6 +68,27 @@ impl Registers {
         self.0[offset..offset + len].copy_from_slice(&value.to_le_bytes()[..len]);
     }
 
+    /// The low `len` bytes at `offset` as a little-endian number
+    /// (`data_lsb_get` in hp3900).
+    pub fn get_lsb(&self, offset: usize, len: usize) -> u32 {
+        let mut bytes = [0; 4];
+        bytes[..len].copy_from_slice(&self.0[offset..offset + len]);
+        u32::from_le_bytes(bytes)
+    }
+
+    /// Sets the bits of `mask` in the little-endian word at `offset` to
+    /// `value`, shifted to the lowest bit of the mask (`data_wide_bitset` in
+    /// hp3900, used for the 14-bit table pointers).
+    pub fn set_word_bits(&mut self, offset: usize, mask: u16, value: u16) {
+        if mask == 0 {
+            return;
+        }
+        let word = u16::from_le_bytes([self.0[offset], self.0[offset + 1]]);
+        let shifted = value.wrapping_shl(mask.trailing_zeros());
+        let word = (word & !mask) | (shifted & mask);
+        self.0[offset..offset + 2].copy_from_slice(&word.to_le_bytes());
+    }
+
     /// The in-memory part of `Init_Registers`: the values hp3900 puts in the
     /// block it has just read, before any of them is written back.
     ///
@@ -411,6 +432,18 @@ mod tests {
         r.0[0xe4] = 0x55;
         r.set_lsb(0xe1, 0x2af8, 3);
         assert_eq!(&r.0[0xe1..0xe5], &[0xf8, 0x2a, 0x00, 0x55]);
+    }
+
+    #[test]
+    fn word_bits_keep_the_rest_of_the_word() {
+        let mut r = Registers::default();
+        r.0[0xf6] = 0x55;
+        r.0[0xf7] = 0xc0;
+        r.set_word_bits(0xf6, 0x3fff, 2493);
+        assert_eq!(&r.0[0xf6..0xf8], &[0xbd, 0xc9]);
+        assert_eq!(r.get_lsb(0xf6, 2) & 0x3fff, 2493);
+        r.set_lsb(0xe1, 0x01_02_03, 3);
+        assert_eq!(r.get_lsb(0xe1, 3), 0x01_02_03);
     }
 
     #[test]

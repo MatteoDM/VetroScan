@@ -296,3 +296,83 @@ fn lamp_off_and_on_match_the_hp_driver() {
     assert_eq!(init.get(0x146), 0xd9);
     assert_eq!(init.get(0x155), 0x09);
 }
+
+/// The HP driver's initial block (cut from 04_colore_300dpi_A4.pcap,
+/// 2.130-2.2155 s; the same 1818 bytes in all scan captures 01-11).
+fn hp_init_regs() -> hp3770_core::init::Registers {
+    let data = fixture("04_init_regs.pcap")
+        .events
+        .into_iter()
+        .find_map(|e| match e {
+            Event::Control {
+                command:
+                    Command::WriteRegisters {
+                        address: 0xe800,
+                        data,
+                    },
+                ..
+            } if data.len() == 0x71a => Some(data),
+            _ => None,
+        })
+        .expect("block write");
+    let mut regs = hp3770_core::init::Registers::default();
+    regs.0.copy_from_slice(&data);
+    regs
+}
+
+#[test]
+fn park_matches_the_hp_driver() {
+    use hp3770_capture::replay::Replay;
+    use hp3770_core::motor::park_registers;
+    use hp3770_core::profile::HP3770;
+    use hp3770_core::transport::Chip;
+
+    // Cut from 11_annulla.pcap (19.0845-23.9905 s): after the cancelled
+    // scan the HP driver brings the carriage home. Same table and same
+    // block in 05 (16.02 s) and 06 (15.16 s), before the scan.
+    //
+    // The base block is the HP initial block with the three registers the
+    // scan set-up leaves in it (park_registers). Every other byte of the
+    // 1818 the HP driver writes must come from our motor code, and the
+    // replay checks all of them, the 1728 bytes of steps included, the
+    // failed read-back and its retry, and the 1540 status polls.
+    let base = park_registers(&hp_init_regs());
+    let mut chip = Chip::new(Replay::from_trace(&fixture("11_park.pcap")));
+    assert!(chip.head_park_home(&base, &HP3770.park).unwrap());
+    chip.transport_mut().finish().unwrap();
+}
+
+#[test]
+fn park_before_high_resolution_scans() {
+    use hp3770_capture::replay::Replay;
+    use hp3770_core::motor::park_registers;
+    use hp3770_core::profile::HP3770;
+    use hp3770_core::transport::Chip;
+
+    // At 600 and 1200 dpi the HP driver brings the carriage home after the
+    // calibration, before the scan: same steps and same block as after a
+    // cancel, but for the lamp bits of E954 (70 00 in capture 06).
+    for (name, from, to, e954) in [
+        (
+            "05_colore_600dpi_5x5cm.pcap",
+            15.9915,
+            17.2685,
+            [0xb0, 0x01],
+        ),
+        (
+            "06_colore_1200dpi_2x2cm.pcap",
+            15.1305,
+            15.9105,
+            [0x70, 0x00],
+        ),
+    ] {
+        let Some(trace) = full_capture(name) else {
+            return;
+        };
+        let mut base = park_registers(&hp_init_regs());
+        base.0[0x154..0x156].copy_from_slice(&e954);
+        let mut chip = Chip::new(Replay::window(&trace, from, to));
+        assert!(chip.head_park_home(&base, &HP3770.park).unwrap(), "{name}");
+        chip.transport_mut().finish().unwrap();
+    }
+}

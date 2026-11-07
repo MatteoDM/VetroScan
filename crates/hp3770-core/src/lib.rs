@@ -19,6 +19,8 @@ pub mod device;
 pub mod error;
 pub mod init;
 pub mod lamp;
+pub mod motor;
+pub mod motor_curves;
 pub mod profile;
 pub mod protocol;
 pub mod status;
