@@ -40,6 +40,9 @@ pub struct Profile {
     /// Motor resource table copied to `E904`-`E923` at start-up
     /// (`cfg_motor_resource_get`).
     pub motor_resource: [u8; 32],
+    /// Minutes of inactivity before the chip switches the lamp off
+    /// (`Lamp_Status_Timer_Set`).
+    pub lamp_timer_minutes: u8,
 }
 
 /// HP Scanjet 3770.
@@ -76,4 +79,7 @@ pub const HP3770: Profile = Profile {
         0x28, 0x04, 0x00, 0x20, 0x44, 0x40, 0xe0, 0xc0, 0xc4, 0xa0, 0x80, 0x84, 0xa8, 0x88, 0x9c,
         0x98, 0xb8,
     ],
+    // hp3900 passes 13. Capture 00, 48.669 s: E947 written as 22, which is
+    // 13 minutes (13 * 2.68 = 34.9). [PlatForm] LampOffTimer=15 would give 28.
+    lamp_timer_minutes: 13,
 };

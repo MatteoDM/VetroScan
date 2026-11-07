@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! Start-up of the chip: `Init_USBData` and `Init_Registers`.
+//! Start-up of the chip: `IsScannerLinked`, with `Init_USBData` and
+//! `Init_Registers`.
 //!
 //! The order of the requests follows the HP driver as seen in the captures,
 //! which is `hp3900` with two small differences, noted where they occur:
@@ -16,6 +17,18 @@ use std::time::{Duration, Instant};
 pub const BLOCK_LEN: usize = 0x071a;
 /// First register of the block.
 pub const BLOCK_START: u16 = 0xe800;
+
+/// What [`Chip::link`] leaves behind.
+#[derive(Debug, Clone)]
+pub struct Link {
+    /// The initial register block (`init_regs`), base of every operation.
+    pub registers: Registers,
+    /// Register word `E829`. hp3900 treats 0 as the first connection after
+    /// power-on; the 3770 answered 1024 in every capture and test.
+    pub link_word: u16,
+    /// The carriage was at home at the end of the start-up.
+    pub at_home: bool,
+}
 
 /// A copy of the register block `E800`-`EF19`, indexed from `E800`.
 #[derive(Clone, PartialEq, Eq)]
@@ -239,6 +252,105 @@ impl<T: Transport> Chip<T> {
         };
         regs.0[0x154] = data as u8;
         self.write_word(0xe954, data)
+    }
+
+    /// Waits until the chip has finished its own initialisation
+    /// (`RTS_WaitInitEnd`, bit 3 of `F910`), polling every 100 ms.
+    pub fn wait_init_end(&mut self, timeout: Duration) -> Result<()> {
+        let end = Instant::now() + timeout;
+        loop {
+            if self.read_byte(0xf910)? & 0x08 != 0 {
+                return Ok(());
+            }
+            if Instant::now() >= end {
+                return Err(Error::Transport("chip initialisation did not end".into()));
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    /// Pulses bit 6 of `E800` (`RTS_Warm_Reset`).
+    pub fn warm_reset(&mut self) -> Result<()> {
+        let data = (self.read_byte(0xe800)? & 0x3f) | 0x40;
+        self.write_byte(0xe800, data)?;
+        self.write_byte(0xe800, data & 0xbf)
+    }
+
+    /// Waits until no operation is running (`RTS_WaitScanEnd`, bit 7 of
+    /// `E800`). Returns `false` on timeout, which hp3900 does not treat as
+    /// an error.
+    pub fn wait_scan_end(&mut self, timeout: Duration) -> Result<bool> {
+        let end = Instant::now() + timeout;
+        while self.read_byte(0xe800)? & 0x80 != 0 {
+            if Instant::now() >= end {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// The carriage is at its home position (`Head_IsAtHome`, bit 6 of
+    /// `E96F`).
+    pub fn head_is_at_home(&mut self) -> Result<bool> {
+        Ok(self.read_byte(0xe96f)? & 0x40 != 0)
+    }
+
+    /// Enables the front-panel buttons (`Buttons_Enable`, low 4 bits of
+    /// `E958`).
+    pub fn buttons_enable(&mut self) -> Result<()> {
+        let data = self.read_word(0xe958)?;
+        self.write_word(0xe958, data | 0x0f)
+    }
+
+    /// Sets the lamp switch-off timer (`Lamp_Status_Timer_Set`): bit 4 of
+    /// `E946` enables it, `E947` holds the time in units of about 22 s.
+    /// `minutes = 0` disables it. Updates `regs` like hp3900.
+    pub fn lamp_status_timer_set(&mut self, regs: &mut Registers, minutes: u8) -> Result<()> {
+        let mut low = regs.get(0x146) & 0xef;
+        let mut high = regs.get(0x147);
+        if minutes > 0 {
+            low |= 0x10;
+            high = (f64::from(minutes) * 2.682163611980331).floor() as u8;
+        }
+        regs.0[0x147] = high;
+        regs.0[0x146] = (regs.get(0x146) & 0xef) | (low & 0x10);
+        self.write_word(0xe946, u16::from_le_bytes([low, high]))
+    }
+
+    /// Start-up of the scanner (`IsScannerLinked`), in the order of the HP
+    /// driver: `Init_USBData`, wait for the chip, warm reset, check the
+    /// carriage, enable the buttons, set the lamp timer.
+    ///
+    /// Differences from hp3900, all to match the HP driver or to stay safe:
+    /// - the HP driver enables the buttons and sets the lamp timer at every
+    ///   start-up, hp3900 only when `E829` is 0;
+    /// - the HP driver reads `E968` (buttons) before enabling them and
+    ///   `E946` before the timer, and writes the timer twice;
+    /// - nothing is written to the EEPROM: hp3900 clears the gain/offset
+    ///   counters there on the first connection, and the HP driver writes
+    ///   the lamp PWM status (`Lamp_PWM_SaveStatus`, EEPROM 0x7B) next;
+    /// - the carriage is not moved. If it is not at home, [`Link::at_home`]
+    ///   says so and parking is left to the caller (`Head_ParkHome` needs
+    ///   the motor code).
+    pub fn link(&mut self, profile: &Profile) -> Result<Link> {
+        self.read_fe3e()?;
+        let mut registers = self.init_usb_data(profile)?;
+        self.wait_init_end(Duration::from_millis(0x30000))?;
+        let link_word = self.read_word(0xe829)?;
+        self.warm_reset()?;
+        // Head_ParkHome: wait for a running operation, then check home.
+        self.wait_scan_end(Duration::from_millis(0x3a98))?;
+        let at_home = self.head_is_at_home()?;
+        self.buttons_held()?;
+        self.buttons_enable()?;
+        self.read_word(0xe946)?;
+        self.lamp_status_timer_set(&mut registers, profile.lamp_timer_minutes)?;
+        self.lamp_status_timer_set(&mut registers, profile.lamp_timer_minutes)?;
+        Ok(Link {
+            registers,
+            link_word,
+            at_home,
+        })
     }
 
     /// Releases the motor (`Motor_Release`, bit 2 of `E8D9`).

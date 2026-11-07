@@ -172,17 +172,38 @@ fn init_usb_data_matches_the_hp_driver() {
     assert_eq!(regs.get(0x154), 0xb0);
 }
 
-#[test]
-fn init_regs_match_the_hp_driver() {
+/// Runs our start-up against the HP driver's after a button press in
+/// 00_collegamento.pcap: RTS_USBType (FE11, twice), then IsScannerLinked up
+/// to the lamp timer (45.857-48.674 s). The HP driver goes on with EEPROM
+/// writes, which ours leaves out.
+fn link_on_capture_00() -> hp3770_core::init::Link {
     use hp3770_capture::replay::Replay;
     use hp3770_core::profile::HP3770;
     use hp3770_core::transport::Chip;
 
-    // Our initial block, computed from the block read in 00_collegamento.
     let trace = fixture("00_collegamento.pcap");
-    let mut chip = Chip::new(Replay::window(&trace, 45.863, 45.983));
-    chip.read_fe3e().unwrap();
-    let ours = chip.init_usb_data(&HP3770).unwrap();
+    let mut chip = Chip::new(Replay::window(&trace, 45.857, 48.674));
+    chip.read_byte(0xfe11).unwrap();
+    chip.read_byte(0xfe11).unwrap();
+    let link = chip.link(&HP3770).unwrap();
+    chip.transport_mut().finish().unwrap();
+    link
+}
+
+#[test]
+fn link_matches_the_hp_driver() {
+    let link = link_on_capture_00();
+    assert_eq!(link.link_word, 0x1024);
+    assert!(link.at_home);
+    // Lamp timer: enabled, 13 minutes.
+    assert_eq!(link.registers.get(0x146), 0xd9);
+    assert_eq!(link.registers.get(0x147), 0x22);
+}
+
+#[test]
+fn init_regs_match_the_hp_driver() {
+    // Our initial block, computed from the block read in 00_collegamento.
+    let ours = link_on_capture_00().registers;
 
     // The HP driver's initial block, written at the start of every scan
     // (cut from 04_colore_300dpi_A4.pcap, 2.130-2.2155 s; the same 1818
@@ -208,7 +229,7 @@ fn init_regs_match_the_hp_driver() {
         .filter(|(_, (a, b))| a != b)
         .map(|(address, _)| address)
         .collect();
-    // Every other register (1794 of 1818) is the same. The rest are not set
+    // Every other register (1795 of 1818) is the same. The rest are not set
     // by the start-up code:
     let expected = [
         // Unknown: bit 6 of E813, and E969 (ED in the chip, CC in the HP
@@ -220,8 +241,9 @@ fn init_regs_match_the_hp_driver() {
         // values of an earlier scan, and every scan writes its own.
         0xe8b0, 0xe8b1, 0xe8b2, 0xe8b3, 0xe8c0, 0xe8d2, 0xe8d3, 0xe8d6, 0xe8dd, 0xe8e0, 0xe8e4,
         0xe8e5, 0xe8e7, 0xe8ea, 0xe8eb, 0xe8f0, 0xe8f1, 0xe9cf, //
-        // Lamp timer: set later by Lamp_Status_Timer_Set and the lamp code.
-        0xe946, 0xe947,
+        // Bit 4 of E946, the lamp timer: on after the start-up, off in the
+        // HP block, as left by the lamp code of an earlier scan.
+        0xe946,
     ];
     let mut expected = expected.to_vec();
     expected.sort_unstable();
