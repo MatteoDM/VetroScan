@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/hp3770-core",
+    "crates/hp3770-capture",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "GPL-2.0-or-later"
+repository = "https://github.com/MatteoDM/scanner"
+authors = ["Matteo"]
+
+[workspace.dependencies]
+hp3770-core = { path = "crates/hp3770-core" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

@@ -1,0 +1,19 @@
+[package]
+name = "hp3770-capture"
+description = "Decoder for USBPcap captures of the HP Scanjet 3770 (RTS8822) USB protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+hp3770-core.workspace = true
+
+[[bin]]
+name = "hp3770-decode"
+path = "src/bin/hp3770-decode.rs"
+
+[lints]
+workspace = true

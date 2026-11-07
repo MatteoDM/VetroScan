@@ -1,0 +1,75 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+//! Static facts about the device: USB identity, endpoints and front-panel buttons.
+
+/// Hewlett-Packard USB vendor id.
+pub const VENDOR_ID: u16 = 0x03f0;
+/// HP Scanjet 3770 product id.
+pub const PRODUCT_ID: u16 = 0x2505;
+
+/// Bulk IN endpoint carrying image and calibration data.
+pub const EP_BULK_IN: u8 = 0x81;
+/// Bulk OUT endpoint carrying tables (gamma, shading) to the ASIC.
+pub const EP_BULK_OUT: u8 = 0x02;
+/// Interrupt IN endpoint reporting front-panel button presses (1 byte).
+pub const EP_INTERRUPT_IN: u8 = 0x83;
+
+/// Highest optical resolution of the CCD, in dpi.
+pub const MAX_OPTICAL_DPI: u16 = 1200;
+
+/// A front-panel button, as reported on [`EP_INTERRUPT_IN`].
+///
+/// Values confirmed with USB captures of the original HP driver
+/// (2026-11-07): left = Scan (`0x00`), centre = Copy (`0x02`),
+/// right = HP Instant Share (`0x03`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Button {
+    /// Left button, scanner icon.
+    Scan,
+    /// Centre button, copier/fax icon.
+    Copy,
+    /// Right button, globe with a sheet ("HP Instant Share").
+    InstantShare,
+}
+
+impl Button {
+    /// Decodes the byte sent on the interrupt endpoint.
+    pub fn from_code(code: u8) -> Option<Self> {
+        match code {
+            0x00 => Some(Self::Scan),
+            0x02 => Some(Self::Copy),
+            0x03 => Some(Self::InstantShare),
+            _ => None,
+        }
+    }
+
+    /// The byte the scanner sends for this button.
+    pub fn code(self) -> u8 {
+        match self {
+            Self::Scan => 0x00,
+            Self::Copy => 0x02,
+            Self::InstantShare => 0x03,
+        }
+    }
+
+    /// Short human-readable name.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Scan => "Scan",
+            Self::Copy => "Copy",
+            Self::InstantShare => "Instant Share",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn button_codes_round_trip() {
+        for b in [Button::Scan, Button::Copy, Button::InstantShare] {
+            assert_eq!(Button::from_code(b.code()), Some(b));
+        }
+        assert_eq!(Button::from_code(0x01), None);
+    }
+}
