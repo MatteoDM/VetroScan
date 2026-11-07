@@ -125,8 +125,14 @@ pub struct MotorPosition {
 pub struct StepTables {
     /// Steps of 3 bytes, big endian, padded with zeros to 16 bytes.
     pub bytes: Vec<u8>,
-    /// Steps in the acceleration table (returned by `Motor_Setup_Steps`).
+    /// Steps in the acceleration table (returned by `Motor_Setup_Steps`,
+    /// `acccurvecount`).
     pub acc_steps: u32,
+    /// Steps in the buffer-full deceleration table (`deccurvecount`).
+    pub buffer_full_steps: u32,
+    /// Steps of the smearing acceleration and deceleration curves
+    /// (`smearacccurvecount + smeardeccurvecount`).
+    pub smearing_steps: u32,
 }
 
 /// Builds the step tables of `setting` and points the registers to them
@@ -202,7 +208,9 @@ pub fn build_step_tables(
     let mut extra = 0;
     if back_step > 0 {
         let step_size = i64::from(regs.get(0xe0)) + 1;
-        let count = (steps.len() - table) as i64;
+        // hp3900 counts the last step of the curve here, which is written
+        // after the back steps.
+        let count = (steps.len() - table) as i64 + 1;
         let wanted = i64::from(back_step) - count - i64::from(acc_steps) + 2;
         extra = wanted - wanted / step_size * step_size;
         first = i64::from(last_dec.max(last_acc + 1));
@@ -213,6 +221,14 @@ pub fn build_step_tables(
     // With no back steps hp3900 and the HP driver end with the stretched
     // first step (4977 in capture 11).
     steps.push(first as u32);
+    let buffer_full_steps = (steps.len() - table) as u32;
+    let smearing_steps = [
+        setting.acc(setting.acc_smearing),
+        setting.dec(setting.dec_smearing),
+    ]
+    .iter()
+    .map(|c| c.map_or(0, |c| c.len() as u32))
+    .sum();
 
     // The other phases: a table of their own, or the one of an earlier
     // phase with the same curve.
@@ -285,7 +301,12 @@ pub fn build_step_tables(
         .flat_map(|s| s.to_be_bytes()[1..].to_vec())
         .collect();
     bytes.resize(bytes.len().next_multiple_of(16), 0);
-    Ok(StepTables { bytes, acc_steps })
+    Ok(StepTables {
+        bytes,
+        acc_steps,
+        buffer_full_steps,
+        smearing_steps,
+    })
 }
 
 /// The block to park from when no scan has been prepared yet.

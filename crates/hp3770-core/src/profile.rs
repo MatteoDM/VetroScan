@@ -30,6 +30,30 @@ pub struct Sscg {
     pub clock: u8,
 }
 
+/// Sensor and motor of the flatbed (`[PlatForm]` and `[MoveMotorSetting]`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Platform {
+    /// Optical resolution of the CCD (`RealSensorResolution`).
+    pub sensor_resolution: u16,
+    /// Distance between the colour lines of the CCD, in lines at the
+    /// sensor resolution (`SensorLineDistance`).
+    pub line_distance: u8,
+    /// Distance between the even and odd pixel rows
+    /// (`SensorEvenOddDistance`).
+    pub even_odd_distance: u8,
+    /// Steps of the motor per inch (`MotorResolution`).
+    pub motor_resolution: u16,
+    /// Speed of the motor without curves, in steps per second
+    /// (`BaseSpeedPPS`).
+    pub base_speed_pps: u16,
+    /// Order of the colours in the sensor (`SensorChannelColor`, from 0).
+    pub channel_color: [u8; 3],
+    /// Order of the colours sent to the host (`RGBChannelOrder`, from 0).
+    pub rgb_order: [u8; 3],
+    /// Second motor resource table, for the modes with `MotorPhase=1`.
+    pub motor_resource_phase: [u8; 32],
+}
+
 /// Parameters of one scanner model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Profile {
@@ -66,6 +90,8 @@ pub struct Profile {
     pub park: MotorMove,
     /// Calibration parameters (flatbed).
     pub calibration: CalibrationConfig,
+    /// Sensor and motor.
+    pub platform: Platform,
 }
 
 /// HP Scanjet 3770.
@@ -151,5 +177,31 @@ pub const HP3770: Profile = Profile {
         black_cut_hundredths: [-6, -6, -6],
         // WShadingHeight=24.
         white_lines: 24,
+    },
+    // [PlatForm] of the configuration (line 14684 of the extracted file);
+    // multi-value keys take the first value.
+    platform: Platform {
+        // RealSensorResolution=1200.
+        sensor_resolution: 1200,
+        // SensorLineDistance=24 0 6 12 24 0 12. Scan at 300 dpi (capture
+        // 04): E94A-E94D = 6, 6, 12, 12.
+        line_distance: 24,
+        // SensorEvenOddDistance=4 0 12 24 0 4 2.
+        even_odd_distance: 4,
+        // MotorResolution=1200 2400.
+        motor_resolution: 1200,
+        // [MoveMotorSetting] BaseSpeedPPS=800 450 800.
+        base_speed_pps: 800,
+        // SensorChannelColor=123 321. Every block: EE0A low bits = 06.
+        channel_color: [0, 1, 2],
+        // RGBChannelOrder=123 321. Every block: E812 low bits = 24.
+        rgb_order: [0, 1, 2],
+        // Table of the HP driver (function 0x100366d0) for MotorPhase=1;
+        // the blocks at 600 and 1200 dpi have it at E904-E923.
+        motor_resource_phase: [
+            0xff, 0xb4, 0xb0, 0xd4, 0xd0, 0x70, 0x50, 0x54, 0x30, 0x34, 0x14, 0x38, 0x18, 0x0c,
+            0x08, 0x28, 0x04, 0x24, 0x20, 0x44, 0x40, 0xe0, 0xc0, 0xc4, 0xa0, 0xa4, 0x84, 0xa8,
+            0x88, 0x9c, 0x98, 0xb8,
+        ],
     },
 };
