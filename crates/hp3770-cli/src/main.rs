@@ -78,6 +78,29 @@ enum Command {
         #[arg(value_enum)]
         state: LampState,
     },
+    /// Scan an area of the glass in colour at 300 dpi and save it as a PPM
+    /// image.
+    ///
+    /// Runs `init`, parks the carriage if needed, calibrates and scans
+    /// exactly as the HP driver does (capture-verified), then parks. The
+    /// area is in millimetres from the top left corner of the glass. Never
+    /// writes the EEPROM.
+    Scan {
+        /// Output file (binary PPM, P6).
+        output: PathBuf,
+        /// Left edge, mm.
+        #[arg(long, default_value_t = 80.0)]
+        left: f64,
+        /// Top edge, mm.
+        #[arg(long, default_value_t = 123.5)]
+        top: f64,
+        /// Width, mm.
+        #[arg(long, default_value_t = 50.0)]
+        width: f64,
+        /// Height, mm.
+        #[arg(long, default_value_t = 50.0)]
+        height: f64,
+    },
     /// Print the front-panel buttons as they are pressed.
     Buttons {
         /// Stop after this many presses (default: run until Ctrl+C).
@@ -118,6 +141,13 @@ fn main() -> ExitCode {
         Command::Forward { steps } => open(cli.backend).and_then(|s| forward(s, steps)),
         Command::Lamp { state } => open(cli.backend).and_then(|s| lamp(s, state)),
         Command::Probe { output } => open(cli.backend).and_then(|s| probe(s, output)),
+        Command::Scan {
+            output,
+            left,
+            top,
+            width,
+            height,
+        } => open(cli.backend).and_then(|s| scan(s, &output, [left, top, width, height])),
         Command::Buttons { count, method, raw } => {
             open(cli.backend).and_then(|s| buttons(s, count, method, raw))
         }
@@ -258,6 +288,126 @@ fn forward(scanner: Scanner, steps: u16) -> CliResult {
         "at home now      {}",
         if chip.head_is_at_home()? { "yes" } else { "no" }
     );
+    Ok(())
+}
+
+/// Resolution of `scan`: the only one whose window the captures pin down.
+const SCAN_DPI: u16 = 300;
+/// First pixel and line of the glass at 300 dpi, from the chip's origin
+/// (captures 04 and 09: A4 at 65, 102; 80 mm, 123.5 mm at 1009, 1561).
+const GLASS_ORIGIN: (u32, u32) = (65, 102);
+/// Size of the glass at 300 dpi (A4 in capture 04).
+const GLASS_SIZE: (u32, u32) = (2480, 3508);
+
+fn scan(scanner: Scanner, output: &std::path::Path, area_mm: [f64; 4]) -> CliResult {
+    use hp3770_core::setup::{ArrangeLine, Hardware, ScanParams};
+    let profile = &hp3770_core::profile::HP3770;
+    let px = |mm: f64| (mm * f64::from(SCAN_DPI) / 25.4).round().max(0.0) as u32;
+    let [left, top, width, height] = area_mm.map(px);
+    // Even widths, as the HP driver (5 cm -> 592 in capture 09).
+    let width = width.next_multiple_of(2);
+    if width == 0 || height == 0 || left + width > GLASS_SIZE.0 || top + height > GLASS_SIZE.1 {
+        return Err("the area must be inside the glass (216 x 297 mm)".into());
+    }
+    let params = ScanParams {
+        depth: 8,
+        resolution_x: SCAN_DPI,
+        resolution_y: SCAN_DPI,
+        left: GLASS_ORIGIN.0 + left,
+        top: GLASS_ORIGIN.1 + top,
+        width,
+        height,
+    };
+    // The HP driver's 300 dpi scan of capture 04: shading and gamma, lines
+    // arranged by the chip.
+    let hw = Hardware {
+        black_shading: true,
+        white_shading: true,
+        gamma: true,
+        gamma_size: 0,
+        backward: false,
+        static_head: false,
+        dummy_scan: false,
+        compression: false,
+        arrange_line: ArrangeLine::Hardware,
+        high_resolution: false,
+    };
+    // Identity gamma, as the HP driver sends with default settings.
+    let gamma: Vec<u8> = (0..768).map(|i| i as u8).collect();
+
+    let start = Instant::now();
+    let mut chip = Chip::new(scanner);
+    let link = chip.link(profile)?;
+    let mut init = link.registers.clone();
+    if !link.at_home {
+        chip.head_park_home(&hp3770_core::motor::park_registers(&init), &profile.park)?;
+    }
+    chip.prepare_scan(&mut init, profile)?;
+    if !link.lamp_was_on {
+        // The start-up switched the lamp on: let it warm up.
+        eprintln!(
+            "lamp             was off, warming up for {} s",
+            hp3770_core::scan::LAMP_WARMUP.as_secs()
+        );
+        std::thread::sleep(hp3770_core::scan::LAMP_WARMUP);
+    }
+    let calibration = chip.calibrate(&mut init, profile, &params)?;
+    eprintln!(
+        "calibrated in    {:.1} s (offsets {:?}, gains {:?})",
+        start.elapsed().as_secs_f32(),
+        calibration.gain_offset.even_offset,
+        calibration.gain_offset.gain
+    );
+    let average = |table: &[u8]| {
+        let words: Vec<f64> = table
+            .chunks(2)
+            .map(|w| f64::from(u16::from_le_bytes([w[0], w[1]])))
+            .collect();
+        words.iter().sum::<f64>() / words.len().max(1) as f64
+    };
+    eprintln!(
+        "shading          black {:.1} {:.1} {:.1}, white x{:.3} x{:.3} x{:.3}",
+        average(&calibration.black[0]) / 256.0,
+        average(&calibration.black[1]) / 256.0,
+        average(&calibration.black[2]) / 256.0,
+        average(&calibration.white[0]) / 8192.0,
+        average(&calibration.white[1]) / 8192.0,
+        average(&calibration.white[2]) / 8192.0,
+    );
+    let tables = calibration.tables(Some(&gamma));
+    let mut job = chip.start_scan(
+        &init,
+        profile,
+        &params,
+        &hw,
+        &calibration.gain_offset,
+        &tables,
+    )?;
+    let mut image = Vec::with_capacity(job.total());
+    let mut piece = Vec::new();
+    while chip.read_scan(&mut job, &mut piece)? > 0 {
+        image.extend_from_slice(&piece);
+    }
+    let parked = chip.stop_scan(&mut init, profile)?;
+    // The chip brings the carriage back by itself at 300 dpi; make sure.
+    chip.head_park_home(&hp3770_core::motor::park_registers(&init), &profile.park)?;
+    let pixels = job.bytes_per_line / 3;
+    let lines = image.len() / job.bytes_per_line;
+    let mut file = format!(
+        "P6
+{pixels} {lines}
+255
+"
+    )
+    .into_bytes();
+    file.extend_from_slice(&image[..lines * job.bytes_per_line]);
+    std::fs::write(output, file)?;
+    println!(
+        "scanned          {pixels} x {lines} pixels in {:.1} s{}",
+        start.elapsed().as_secs_f32(),
+        if parked { " (parked)" } else { "" }
+    );
+    println!("saved            {}", output.display());
     Ok(())
 }
 

@@ -33,6 +33,11 @@ pub struct Link {
     pub link_word: u16,
     /// The carriage was at home at the end of the start-up.
     pub at_home: bool,
+    /// The flatbed lamp was on before the start-up. The start-up switches
+    /// it on (bit 6 of `E946` in the initial block, written with the lamp
+    /// timer): if it was off, it needs to warm up before a calibration
+    /// (see [`crate::scan::LAMP_WARMUP`]).
+    pub lamp_was_on: bool,
 }
 
 /// A copy of the register block `E800`-`EF19`, indexed from `E800`.
@@ -366,7 +371,7 @@ impl<T: Transport> Chip<T> {
     ///   the motor code).
     pub fn link(&mut self, profile: &Profile) -> Result<Link> {
         self.read_fe3e()?;
-        let mut registers = self.init_usb_data(profile)?;
+        let (mut registers, lamp_was_on) = self.init_usb_data_lamp(profile)?;
         self.wait_init_end(Duration::from_millis(0x30000))?;
         let link_word = self.read_word(0xe829)?;
         self.warm_reset()?;
@@ -387,6 +392,7 @@ impl<T: Transport> Chip<T> {
             registers,
             link_word,
             at_home,
+            lamp_was_on,
         })
     }
 
@@ -401,9 +407,16 @@ impl<T: Transport> Chip<T> {
     /// motor release. Returns the initial register block (`init_regs` in
     /// hp3900), the base of every later operation.
     pub fn init_usb_data(&mut self, profile: &Profile) -> Result<Registers> {
+        Ok(self.init_usb_data_lamp(profile)?.0)
+    }
+
+    /// [`Chip::init_usb_data`], also telling whether the flatbed lamp was
+    /// on in the block read from the chip.
+    fn init_usb_data_lamp(&mut self, profile: &Profile) -> Result<(Registers, bool)> {
         self.enable_usb_data()?;
         self.sscg_enable(profile.sscg)?;
         let mut regs = self.read_block()?;
+        let lamp_was_on = regs.get(0x146) & 0x40 != 0;
         self.read_fe3e()?;
         regs.init_registers(profile);
         // hp3900 probes the RAM type (RTS_DMA_CheckType); the HP driver sets
@@ -415,7 +428,7 @@ impl<T: Transport> Chip<T> {
             self.motor_change(&mut regs, value)?;
         }
         self.motor_release()?;
-        Ok(regs)
+        Ok((regs, lamp_was_on))
     }
 }
 
