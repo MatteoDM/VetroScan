@@ -14,6 +14,7 @@ use crate::profile::Profile;
 use crate::protocol::DmaDirection;
 use crate::read::Tables;
 use crate::setup::{self, GainOffset, Hardware, ScanParams};
+use crate::status::Lamp;
 use crate::transport::{Chip, Transport};
 use std::time::{Duration, Instant};
 
@@ -35,6 +36,21 @@ const DATA_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// DMA channel of the image data.
 const IMAGE_CHANNEL: u16 = 8;
+
+/// DMA channel through which the chip RAM is read.
+const RAM_CHANNEL: u16 = 4;
+
+/// Bytes read from the chip RAM before the calibration and thrown away.
+const DRAIN_SIZE: usize = 512;
+
+/// Longest wait for the carriage to reach home before a calibration
+/// (`Scan_Start` in hp3900).
+const HOME_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Time given to the lamp to warm up when a scan has to switch it on
+/// (`overdrive_flb` in hp3900). The HP driver has not been captured doing
+/// it.
+pub const LAMP_WARMUP: Duration = Duration::from_secs(10);
 
 /// A running scan.
 #[derive(Debug, Clone)]
@@ -68,6 +84,66 @@ impl Scan {
 }
 
 impl<T: Transport> Chip<T> {
+    /// Gets the scanner ready for a calibration and scan: the HP driver's
+    /// sequence before the first calibration read (capture 09,
+    /// 2.166-2.358 s; the same in every scan capture).
+    ///
+    /// Lamp check (twice, as the HP driver), idle check, initial block
+    /// written as it is in memory, lamp timer off (written twice), lamp
+    /// duty cycle read, CCD channels on, wait for the carriage at home,
+    /// warm reset, DMA reset with a read of the chip RAM whose data is
+    /// thrown away, lamp check, lamp PWM.
+    ///
+    /// Not done, unlike the HP driver: the EEPROM requests in the middle
+    /// (words 0x78-0x7A and 0x6A-0x6E read, 0x78 and 0x79 written back:
+    /// lamp and gain/offset counters). This driver never writes the EEPROM
+    /// and calibrates fully every time, so it has no use for them.
+    ///
+    /// If the lamp is off (never in the captures: the start-up switches it
+    /// on and the chip only does so after about ten idle minutes), it is
+    /// switched on and given [`LAMP_WARMUP`] to warm up, as hp3900 does.
+    /// Fails if the carriage is not at home after 10 s: the calibration
+    /// needs the white strip under the lid.
+    pub fn prepare_scan(&mut self, init: &mut Registers, profile: &Profile) -> Result<()> {
+        self.lamp_status()?;
+        let lamp_was_on = self.lamp_status()? == Lamp::Flatbed;
+        if !lamp_was_on {
+            self.lamp_flatbed(init, true)?;
+        }
+        if self.read_byte(0xe800)? & 0x80 != 0 {
+            return Err(Error::Transport("the chip is still running".into()));
+        }
+        self.write_block(init)?;
+        self.read_word(0xe946)?;
+        self.lamp_status_timer_set(init, 0)?;
+        self.lamp_status_timer_set(init, 0)?;
+        self.lamp_pwm_duty_cycle()?;
+        self.enable_ccd(init, 0x0f)?;
+        let deadline = Instant::now() + HOME_TIMEOUT;
+        while !self.head_is_at_home()? {
+            if Instant::now() >= deadline {
+                return Err(Error::Transport("the carriage is not at home".into()));
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        self.warm_reset()?;
+        // The HP driver resets the DMA engine (with a word it never sets,
+        // 54 00) and reads 512 bytes of the chip RAM, which it does not
+        // use. The scanner answered with no data in every capture made
+        // with a good power supply, with 512 bytes in some made with the
+        // weak one: what is left of an earlier transfer is drained.
+        self.dma_control(0)?;
+        self.dma_enable(DmaDirection::Read, RAM_CHANNEL, DRAIN_SIZE as u32, 0)?;
+        let mut drain = [0; DRAIN_SIZE];
+        self.transport_mut().bulk_in(&mut drain)?;
+        // Lamp_Warmup.
+        self.lamp_status()?;
+        if !lamp_was_on {
+            std::thread::sleep(LAMP_WARMUP);
+        }
+        self.lamp_pwm_setup(init, profile.fixed_pwm)
+    }
+
     /// Starts a scan: the HP driver's sequence after the calibration
     /// (capture 09, 6.70-7.38 s). Motor step tables, first block, gamma and
     /// shading tables, motor current of the scan resolution, idle check,

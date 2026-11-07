@@ -404,9 +404,13 @@ impl<T: Transport> Chip<T> {
     /// - bit 6 of `E8DD` is set (hp3900 copies the motor-disable bit there);
     /// - the channel bits of `E812` and the timing of `E896` are left as
     ///   they are (hp3900 clears the first and writes 0x0B in the second);
-    /// - hp3900 also writes 16 as last step of four deceleration tables in
-    ///   the caller's block, not in the one it sends: left out, `regs` is
-    ///   not changed.
+    /// - hp3900 writes 16 as last step of four deceleration tables in the
+    ///   caller's block, not in the one it sends; the HP driver writes them
+    ///   in the block it sends (capture 09, park after the calibration;
+    ///   with curves the step tables set them again). `regs` is not changed;
+    /// - without curves the step length comes from the system clock of the
+    ///   move, not of the caller's block (capture 09: 251 = 18 MHz / 36 /
+    ///   1991, clock 2, where the initial block has clock 5).
     pub fn motor_move(
         &mut self,
         regs: &Registers,
@@ -439,6 +443,10 @@ impl<T: Transport> Chip<T> {
         cp.set_bits(0x12, 0xc0, 1);
         cp.set_bits(0x00, 0x0f, motor.system_clock);
         cp.set_lsb(0xe4, 2, 3);
+        // Last steps of the deceleration tables.
+        for offset in [0xea, 0xed, 0xf0, 0xf3] {
+            cp.set_lsb(offset, 0x10, 3);
+        }
         // MSI.
         cp.0[0xda] = 2;
         cp.0[0xdd] &= 0xfc;
@@ -457,9 +465,8 @@ impl<T: Transport> Chip<T> {
             cp.set_lsb(0x30, motor.ctpc, 3);
             cp.set_lsb(0xe4, 0, 3);
         } else {
-            // Constant speed: a step length from the system clock of the
-            // caller's block. Not seen in the captures.
-            let mut step: u32 = match regs.get(0x00) & 0x0f {
+            // Constant speed: a step length from the system clock.
+            let mut step: u32 = match cp.get(0x00) & 0x0f {
                 0x00 => 0x0089_5440,
                 0x08 | 0x01 => 0x00b7_1b00,
                 0x02 => 0x0112_a880,

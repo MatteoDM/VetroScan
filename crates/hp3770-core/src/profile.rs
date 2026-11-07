@@ -88,6 +88,9 @@ pub struct Profile {
     /// How the motor runs when the carriage goes home
     /// (`ParkHomeMotorMove` in `[MoveMotorSetting]`).
     pub park: MotorMove,
+    /// How the motor runs when the carriage goes home after the
+    /// calibration (`BaseSpeedMotorMove` in `[MoveMotorSetting]`).
+    pub base_speed: MotorMove,
     /// Calibration parameters (flatbed).
     pub calibration: CalibrationConfig,
     /// Sensor and motor.
@@ -151,6 +154,17 @@ pub const HP3770: Profile = Profile {
         step_type: StepType::Half,
         setting: Some(&motor_curves::SETTING_9),
     },
+    // [MoveMotorSetting] BaseSpeedMotorMove=2: [MotorMove2] SystemClock=0x2,
+    // CTPC=1991, ScanMotorStepType=1, MotorCurve=0 (no curve). Captures 04,
+    // 05, 06, 09: after the white strip the HP driver parks with E800 low
+    // bits 2, E830 = E8E1 = 251 (constant speed: 18 MHz / 36 / 1991) and
+    // no step tables.
+    base_speed: MotorMove {
+        system_clock: 2,
+        ctpc: 1991,
+        step_type: StepType::Half,
+        setting: None,
+    },
     // [CalibReflective] of the configuration file (lines ~140-260 of the
     // extracted INI). Checked against captures 01, 02, 04-11.
     calibration: CalibrationConfig {
@@ -177,6 +191,15 @@ pub const HP3770: Profile = Profile {
         black_cut_hundredths: [-6, -6, -6],
         // WShadingHeight=24.
         white_lines: 24,
+        // Every capture reads the white strip at 200 dpi (E8C0 and the
+        // motor step of the block).
+        white_resolution: 200,
+        // hp3900 starts from vgag1 = vgag2 = 4; every block of the HP
+        // driver before the gain is set has E814-E819 low bits 4.
+        start_gain: 4,
+        gain2: 4,
+        // Every block of the HP driver: E813 low bits 3F.
+        pga: 3,
     },
     // [PlatForm] of the configuration (line 14684 of the extracted file);
     // multi-value keys take the first value.

@@ -23,8 +23,11 @@ impl<T: Transport> Chip<T> {
     /// Switches the flatbed lamp on or off (`Lamp_Status_Set` with
     /// `FLB_LAMP`, chipsets other than the RTS8822BL-03A): reads the whole
     /// block, sets bit 6 of `E946` and, when switching on, clears bit 4 of
-    /// `E955` (flatbed, not transparency adapter). Updates `init` like
-    /// hp3900.
+    /// `E955` (flatbed, not transparency adapter). Updates the lamp bits of
+    /// `E946` in `init` like hp3900; unlike hp3900, `E955` is not copied to
+    /// `init`: after the lamp was off the chip reads 09 (capture 09) or 08
+    /// (capture 06) there, and the HP driver's next blocks still carry the
+    /// initial block's 01 (white strip, park and scan).
     ///
     /// hp3900 waits 200 ms between the two writes; the HP driver does not
     /// (3 ms apart in every capture), and neither does this.
@@ -35,7 +38,6 @@ impl<T: Transport> Chip<T> {
             regs.set_bits(0x155, 0x10, 0);
         }
         init.0[0x146] = (init.get(0x146) & 0x9f) | (regs.get(0x146) & 0x60);
-        init.0[0x155] = regs.get(0x155);
         self.write_byte(0xe946, regs.get(0x146))?;
         self.write_registers(0xe954, &regs.0[0x154..0x156])
     }

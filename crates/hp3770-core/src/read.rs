@@ -7,7 +7,7 @@
 //! order the HP driver does it in the captures.
 
 use crate::error::{Error, Result};
-use crate::init::Registers;
+use crate::init::{Registers, E955_CHIP_STATUS};
 use crate::profile::Profile;
 use crate::protocol::DmaDirection;
 use crate::setup::{self, GainOffset, Hardware, ScanParams};
@@ -59,53 +59,69 @@ impl<T: Transport> Chip<T> {
     /// Reads a calibration strip (`RTS_GetImage`) and returns its bytes:
     /// `bytes_per_line × height`, 8 bits per channel, colours interleaved.
     ///
-    /// `init` is the in-memory initial block (`init_regs` in hp3900); the
-    /// read is set up on a copy of it, and `Motor_Change` at the end updates
-    /// its `E954` like the HP driver. `tables` holds the gamma and shading
-    /// tables the read uses, sent after the first block.
+    /// `regs` is the caller's copy of the initial block (`Regs` in hp3900),
+    /// on which the read is set up; the motor current of 1200 dpi set
+    /// during the read stays in its `E954`, as in the HP driver, where the
+    /// offset probes and checks share one copy and all but the first carry
+    /// it (capture 09). The motor current 3 set back at the end is kept in
+    /// no block: the HP driver's next blocks carry the initial block's
+    /// `E954`-`E955` (capture 06: B0 01 in the scan, while the chip reads
+    /// 70 00).
+    ///
+    /// `tables` holds the gamma and shading tables the read uses, sent
+    /// after the first block. With `None` nothing is sent at all, as the
+    /// HP driver does for the offset and gain reads; with tables, `EE0B` is
+    /// written around the transfer even if the block uses none of them (the
+    /// black strip: `RTS_GetImage` with a calibration whose shading is off).
     ///
     /// Sequence of the HP driver (capture 09, 2.358-2.732 s): motor step
-    /// tables when the head moves, first block, tables, motor current of 1200 dpi, motor release, warm reset, second block,
-    /// start, wait for the data, DMA read on channel 8, wait for the end,
-    /// DMA unlock, motor current 3 on `init`.
+    /// tables when the head moves, first block, tables, motor current of
+    /// 1200 dpi, motor release, warm reset, second block, start, wait for
+    /// the data, DMA read on channel 8, wait for the end, DMA unlock, motor
+    /// current 3.
     pub fn get_image(
         &mut self,
-        init: &mut Registers,
+        regs: &mut Registers,
         profile: &Profile,
         params: &ScanParams,
         hw: &Hardware,
         gain_offset: &GainOffset,
-        tables: &Tables,
+        tables: Option<&Tables>,
     ) -> Result<Vec<u8>> {
         if params.width == 0 || params.height == 0 {
             return Err(Error::InvalidArgument("empty read".into()));
         }
-        let (mut regs, params, info) =
-            setup::image_registers(init, profile, params, hw, gain_offset)?;
+        let (mut block, params, info) =
+            setup::image_registers(regs, profile, params, hw, gain_offset)?;
         if let Some(steps) = &info.step_tables {
-            self.send_step_tables(&mut regs, steps, info.tables_start)?;
+            self.send_step_tables(&mut block, steps, info.tables_start)?;
         }
-        self.write_block(&regs)?;
-        if !tables.is_empty() {
-            self.send_tables(&mut regs, profile, tables)?;
+        self.write_block(&block)?;
+        if let Some(tables) = tables {
+            self.send_tables(&mut block, profile, tables)?;
         }
         let e954 = self.read_word(0xe954)?.to_le_bytes();
-        setup::finish_image_registers(&mut regs, profile, e954, &params);
+        setup::finish_image_registers(&mut block, profile, e954, &params);
         if profile.motor_current.is_some() {
-            // Motor_Change(1200 dpi): the HP driver writes the word it read
-            // with the current bits of 1200 dpi (0).
-            self.write_registers(0xe954, &regs.0[0x154..0x156])?;
+            // Motor_Change(Regs, 1200 dpi): the HP driver writes the word
+            // it read with the current bits of 1200 dpi (0), before the lamp
+            // gain mode of the block (capture 06: 40 08 written, 40 00 in
+            // the block), and keeps it in the caller's block.
+            let word = [e954[0] & 0xcf, e954[1]];
+            self.write_registers(0xe954, &word)?;
+            regs.0[0x154] = word[0];
+            regs.0[0x155] = word[1] & !E955_CHIP_STATUS;
         }
         self.motor_release()?;
         self.warm_reset()?;
-        self.write_block(&regs)?;
+        self.write_block(&block)?;
         self.execute()?;
         let size = info.bytes_per_line as usize * params.height as usize;
         let image = self.read_image(size)?;
         self.wait_scan_end(Duration::from_millis(1500))?;
-        self.set_lock(&mut regs, false)?;
+        self.set_lock(&mut block, false)?;
         if let Some(level) = profile.motor_current {
-            self.motor_change(init, level)?;
+            self.motor_change(&mut regs.clone(), level)?;
         }
         Ok(image)
     }
