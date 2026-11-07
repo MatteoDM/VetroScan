@@ -294,7 +294,8 @@ fn lamp_off_and_on_match_the_hp_driver() {
     chip.lamp_flatbed(&mut init, true).unwrap();
     chip.transport_mut().finish().unwrap();
     assert_eq!(init.get(0x146), 0xd9);
-    assert_eq!(init.get(0x155), 0x09);
+    // E955 of the chip (09) is not copied to the block.
+    assert_eq!(init.get(0x155), 0x00);
 }
 
 /// The HP driver's initial block (cut from 04_colore_300dpi_A4.pcap,
@@ -1057,11 +1058,13 @@ fn get_image_matches_the_hp_driver() {
     let go = gain_offset_of(&blocks[2].0);
     let mut chip = Chip::new(Replay::window(&trace, 0.190, 0.567));
     let image = chip
-        .get_image(&mut init, &HP3770, &params, &hw, &go, &Default::default())
+        .get_image(&mut init, &HP3770, &params, &hw, &go, None)
         .unwrap();
     chip.transport_mut().finish().unwrap();
     assert_eq!(image, image_reads(&trace)[0].1);
-    assert_eq!(init.0[0x154..0x156], [0xb0, 0x01]);
+    // The motor current of 1200 dpi set during the read stays in the
+    // block (the next probe's first block carries it).
+    assert_eq!(init.0[0x154..0x156], [0x80, 0x01]);
 }
 
 #[test]
@@ -1119,7 +1122,7 @@ fn white_strip_read_matches_the_hp_driver() {
     };
     let mut chip = Chip::new(Replay::window(&trace, 3.209, 4.113).any_dma_control_value());
     let image = chip
-        .get_image(&mut init, &HP3770, &params, &hw, &go, &tables)
+        .get_image(&mut init, &HP3770, &params, &hw, &go, Some(&tables))
         .unwrap();
     chip.transport_mut().finish().unwrap();
     assert_eq!(image.len(), 592 * 3 * 24);
@@ -1325,5 +1328,266 @@ fn scan_matches_the_hp_driver() {
             .pop()
             .unwrap();
         check_scan(&trace, name, &read, from, to, dpi >= 600);
+    }
+}
+
+/// Events of `trace` in `[from, to)` seconds without the EEPROM requests,
+/// which this driver never makes (the HP driver keeps gain, offset, lamp
+/// and scan counters there).
+fn without_eeprom(trace: &Trace, from: f64, to: f64) -> Vec<Event> {
+    trace
+        .events
+        .iter()
+        .filter(|e| {
+            (from..to).contains(&e.time())
+                && !matches!(
+                    e,
+                    Event::Control {
+                        command: Command::ReadEeprom { .. } | Command::WriteEeprom { .. },
+                        ..
+                    }
+                )
+        })
+        .cloned()
+        .collect()
+}
+
+/// The HP driver's tables of the scan that starts at `from` s: the black
+/// and white shading tables of red, green and blue, written after the first
+/// scan block.
+fn scan_shading(trace: &Trace, from: f64) -> ([Vec<u8>; 3], [Vec<u8>; 3]) {
+    let writes = table_writes(trace);
+    let table = |channel: u16| -> Vec<u8> {
+        writes
+            .iter()
+            .find(|(t, c, _)| *t >= from && *c == channel)
+            .map(|(_, _, data)| data.clone())
+            .unwrap_or_else(|| panic!("table {channel:#x} after {from} s"))
+    };
+    (
+        std::array::from_fn(|c| table(0x10 + c as u16)),
+        std::array::from_fn(|c| table(0x14 + c as u16)),
+    )
+}
+
+#[test]
+fn calibration_flow_matches_the_hp_driver() {
+    use hp3770_capture::replay::Replay;
+    use hp3770_core::init::Registers;
+    use hp3770_core::profile::HP3770;
+    use hp3770_core::setup::ScanParams;
+    use hp3770_core::transport::Chip;
+
+    // 09_calibrazione from its start to the end of the park that follows
+    // the calibration (0-4.490 s, 2.166-6.656 s of the full capture): the
+    // preamble, 4 offset probes, 1 check, gain, lamp off, black strip, lamp
+    // on, white strip, park at base speed. Every request of the HP driver
+    // but the EEPROM ones must come from prepare_scan and calibrate, from
+    // the HP driver's initial block alone.
+    let trace = fixture("09_calibrazione.pcap");
+    let blocks = register_blocks(&trace);
+    let mut init = Registers::default();
+    init.0.copy_from_slice(&blocks[0].0);
+    let scan = ScanParams {
+        depth: 8,
+        resolution_x: 300,
+        resolution_y: 300,
+        left: 1009,
+        top: 1561,
+        width: 592,
+        height: 591,
+    };
+    let mut chip =
+        Chip::new(Replay::new(without_eeprom(&trace, 0.0, 4.490)).any_dma_control_value());
+    chip.prepare_scan(&mut init, &HP3770).unwrap();
+    let calibration = chip.calibrate(&mut init, &HP3770, &scan).unwrap();
+    chip.transport_mut().finish().unwrap();
+
+    // What the scan then uses: its second block and its tables.
+    assert_eq!(calibration.gain_offset, gain_offset_of(&blocks[19].0));
+    let (black, white) = scan_shading(&trace, 4.490);
+    assert_eq!(calibration.black, black);
+    assert_eq!(calibration.white, white);
+}
+
+/// Replays a whole scan session of a capture, from its first request to
+/// `to` s: preparation, calibration, park, scan, image data, stop. Only
+/// the initial block (as the HP driver keeps it in memory), the scan as
+/// the chip reads it and the gamma tables come from the capture; offsets,
+/// gains and shading tables are ours, and the image must be the HP
+/// driver's byte for byte. EEPROM requests (and the `E9A1` read before the
+/// scan counter) are left out.
+fn check_session(trace: &Trace, name: &str, read: &BlockRead, to: f64, parked: bool) {
+    use hp3770_capture::replay::Replay;
+    use hp3770_core::init::Registers;
+    use hp3770_core::profile::HP3770;
+    use hp3770_core::transport::Chip;
+
+    let blocks = register_blocks(trace);
+    let mut init = Registers::default();
+    init.0.copy_from_slice(&blocks[0].0);
+    let gamma = table_writes(trace)
+        .into_iter()
+        .find(|(t, channel, data)| *t < to && *channel == 0 && data.len() == 768)
+        .map(|(_, _, data)| data)
+        .expect("gamma tables");
+    let events: Vec<Event> = without_eeprom(trace, 0.0, to)
+        .into_iter()
+        .filter(|e| {
+            !matches!(
+                e,
+                Event::Control {
+                    command: Command::ReadRegisters {
+                        address: 0xe9a1,
+                        ..
+                    },
+                    ..
+                }
+            )
+        })
+        .collect();
+    let mut chip = Chip::new(Replay::new(events).any_dma_control_value());
+    let fail = |e: hp3770_core::Error| -> ! { panic!("{name}: {e}") };
+    chip.prepare_scan(&mut init, &HP3770)
+        .unwrap_or_else(|e| fail(e));
+    let calibration = chip
+        .calibrate(&mut init, &HP3770, &read.params)
+        .unwrap_or_else(|e| fail(e));
+    let tables = calibration.tables(read.hw.gamma.then_some(&gamma[..]));
+    let mut scan = chip
+        .start_scan(
+            &init,
+            &HP3770,
+            &read.params,
+            &read.hw,
+            &calibration.gain_offset,
+            &tables,
+        )
+        .unwrap_or_else(|e| fail(e));
+    let mut image = Vec::new();
+    let mut piece = Vec::new();
+    while chip
+        .read_scan(&mut scan, &mut piece)
+        .unwrap_or_else(|e| fail(e))
+        > 0
+    {
+        image.extend_from_slice(&piece);
+    }
+    assert_eq!(
+        chip.stop_scan(&mut init, &HP3770)
+            .unwrap_or_else(|e| fail(e)),
+        parked,
+        "{name}"
+    );
+    chip.transport_mut().finish().unwrap_or_else(|e| fail(e));
+    let first_block = block_times(trace)[read.block];
+    let hp: Vec<u8> = image_reads(trace)
+        .into_iter()
+        .filter(|(t, _)| (first_block..to).contains(t))
+        .flat_map(|(_, data)| data)
+        .collect();
+    assert_eq!(image.len(), hp.len(), "{name}");
+    assert!(image == hp, "{name}: different image data");
+}
+
+#[test]
+fn whole_scan_session_matches_the_hp_driver() {
+    use hp3770_core::setup::ArrangeLine::{Hardware, Software};
+
+    // Every colour scan that ran to the end: (capture, offset checks, sensor
+    // dpi, probe left, scan window, vertical dpi, scan hardware, end of the
+    // stop). Grey and lineart (07, 08) use white tables of their own, and
+    // 11 was cancelled.
+    let captures = [
+        (
+            "01_anteprima.pcap",
+            2,
+            200,
+            7,
+            (43, 1656, 69, 2338),
+            200,
+            hp_scan_hardware(200, Hardware, true),
+            None,
+        ),
+        (
+            "02_colore_200dpi_A4.pcap",
+            3,
+            200,
+            7,
+            (43, 1656, 69, 2338),
+            200,
+            hp_scan_hardware(200, Hardware, true),
+            None,
+        ),
+        (
+            "04_colore_300dpi_A4.pcap",
+            1,
+            300,
+            7,
+            (65, 2480, 102, 3508),
+            300,
+            hp_scan_hardware(300, Hardware, true),
+            Some(18.515),
+        ),
+        (
+            "05_colore_600dpi_5x5cm.pcap",
+            2,
+            600,
+            17,
+            (129, 1180, 198, 1180),
+            600,
+            hp_scan_hardware(600, Hardware, true),
+            Some(17.285),
+        ),
+        (
+            "06_colore_1200dpi_2x2cm.pcap",
+            2,
+            1200,
+            15,
+            (259, 944, 373, 944),
+            1200,
+            hp_scan_hardware(1200, Hardware, true),
+            Some(15.926),
+        ),
+        (
+            "06b_colore_2400dpi_2x2cm.pcap",
+            2,
+            1200,
+            15,
+            (259, 944, 746, 1896),
+            2400,
+            hp_scan_hardware(1200, Software, true),
+            Some(24.336),
+        ),
+        (
+            "09_colore_300dpi_area_centro.pcap",
+            1,
+            300,
+            7,
+            (1009, 592, 1561, 591),
+            300,
+            hp_scan_hardware(300, Software, true),
+            Some(14.166),
+        ),
+        (
+            "10_colore_300dpi_luminosita.pcap",
+            2,
+            300,
+            7,
+            (65, 2480, 102, 3508),
+            300,
+            hp_scan_hardware(300, Software, true),
+            None,
+        ),
+    ];
+    for (name, checks, dpi, probe_left, window, y, hw, to) in captures {
+        let Some(trace) = full_capture(name) else {
+            return;
+        };
+        let to = to.unwrap_or(f64::MAX);
+        let read = hp_reads(1, checks, dpi, probe_left, window, y, hw)
+            .pop()
+            .unwrap();
+        check_session(&trace, name, &read, to, dpi >= 600);
     }
 }

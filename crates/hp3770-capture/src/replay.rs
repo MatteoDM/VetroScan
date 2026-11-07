@@ -187,12 +187,18 @@ impl Transport for Replay {
 
     /// Hands out the bytes of consecutive bulk IN events as one stream, so
     /// the driver may read in chunks of a different size than the HP driver.
+    /// A bulk IN event without data (the scanner had nothing to send) ends
+    /// the read, as a zero-length packet does.
     fn bulk_in(&mut self, buf: &mut [u8]) -> Result<usize> {
         let mut n = 0;
         while n < buf.len() {
             let Some(Event::BulkIn { data, .. }) = self.events.get(self.pos) else {
                 break;
             };
+            if data.is_empty() {
+                self.pos += 1;
+                return Ok(n);
+            }
             let take = (data.len() - self.bulk_offset).min(buf.len() - n);
             buf[n..n + take].copy_from_slice(&data[self.bulk_offset..self.bulk_offset + take]);
             n += take;

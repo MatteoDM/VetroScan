@@ -28,6 +28,19 @@
 //!
 //! The images handled here are what the chip sends during calibration:
 //! 8 bits per sample, RGB interleaved per pixel, lines one after the other.
+//!
+//! [`Chip::calibrate`] runs the whole procedure on the scanner, in the
+//! order of the HP driver, and gives the settings and tables of the scan.
+
+use crate::error::{Error, Result};
+use crate::init::Registers;
+use crate::motor::park_registers;
+use crate::profile::Profile;
+use crate::read::Tables;
+use crate::setup::{
+    lamp_gain_mode, lamp_set_gain_mode, ArrangeLine, GainOffset, Hardware, ScanParams,
+};
+use crate::transport::{Chip, Transport};
 
 /// Calibration parameters of a model.
 ///
@@ -59,9 +72,38 @@ pub struct CalibrationConfig {
     pub black_cut_hundredths: [i16; 3],
     /// Lines of the white shading image (`WShadingHeight`).
     pub white_lines: u16,
+    /// Vertical resolution of the white shading image.
+    pub white_resolution: u16,
+    /// Gain of every channel until the gain calibration (`vgag1`).
+    pub start_gain: u8,
+    /// Second gain of every channel (`vgag2`), never calibrated.
+    pub gain2: u8,
+    /// Programmable gain of every channel (`pag`), never calibrated.
+    pub pga: u8,
 }
 
+/// Pixels of each offset probe and check line.
+pub const OFFSET_WIDTH: u32 = 100;
+/// Lines of each offset probe.
+pub const PROBE_LINES: u32 = 1;
+/// Lines of each offset check.
+pub const CHECK_LINES: u32 = 10;
+/// Most offset checks before giving up. The captures need 1 to 3.
+pub const MAX_OFFSET_CHECKS: usize = 20;
+
 impl CalibrationConfig {
+    /// First pixel of the offset probes and checks
+    /// (`OffsetPixelStart_<dpi>`): the optical black pixels at the start of
+    /// the sensor. Values of the captures: 7 at 200 and 300 dpi (01, 02,
+    /// 04, 07-11), 17 at 600 dpi (05), 15 at 1200 dpi (06, 06b).
+    pub fn offset_pixel_start(&self, resolution: u16) -> u32 {
+        match resolution {
+            0..=300 => 7,
+            301..=600 => 17,
+            _ => 15,
+        }
+    }
+
     /// Number of optical black pixels, at the start of each probe line,
     /// that the offset calibration looks at (`OffsetNPixel_<dpi>`).
     ///
@@ -391,6 +433,267 @@ pub fn white_coefficients(config: &CalibrationConfig, image: &Image, channel: us
 /// A 16-bit table as the chip receives it (little-endian words).
 pub fn table_bytes(values: &[u16]) -> Vec<u8> {
     values.iter().flat_map(|v| v.to_le_bytes()).collect()
+}
+
+/// What the calibration gives the scan: the analog front-end settings and
+/// the shading tables of red, green and blue, as the chip takes them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Calibration {
+    /// Offsets and gains.
+    pub gain_offset: GainOffset,
+    /// Black shading tables.
+    pub black: [Vec<u8>; 3],
+    /// White shading tables.
+    pub white: [Vec<u8>; 3],
+}
+
+impl Calibration {
+    /// The tables of the scan, with `gamma` (the three gamma tables one
+    /// after the other) if the scan applies gamma.
+    pub fn tables<'a>(&'a self, gamma: Option<&'a [u8]>) -> Tables<'a> {
+        let three = |t: &'a [Vec<u8>; 3]| [&t[0][..], &t[1][..], &t[2][..]];
+        Tables {
+            gamma,
+            black: Some(three(&self.black)),
+            white: Some(three(&self.white)),
+        }
+    }
+}
+
+/// Offsets as `[channel][parity]` (even, odd).
+type Offsets = [[u16; 2]; 3];
+
+/// Pixels per line of a calibration image of `lines` lines.
+fn image_width(data: &[u8], lines: u32) -> usize {
+    data.len() / 3 / (lines as usize).max(1)
+}
+
+impl<T: Transport> Chip<T> {
+    /// Calibrates for the scan `scan` (the HP driver's `Calibration`, as in
+    /// capture 09 from 2.358 s): offset probes and checks, gain, black
+    /// shading with the lamp off, white shading on the white strip under
+    /// the lid, then the carriage back home at base speed.
+    ///
+    /// `scan` is the scan as the chip reads it: sensor resolution
+    /// (`resolution_x`, 1200 for a 2400 dpi scan), window in its pixels.
+    /// The calibration reads at that resolution, over the scan's columns.
+    /// `init` is the in-memory initial block after [`Chip::prepare_scan`];
+    /// the lamp bits of `E946` are kept up to date in it. Its `E954`-`E955`
+    /// are left as they are, as the HP driver does: the scan block carries
+    /// them (capture 06).
+    ///
+    /// Not done, unlike the HP driver: nothing is read from or written to
+    /// the EEPROM (gain and offset counters). The HP driver calibrates
+    /// fully at every scan anyway.
+    pub fn calibrate(
+        &mut self,
+        init: &mut Registers,
+        profile: &Profile,
+        scan: &ScanParams,
+    ) -> Result<Calibration> {
+        let cfg = &profile.calibration;
+        let dpi = scan.resolution_x;
+        // The calibration never reads at a lower vertical resolution than
+        // the sensor's (2400 at 2400 dpi).
+        let y = scan.resolution_y.max(dpi);
+        let read = |left, width, height, resolution_y| ScanParams {
+            depth: 8,
+            resolution_x: dpi,
+            resolution_y,
+            left,
+            top: 1,
+            width,
+            height,
+        };
+        let still = Hardware {
+            black_shading: false,
+            white_shading: false,
+            gamma: false,
+            gamma_size: 0,
+            backward: false,
+            static_head: true,
+            dummy_scan: false,
+            compression: false,
+            arrange_line: ArrangeLine::None,
+            high_resolution: false,
+        };
+        let gain_offset = |offsets: &Offsets, gain: [u8; 3]| GainOffset {
+            even_offset: offsets.map(|o| o[0]),
+            odd_offset: offsets.map(|o| o[1]),
+            even_fine: [0; 3],
+            odd_fine: [0; 3],
+            gain,
+            gain2: [cfg.gain2; 3],
+            pga: [cfg.pga; 3],
+        };
+        let start_gain = [cfg.start_gain; 3];
+        let left = cfg.offset_pixel_start(dpi);
+        let dark = cfg.offset_pixels(dpi);
+
+        // 1. Offset probes: one line at each probe offset (the pair twice
+        // below 1200 dpi); the last pair predicts the offsets.
+        let probe = read(left, OFFSET_WIDTH, PROBE_LINES, y);
+        // Each step reads on a copy of the initial block as it is then (the
+        // lamp is off for the black strip), with the lamp gain mode of the
+        // resolution (capture 06: E954-E955 = 70 00 at 1200 dpi in every
+        // read, B0 01 in the initial block). The probes and checks share
+        // one copy (see `get_image`).
+        let block = |init: &Registers| {
+            let mut regs = init.clone();
+            lamp_set_gain_mode(&mut regs, dpi, lamp_gain_mode(dpi));
+            regs
+        };
+        let mut work = block(init);
+        let mut pair = (Vec::new(), Vec::new());
+        for _ in 0..cfg.offset_probe_rounds(dpi) {
+            for (offset, out) in [
+                (cfg.offset_probes.0, &mut pair.0),
+                (cfg.offset_probes.1, &mut pair.1),
+            ] {
+                let go = gain_offset(&[[offset; 2]; 3], start_gain);
+                *out = self.get_image(&mut work, profile, &probe, &still, &go, None)?;
+            }
+        }
+        let width = OFFSET_WIDTH as usize;
+        let (low, high) = (Image::new(&pair.0, width), Image::new(&pair.1, width));
+        let mut offsets: Offsets = [[0; 2]; 3];
+        for (c, offset) in offsets.iter_mut().enumerate() {
+            let o = predict_offset(
+                cfg,
+                dark_sum(&low, c, dark, Pixels::All),
+                dark_sum(&high, c, dark, Pixels::All),
+            )
+            .ok_or_else(|| {
+                Error::Calibration(format!(
+                    "offset of channel {c}: both probes read the same black level"
+                ))
+            })?;
+            *offset = [o, o];
+        }
+
+        // 2. Offset checks: ten lines; every channel (and parity at 1200
+        // dpi) still below the target is raised, until none is.
+        let check = read(left, OFFSET_WIDTH, CHECK_LINES, y);
+        let raise = cfg.offset_raise(dpi);
+        // Which pixels each measure covers, and which offsets it raises.
+        let measures: &[(Pixels, &[usize])] = if cfg.even_odd(dpi) {
+            &[(Pixels::Even, &[0]), (Pixels::Odd, &[1])]
+        } else {
+            &[(Pixels::All, &[0, 1])]
+        };
+        let mut settled = false;
+        for _ in 0..MAX_OFFSET_CHECKS {
+            let go = gain_offset(&offsets, start_gain);
+            let data = self.get_image(&mut work, profile, &check, &still, &go, None)?;
+            let img = Image::new(&data, width);
+            let mut changed = false;
+            for (c, channel) in offsets.iter_mut().enumerate() {
+                for &(which, parities) in measures {
+                    if offset_too_dark(cfg, dark_sum(&img, c, dark, which)) {
+                        for &p in parities {
+                            channel[p] = (channel[p] + raise).min(0x1ff);
+                        }
+                        changed = true;
+                    }
+                }
+            }
+            if !changed {
+                settled = true;
+                break;
+            }
+        }
+        if !settled {
+            return Err(Error::Calibration(format!(
+                "offsets still too dark after {MAX_OFFSET_CHECKS} checks"
+            )));
+        }
+
+        // 3. Gain, over the columns of the scan.
+        let gain_read = read(scan.left, scan.width, u32::from(cfg.gain_lines), y);
+        let go = gain_offset(&offsets, start_gain);
+        let data = self.get_image(&mut block(init), profile, &gain_read, &still, &go, None)?;
+        let img = Image::new(&data, image_width(&data, gain_read.height));
+        if (0..3).all(|c| gain_max(&img, c) < cfg.offset_target + 5) {
+            return Err(Error::Calibration(
+                "the lamp does not light the white strip".into(),
+            ));
+        }
+        let gains: [u8; 3] =
+            std::array::from_fn(|c| gain_value(cfg, c, gain_peak(&img, c), start_gain[c]));
+        let go = gain_offset(&offsets, gains);
+
+        // 4. Black shading, lamp off. The HP driver writes E946 once more
+        // after switching it off (captures 04 and 09).
+        self.lamp_flatbed(init, false)?;
+        self.write_byte(0xe946, init.get(0x146))?;
+        let black_read = read(scan.left, scan.width, u32::from(cfg.black_lines), y);
+        let data = self.get_image(
+            &mut block(init),
+            profile,
+            &black_read,
+            &still,
+            &go,
+            Some(&Tables::default()),
+        )?;
+        self.lamp_flatbed(init, true)?;
+        let img = Image::new(&data, image_width(&data, black_read.height));
+        let black: [Vec<u8>; 3] = std::array::from_fn(|c| {
+            let levels = if cfg.even_odd(dpi) {
+                [
+                    black_level(cfg, &img, c, Pixels::Even),
+                    black_level(cfg, &img, c, Pixels::Odd),
+                ]
+            } else {
+                let l = black_level(cfg, &img, c, Pixels::All);
+                [l, l]
+            };
+            let words: Vec<u16> = (0..img.width()).map(|p| levels[p % 2]).collect();
+            table_bytes(&words)
+        });
+
+        // 5. White shading: the strip under the lid, read with the head
+        // moving and the black shading applied.
+        let white_read = read(
+            scan.left,
+            scan.width,
+            u32::from(cfg.white_lines),
+            cfg.white_resolution,
+        );
+        let moving = Hardware {
+            black_shading: true,
+            static_head: false,
+            ..still
+        };
+        let tables = Tables {
+            black: Some([&black[0], &black[1], &black[2]]),
+            ..Default::default()
+        };
+        let data = self.get_image(
+            &mut block(init),
+            profile,
+            &white_read,
+            &moving,
+            &go,
+            Some(&tables),
+        )?;
+        let img = Image::new(&data, image_width(&data, white_read.height));
+        let white: [Vec<u8>; 3] =
+            std::array::from_fn(|c| table_bytes(&white_coefficients(cfg, &img, c)));
+
+        // 6. Back home at base speed, from the calibration's block. The HP
+        // driver first sets the motor current of 1200 dpi, kept in no block.
+        if profile.motor_current.is_some() {
+            let mut scratch = init.clone();
+            self.motor_change(&mut scratch, 0)?;
+        }
+        self.head_park_home(&park_registers(&block(init)), &profile.base_speed)?;
+
+        Ok(Calibration {
+            gain_offset: go,
+            black,
+            white,
+        })
+    }
 }
 
 #[cfg(test)]

@@ -18,6 +18,11 @@ pub const BLOCK_LEN: usize = 0x071a;
 /// First register of the block.
 pub const BLOCK_START: u16 = 0xe800;
 
+/// Bit 3 of `E955`, set by the chip once the lamp has been off (09 in
+/// capture 09, 08 in capture 06). The HP driver never keeps it in its
+/// blocks: whenever it copies `E955` from the chip, this bit is left out.
+pub const E955_CHIP_STATUS: u8 = 0x08;
+
 /// What [`Chip::link`] leaves behind.
 #[derive(Debug, Clone)]
 pub struct Link {
@@ -262,8 +267,8 @@ impl<T: Transport> Chip<T> {
 
     /// Sets the motor current bits of `E954` (`Motor_Change`). Like the HP
     /// driver, writes the word just read instead of re-reading `E955`, and
-    /// keeps both bytes in `regs`: the park after a scan writes them in its
-    /// block (capture 06: 70 00).
+    /// keeps both bytes in `regs` (the park after a scan writes them in its
+    /// block, capture 06: 70 00) but for [`E955_CHIP_STATUS`].
     pub fn motor_change(&mut self, regs: &mut Registers, value: u8) -> Result<()> {
         let mut data = self.read_word(0xe954)? & 0xffcf;
         data |= match value {
@@ -272,7 +277,9 @@ impl<T: Transport> Chip<T> {
             1 => 0x10,
             _ => 0,
         };
-        regs.0[0x154..0x156].copy_from_slice(&data.to_le_bytes());
+        let [low, high] = data.to_le_bytes();
+        regs.0[0x154] = low;
+        regs.0[0x155] = high & !E955_CHIP_STATUS;
         self.write_word(0xe954, data)
     }
 
