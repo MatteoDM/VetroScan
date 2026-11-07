@@ -49,7 +49,19 @@ enum Command {
         /// Stop after this many presses (default: run until Ctrl+C).
         #[arg(short = 'n', long)]
         count: Option<u32>,
+        /// How to detect the presses.
+        #[arg(short, long, value_enum, default_value_t = ButtonMethod::Poll)]
+        method: ButtonMethod,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum ButtonMethod {
+    /// Read the chip's button register every 50 ms. Works even when another
+    /// program (e.g. the Windows WIA service) listens for button events.
+    Poll,
+    /// Wait for the event the scanner sends on its interrupt endpoint.
+    Interrupt,
 }
 
 fn main() -> ExitCode {
@@ -57,7 +69,9 @@ fn main() -> ExitCode {
     let result = match cli.command {
         Command::List => list(),
         Command::Probe { output } => open(cli.backend).and_then(|s| probe(s, output)),
-        Command::Buttons { count } => open(cli.backend).and_then(|s| buttons(s, count)),
+        Command::Buttons { count, method } => {
+            open(cli.backend).and_then(|s| buttons(s, count, method))
+        }
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -176,19 +190,38 @@ fn probe(scanner: Scanner, output: Option<PathBuf>) -> CliResult {
     Ok(())
 }
 
-fn buttons(mut scanner: Scanner, count: Option<u32>) -> CliResult {
+fn buttons(scanner: Scanner, count: Option<u32>, method: ButtonMethod) -> CliResult {
     eprintln!("Press a button on the scanner (Ctrl+C to stop).");
     let start = Instant::now();
     let mut seen = 0;
-    while count.is_none_or(|n| seen < n) {
-        let Some(code) = scanner.interrupt_in(Duration::from_secs(1))? else {
-            continue;
-        };
-        seen += 1;
-        let t = start.elapsed().as_secs_f32();
-        match Button::from_code(code) {
-            Some(b) => println!("{t:8.3}  {code:02X}  {}", b.name()),
-            None => println!("{t:8.3}  {code:02X}  unknown"),
+    match method {
+        ButtonMethod::Interrupt => {
+            let mut scanner = scanner;
+            while count.is_none_or(|n| seen < n) {
+                let Some(code) = scanner.interrupt_in(Duration::from_secs(1))? else {
+                    continue;
+                };
+                seen += 1;
+                let t = start.elapsed().as_secs_f32();
+                let name = Button::from_code(code).map_or("unknown", Button::name);
+                println!("{t:8.3}  code {code:02X}  {name}");
+            }
+        }
+        ButtonMethod::Poll => {
+            // Only register reads: the button register clears itself when read.
+            let mut chip = Chip::new(ReadOnly(scanner));
+            // Drop a release that happened before we started.
+            chip.buttons_released()?;
+            while count.is_none_or(|n| seen < n) {
+                std::thread::sleep(Duration::from_millis(50));
+                let released = chip.buttons_released()?;
+                for bit in (0..6).map(|i| 1u8 << i).filter(|b| released & b != 0) {
+                    seen += 1;
+                    let t = start.elapsed().as_secs_f32();
+                    let name = Button::from_mask(bit).map_or("unknown", Button::name);
+                    println!("{t:8.3}  bit {bit:02X}  {name}");
+                }
+            }
         }
     }
     Ok(())

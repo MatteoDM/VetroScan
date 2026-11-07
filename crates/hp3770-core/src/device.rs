@@ -51,6 +51,22 @@ impl Button {
         }
     }
 
+    /// The bit of this button in the button registers (`E968`, `E96A`).
+    ///
+    /// Assumed to be `1 << code`: the interrupt codes 0, 2 and 3 look like
+    /// bit numbers, and `hp3900` uses one bit per button. Still to be
+    /// confirmed on the hardware with `hp3770 buttons --method poll`.
+    pub fn mask(self) -> u8 {
+        1 << self.code()
+    }
+
+    /// The button whose bit is `mask` (see [`Button::mask`]).
+    pub fn from_mask(mask: u8) -> Option<Self> {
+        [Self::Scan, Self::Copy, Self::InstantShare]
+            .into_iter()
+            .find(|b| b.mask() == mask)
+    }
+
     /// Short human-readable name.
     pub fn name(self) -> &'static str {
         match self {
