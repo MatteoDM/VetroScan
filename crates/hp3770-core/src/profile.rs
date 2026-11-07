@@ -43,6 +43,9 @@ pub struct Profile {
     /// Minutes of inactivity before the chip switches the lamp off
     /// (`Lamp_Status_Timer_Set`).
     pub lamp_timer_minutes: u8,
+    /// Fixed duty cycle of the lamp PWM set at start-up
+    /// (`cfg_fixedpwm_get`, flatbed).
+    pub fixed_pwm: u8,
 }
 
 /// HP Scanjet 3770.
@@ -82,4 +85,9 @@ pub const HP3770: Profile = Profile {
     // hp3900 passes 13. Capture 00, 48.669 s: E947 written as 22, which is
     // 13 minutes (13 * 2.68 = 34.9). [PlatForm] LampOffTimer=15 would give 28.
     lamp_timer_minutes: 13,
+    // Capture 00, 48.718 s: the HP driver reads E948 & 3F = 0 after enabling
+    // the PWM and leaves it, so its fixed value is 0. The HP configuration
+    // has T6_USB2FixedPwm=0 (T_ and S_ variants: 22), and the HP driver
+    // writes EEPROM 0x7B = 80, which is Lamp_PWM_Save(0).
+    fixed_pwm: 0,
 };

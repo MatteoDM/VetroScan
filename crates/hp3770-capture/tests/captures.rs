@@ -173,19 +173,37 @@ fn init_usb_data_matches_the_hp_driver() {
 }
 
 /// Runs our start-up against the HP driver's after a button press in
-/// 00_collegamento.pcap: RTS_USBType (FE11, twice), then IsScannerLinked up
-/// to the lamp timer (45.857-48.674 s). The HP driver goes on with EEPROM
-/// writes, which ours leaves out.
+/// 00_collegamento.pcap (45.857-48.808 s): RTS_USBType (FE11, twice),
+/// IsScannerLinked, Set_E950_Mode, then the lamp switched on and the buttons
+/// read. The HP driver also reads and writes the EEPROM (0x7B, 0x7C) in the
+/// middle: those requests are taken out of the capture, and must be the
+/// only difference.
 fn link_on_capture_00() -> hp3770_core::init::Link {
     use hp3770_capture::replay::Replay;
     use hp3770_core::profile::HP3770;
+    use hp3770_core::status::Lamp;
     use hp3770_core::transport::Chip;
 
     let trace = fixture("00_collegamento.pcap");
-    let mut chip = Chip::new(Replay::window(&trace, 45.857, 48.674));
+    let events = trace.events.into_iter().filter(|e| {
+        (45.857..48.808).contains(&e.time())
+            && !matches!(
+                e,
+                Event::Control {
+                    command: Command::ReadEeprom { .. } | Command::WriteEeprom { .. },
+                    ..
+                }
+            )
+    });
+    let mut chip = Chip::new(Replay::new(events));
     chip.read_byte(0xfe11).unwrap();
     chip.read_byte(0xfe11).unwrap();
-    let link = chip.link(&HP3770).unwrap();
+    let mut link = chip.link(&HP3770).unwrap();
+    // The HP driver then checks the lamp twice and switches it on.
+    assert_eq!(chip.lamp_status().unwrap(), Lamp::Flatbed);
+    assert_eq!(chip.lamp_status().unwrap(), Lamp::Flatbed);
+    chip.lamp_flatbed(&mut link.registers, true).unwrap();
+    chip.buttons_held().unwrap();
     chip.transport_mut().finish().unwrap();
     link
 }
@@ -255,4 +273,26 @@ fn init_regs_match_the_hp_driver() {
         })
         .collect();
     assert_eq!(differences, expected, "\n{}", report.join("\n"));
+}
+
+#[test]
+fn lamp_off_and_on_match_the_hp_driver() {
+    use hp3770_capture::replay::Replay;
+    use hp3770_core::init::Registers;
+    use hp3770_core::transport::Chip;
+
+    // Cut from 04_colore_300dpi_A4.pcap: during the calibration the HP
+    // driver switches the flatbed lamp off (4.703 s) and on again (5.253 s).
+    let mut init = Registers::default();
+    init.0[0x146] = 0xd9;
+    let mut chip = Chip::new(Replay::from_trace(&fixture("04_lamp_off.pcap")));
+    chip.lamp_flatbed(&mut init, false).unwrap();
+    chip.transport_mut().finish().unwrap();
+    assert_eq!(init.get(0x146), 0x99);
+
+    let mut chip = Chip::new(Replay::from_trace(&fixture("04_lamp_on.pcap")));
+    chip.lamp_flatbed(&mut init, true).unwrap();
+    chip.transport_mut().finish().unwrap();
+    assert_eq!(init.get(0x146), 0xd9);
+    assert_eq!(init.get(0x155), 0x09);
 }
