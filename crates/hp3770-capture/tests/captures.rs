@@ -1014,3 +1014,52 @@ fn register_blocks_of_every_scan_capture() {
         );
     }
 }
+
+#[test]
+fn get_image_matches_the_hp_driver() {
+    use hp3770_capture::replay::Replay;
+    use hp3770_core::init::Registers;
+    use hp3770_core::profile::HP3770;
+    use hp3770_core::setup::{ArrangeLine, Hardware, ScanParams};
+    use hp3770_core::transport::Chip;
+
+    // The first offset probe of 09_calibrazione (0.190-0.567 s): two
+    // blocks, motor current, start, 9 polls of the data in the chip, one
+    // line of 100 pixels read on DMA channel 8, unlock, motor current 3.
+    let trace = fixture("09_calibrazione.pcap");
+    let blocks = register_blocks(&trace);
+    let mut init = Registers::default();
+    init.0.copy_from_slice(&blocks[0].0);
+    init.0[0x10] |= 0xe0;
+    init.0[0x13] |= 0x80;
+    init.0[0x154..0x156].copy_from_slice(&blocks[1].0[0x154..0x156]);
+    let params = ScanParams {
+        depth: 8,
+        resolution_x: 300,
+        resolution_y: 300,
+        left: 7,
+        top: 1,
+        width: 100,
+        height: 1,
+    };
+    let hw = Hardware {
+        black_shading: false,
+        white_shading: false,
+        gamma: false,
+        gamma_size: 0,
+        backward: false,
+        static_head: true,
+        dummy_scan: false,
+        compression: false,
+        arrange_line: ArrangeLine::None,
+        high_resolution: false,
+    };
+    let go = gain_offset_of(&blocks[2].0);
+    let mut chip = Chip::new(Replay::window(&trace, 0.190, 0.567));
+    let image = chip
+        .get_image(&mut init, &HP3770, &params, &hw, &go)
+        .unwrap();
+    chip.transport_mut().finish().unwrap();
+    assert_eq!(image, image_reads(&trace)[0].1);
+    assert_eq!(init.0[0x154..0x156], [0xb0, 0x01]);
+}
