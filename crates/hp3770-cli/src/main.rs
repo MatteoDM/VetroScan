@@ -103,6 +103,12 @@ enum Command {
         /// Height, mm (default: A4).
         #[arg(long, default_value_t = 297.0)]
         height: f64,
+        /// Colour, grey (8 bits) or lineart (black and white, 1 bit).
+        #[arg(long, value_enum, default_value_t = Mode::Colour)]
+        mode: Mode,
+        /// Lineart threshold, as the HP driver's: white from 255 minus this.
+        #[arg(long, default_value_t = hp3770_core::convert::DEFAULT_THRESHOLD)]
+        threshold: u8,
         /// Save the chip's linear samples, without the tone curve the HP
         /// driver applies on the host (white at 196, gamma 2.2).
         #[arg(long)]
@@ -121,6 +127,13 @@ enum Command {
         #[arg(long)]
         raw: bool,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum Mode {
+    Colour,
+    Grey,
+    Lineart,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -155,10 +168,12 @@ fn main() -> ExitCode {
             top,
             width,
             height,
+            mode,
+            threshold,
             linear,
         } => open(cli.backend).and_then(|s| {
             let area = hp3770_core::geometry::Area::from_mm(dpi, left, top, width, height);
-            scan(s, &output, dpi, area, linear)
+            scan(s, &output, dpi, area, (mode, threshold, linear))
         }),
         Command::Buttons { count, method, raw } => {
             open(cli.backend).and_then(|s| buttons(s, count, method, raw))
@@ -308,7 +323,7 @@ fn scan(
     output: &std::path::Path,
     dpi: u16,
     area: hp3770_core::geometry::Area,
-    linear: bool,
+    (mode, threshold, linear): (Mode, u8, bool),
 ) -> CliResult {
     use hp3770_core::geometry;
     let profile = &hp3770_core::profile::HP3770;
@@ -382,13 +397,28 @@ fn scan(
         image = arrange::double_width(&arrange::arrange(&image, pixels, lines, &d), pixels);
         pixels *= 2;
     }
-    if !linear {
-        let lut = geometry::host_tone(geometry::host_white(profile), 2.2);
-        for sample in &mut image {
-            *sample = lut[usize::from(*sample)];
+    let tone: [u8; 256] = if linear {
+        std::array::from_fn(|i| i as u8)
+    } else {
+        geometry::host_tone(geometry::host_white(profile), 2.2)
+    };
+    let (data, format) = match mode {
+        Mode::Colour => {
+            for sample in &mut image {
+                *sample = tone[usize::from(*sample)];
+            }
+            (image, Format::Rgb)
         }
-    }
-    save_image(output, pixels, lines, &image)?;
+        Mode::Grey => (hp3770_core::convert::to_grey(&image, &tone), Format::Grey),
+        Mode::Lineart => {
+            let grey = hp3770_core::convert::to_grey(&image, &tone);
+            (
+                hp3770_core::convert::to_lineart(&grey, pixels, threshold),
+                Format::Lineart,
+            )
+        }
+    };
+    save_image(output, pixels, lines, &data, format)?;
     println!(
         "scanned          {pixels} x {lines} pixels in {:.1} s{}",
         start.elapsed().as_secs_f32(),
@@ -398,23 +428,57 @@ fn scan(
     Ok(())
 }
 
-/// Writes an 8-bit RGB image as PNG, or as binary PPM if the name ends in
-/// `.ppm`.
-fn save_image(path: &std::path::Path, width: usize, height: usize, rgb: &[u8]) -> CliResult {
-    let ppm = path
+/// Pixel layout of an image to save.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Format {
+    /// 3 bytes per pixel.
+    Rgb,
+    /// 1 byte per pixel.
+    Grey,
+    /// 1 bit per pixel, lines padded to a byte, 1 = white.
+    Lineart,
+}
+
+/// Writes an image as PNG, or as binary PNM (PPM, PGM or PBM) if the name
+/// ends in `.ppm`, `.pgm` or `.pbm`.
+fn save_image(
+    path: &std::path::Path,
+    width: usize,
+    height: usize,
+    data: &[u8],
+    format: Format,
+) -> CliResult {
+    let ext = path
         .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("ppm"));
-    if ppm {
-        let mut file = format!("P6\n{width} {height}\n255\n").into_bytes();
-        file.extend_from_slice(rgb);
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+    if matches!(ext.as_deref(), Some("ppm" | "pgm" | "pbm")) {
+        let (magic, body) = match format {
+            Format::Rgb => ("P6", data.to_vec()),
+            Format::Grey => ("P5", data.to_vec()),
+            // PBM has 1 = black.
+            Format::Lineart => ("P4", data.iter().map(|b| !b).collect()),
+        };
+        let header = if format == Format::Lineart {
+            format!("{magic}\n{width} {height}\n")
+        } else {
+            format!("{magic}\n{width} {height}\n255\n")
+        };
+        let mut file = header.into_bytes();
+        file.extend_from_slice(&body);
         std::fs::write(path, file)?;
         return Ok(());
     }
     let file = std::io::BufWriter::new(std::fs::File::create(path)?);
     let mut encoder = png::Encoder::new(file, u32::try_from(width)?, u32::try_from(height)?);
-    encoder.set_color(png::ColorType::Rgb);
-    encoder.set_depth(png::BitDepth::Eight);
-    encoder.write_header()?.write_image_data(rgb)?;
+    let (color, depth) = match format {
+        Format::Rgb => (png::ColorType::Rgb, png::BitDepth::Eight),
+        Format::Grey => (png::ColorType::Grayscale, png::BitDepth::Eight),
+        Format::Lineart => (png::ColorType::Grayscale, png::BitDepth::One),
+    };
+    encoder.set_color(color);
+    encoder.set_depth(depth);
+    encoder.write_header()?.write_image_data(data)?;
     Ok(())
 }
 

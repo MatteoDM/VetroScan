@@ -17,6 +17,7 @@
 
 pub mod arrange;
 pub mod calibration;
+pub mod convert;
 pub mod device;
 pub mod error;
 pub mod geometry;
