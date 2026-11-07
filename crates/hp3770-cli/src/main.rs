@@ -113,6 +113,9 @@ enum Command {
         /// driver applies on the host (white at 196, gamma 2.2).
         #[arg(long)]
         linear: bool,
+        /// Sharpening as the HP driver's; 0 for none.
+        #[arg(long, default_value_t = hp3770_core::convert::HP_SHARPEN)]
+        sharpen: f32,
     },
     /// Print the front-panel buttons as they are pressed.
     Buttons {
@@ -171,9 +174,10 @@ fn main() -> ExitCode {
             mode,
             threshold,
             linear,
+            sharpen,
         } => open(cli.backend).and_then(|s| {
             let area = hp3770_core::geometry::Area::from_mm(dpi, left, top, width, height);
-            scan(s, &output, dpi, area, (mode, threshold, linear))
+            scan(s, &output, dpi, area, (mode, threshold, linear, sharpen))
         }),
         Command::Buttons { count, method, raw } => {
             open(cli.backend).and_then(|s| buttons(s, count, method, raw))
@@ -323,7 +327,7 @@ fn scan(
     output: &std::path::Path,
     dpi: u16,
     area: hp3770_core::geometry::Area,
-    (mode, threshold, linear): (Mode, u8, bool),
+    (mode, threshold, linear, sharpen): (Mode, u8, bool, f32),
 ) -> CliResult {
     use hp3770_core::geometry;
     let profile = &hp3770_core::profile::HP3770;
@@ -397,23 +401,35 @@ fn scan(
         image = arrange::double_width(&arrange::arrange(&image, pixels, lines, &d), pixels);
         pixels *= 2;
     }
-    let tone: [u8; 256] = if linear {
-        std::array::from_fn(|i| i as u8)
-    } else {
-        geometry::host_tone(geometry::host_white(profile), 2.2)
+    use hp3770_core::convert;
+    let identity: [u8; 256] = std::array::from_fn(|i| i as u8);
+    let tone = |white: f64| {
+        if linear {
+            identity
+        } else {
+            geometry::host_tone(white, 2.2)
+        }
     };
+    let grey_tone = tone(geometry::host_white(profile));
     let (data, format) = match mode {
         Mode::Colour => {
-            for sample in &mut image {
-                *sample = tone[usize::from(*sample)];
+            let tones = geometry::HP_WHITE.map(tone);
+            for (i, sample) in image.iter_mut().enumerate() {
+                *sample = tones[i % 3][usize::from(*sample)];
             }
+            convert::sharpen(&mut image, pixels, 3, sharpen);
             (image, Format::Rgb)
         }
-        Mode::Grey => (hp3770_core::convert::to_grey(&image, &tone), Format::Grey),
+        Mode::Grey => {
+            let mut grey = convert::to_grey(&image, &grey_tone);
+            convert::sharpen(&mut grey, pixels, 1, sharpen);
+            (grey, Format::Grey)
+        }
         Mode::Lineart => {
-            let grey = hp3770_core::convert::to_grey(&image, &tone);
+            let mut grey = convert::to_grey(&image, &grey_tone);
+            convert::sharpen(&mut grey, pixels, 1, sharpen);
             (
-                hp3770_core::convert::to_lineart(&grey, pixels, threshold),
+                convert::to_lineart(&grey, pixels, threshold),
                 Format::Lineart,
             )
         }

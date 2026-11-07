@@ -156,6 +156,11 @@ pub fn host_tone(white: f64, gamma: f64) -> [u8; 256] {
     })
 }
 
+/// White levels of the HP driver's colour images, red, green and blue (see
+/// [`host_tone`]): fitted on the same sheet, they leave the paper slightly
+/// blue, as the HP driver does.
+pub const HP_WHITE: [f64; 3] = [196.0, 186.0, 184.0];
+
 /// White level of [`host_tone`] for a profile: where the gain calibration
 /// puts the white strip.
 pub fn host_white(profile: &crate::profile::Profile) -> f64 {
