@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/scan-imaging",
+    "crates/scanner-api",
     "crates/hp3770-core",
     "crates/hp3770-capture",
     "crates/hp3770-usb",
@@ -20,6 +21,7 @@ authors = ["Matteo"]
 
 [workspace.dependencies]
 scan-imaging = { path = "crates/scan-imaging" }
+scanner-api = { path = "crates/scanner-api" }
 hp3770-core = { path = "crates/hp3770-core" }
 hp3770-usb = { path = "crates/hp3770-usb" }
 hp3770-export = { path = "crates/hp3770-export" }

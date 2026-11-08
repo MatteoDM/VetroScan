@@ -1,0 +1,432 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+//! A scanner made up in memory: a white lid with three originals on the
+//! glass, scanned at any resolution it offers. For the tests of the
+//! application and for trying it with no scanner.
+//!
+//! Two models: [`FakeScanner::flatbed`], shaped like the HP Scanjet 3770
+//! (A4 glass, up to 2400 dpi, three buttons, a lamp), and
+//! [`FakeScanner::a3`], a different one (A3 glass, up to 1200 dpi, two
+//! buttons, no lamp), so tests can see the application adapt.
+
+use crate::{
+    check, Backend, ButtonInfo, Capabilities, ColourMode, DeviceInfo, DeviceStatus, Error,
+    LampInfo, LampState, Progress, Result, ScanRequest, ScanResult, Scanner, SuggestedAction, Tone,
+};
+use scan_imaging::{Format, Image};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+
+/// The originals on the glass: left, top, width, height (inches) and the
+/// colour they are printed in.
+pub const ORIGINALS: [([f64; 4], [u8; 3]); 3] = [
+    ([0.8, 0.8, 4.0, 2.8], [190, 90, 40]),
+    ([1.0, 5.0, 3.0, 3.0], [40, 90, 170]),
+    ([5.3, 4.5, 2.5, 4.0], [60, 140, 70]),
+];
+
+/// The lid, where nothing lies on the glass.
+pub const LID: [u8; 3] = [236, 236, 232];
+
+/// The colour of the glass at a point (inches from the top left).
+pub fn glass(x: f64, y: f64) -> [u8; 3] {
+    for ([left, top, width, height], colour) in ORIGINALS {
+        let (u, v) = ((x - left) / width, (y - top) / height);
+        if (0.0..1.0).contains(&u) && (0.0..1.0).contains(&v) {
+            // Shaded across, with stripes: something for the adjustments to
+            // change and the crop to find.
+            let stripe = if ((u * 12.0) as i32 + (v * 8.0) as i32) % 2 == 0 {
+                1.0
+            } else {
+                0.8
+            };
+            let shade = (0.6 + 0.4 * u) * stripe;
+            return colour.map(|c| (f64::from(c) * shade).round() as u8);
+        }
+    }
+    LID
+}
+
+/// The linear RGB samples of an area of the glass.
+pub fn samples(request: &ScanRequest) -> Vec<u8> {
+    let a = request.area;
+    let (width, height) = (a.width as usize, a.height as usize);
+    let dpi = f64::from(request.dpi);
+    let mut rgb = Vec::with_capacity(width * height * 3);
+    for row in 0..height {
+        let gy = (f64::from(a.y) + row as f64 + 0.5) / dpi;
+        for col in 0..width {
+            let gx = (f64::from(a.x) + col as f64 + 0.5) / dpi;
+            rgb.extend_from_slice(&glass(gx, gy));
+        }
+    }
+    rgb
+}
+
+/// What a test (or the user, through the application) does to the made-up
+/// scanner from outside: buttons, lamp, cable. Clones share the state.
+#[derive(Debug, Clone, Default)]
+pub struct Controls {
+    held: Arc<AtomicU32>,
+    lamp_on: Arc<AtomicBool>,
+    unplugged: Arc<AtomicBool>,
+}
+
+impl Controls {
+    /// Holds (or lets go of) button `index`.
+    pub fn hold(&self, index: usize, down: bool) {
+        let bit = 1 << index;
+        if down {
+            self.held.fetch_or(bit, Ordering::SeqCst);
+        } else {
+            self.held.fetch_and(!bit, Ordering::SeqCst);
+        }
+    }
+
+    /// Unplugs (or plugs back) the scanner.
+    pub fn unplug(&self, unplugged: bool) {
+        self.unplugged.store(unplugged, Ordering::SeqCst);
+    }
+
+    /// Whether the lamp is on.
+    pub fn lamp_on(&self) -> bool {
+        self.lamp_on.load(Ordering::SeqCst)
+    }
+}
+
+/// The made-up scanner.
+#[derive(Debug, Clone)]
+pub struct FakeScanner {
+    caps: Capabilities,
+    /// How long each stage of a scan takes (so that a scan can be stopped).
+    pace: Duration,
+    controls: Controls,
+}
+
+impl FakeScanner {
+    /// A flatbed like the HP Scanjet 3770: A4 glass, 200 to 2400 dpi, 8
+    /// and 16 bits, Scan, Copy and Instant Share, a lamp, the HP driver's
+    /// tone curve.
+    pub fn flatbed() -> Self {
+        Self::with(Capabilities {
+            manufacturer: "Prova".into(),
+            model: "Piano A4".into(),
+            glass_inches: (8.5, 11.7),
+            resolutions: vec![200, 300, 600, 1200, 2400],
+            modes: vec![ColourMode::Colour, ColourMode::Grey, ColourMode::Lineart],
+            depths: vec![8, 16],
+            transparency: false,
+            buttons: vec![
+                button("scan", "Scan", SuggestedAction::Scan),
+                button("copy", "Copy", SuggestedAction::Copy),
+                button("share", "Instant Share", SuggestedAction::Share),
+            ],
+            lamp: Some(LampInfo {
+                warm_up: Duration::from_secs(30),
+            }),
+            tone: Tone {
+                white: [196.0, 186.0, 184.0],
+                grey_white: 196.0,
+                gamma: 2.2,
+            },
+        })
+    }
+
+    /// A different one: A3 glass, 150 to 1200 dpi, 8 bits only, two
+    /// buttons, no lamp to switch.
+    pub fn a3() -> Self {
+        Self::with(Capabilities {
+            manufacturer: "Prova".into(),
+            model: "Piano A3".into(),
+            glass_inches: (11.7, 16.5),
+            resolutions: vec![150, 300, 600, 1200],
+            modes: vec![ColourMode::Colour, ColourMode::Grey],
+            depths: vec![8],
+            transparency: false,
+            buttons: vec![
+                button("start", "Start", SuggestedAction::Scan),
+                button("send", "Send", SuggestedAction::Share),
+            ],
+            lamp: None,
+            tone: Tone {
+                white: [230.0; 3],
+                grey_white: 230.0,
+                gamma: 2.2,
+            },
+        })
+    }
+
+    /// A made-up scanner that can do what `caps` says.
+    pub fn with(caps: Capabilities) -> Self {
+        let controls = Controls::default();
+        controls
+            .lamp_on
+            .store(caps.lamp.is_some(), Ordering::SeqCst);
+        Self {
+            caps,
+            pace: Duration::ZERO,
+            controls,
+        }
+    }
+
+    /// Each stage of a scan takes `pace`.
+    pub fn paced(mut self, pace: Duration) -> Self {
+        self.pace = pace;
+        self
+    }
+
+    /// The handle on its buttons, lamp and cable.
+    pub fn controls(&self) -> Controls {
+        self.controls.clone()
+    }
+
+    fn plugged(&self) -> Result<()> {
+        if self.controls.unplugged.load(Ordering::SeqCst) {
+            Err(Error::Disconnected(
+                "the made-up scanner is unplugged".into(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+fn button(id: &str, label: &str, action: SuggestedAction) -> ButtonInfo {
+    ButtonInfo {
+        id: id.into(),
+        label: label.into(),
+        action,
+    }
+}
+
+impl Scanner for FakeScanner {
+    fn capabilities(&self) -> &Capabilities {
+        &self.caps
+    }
+
+    fn status(&mut self) -> Result<DeviceStatus> {
+        self.plugged()?;
+        let lamp = self.caps.lamp.map(|_| {
+            if self.controls.lamp_on() {
+                LampState::On
+            } else {
+                LampState::Off
+            }
+        });
+        Ok(DeviceStatus {
+            ready: true,
+            lamp,
+            adapter: self.caps.transparency.then_some(false),
+            details: vec![("Collegamento".into(), "in memoria".into())],
+        })
+    }
+
+    fn scan(
+        &mut self,
+        request: &ScanRequest,
+        progress: &mut dyn FnMut(Progress) -> bool,
+    ) -> Result<ScanResult> {
+        self.plugged()?;
+        check(&self.caps, request)?;
+        let stages = [
+            Progress::Starting,
+            Progress::Calibrating,
+            Progress::Scanning { done: 1, total: 2 },
+            Progress::Finishing,
+        ];
+        for stage in stages {
+            if !progress(stage) {
+                return Err(Error::Cancelled);
+            }
+            std::thread::sleep(self.pace);
+        }
+        if self.caps.lamp.is_some() {
+            self.controls.lamp_on.store(true, Ordering::SeqCst);
+        }
+        let rgb = samples(request);
+        let samples16 =
+            (request.depth == 16).then(|| rgb.iter().map(|&v| u16::from(v) * 257).collect());
+        Ok(ScanResult {
+            image: Image {
+                width: request.area.width as usize,
+                height: request.area.height as usize,
+                dpi: request.dpi,
+                format: Format::Rgb,
+                data: rgb,
+            },
+            samples16,
+            details: Vec::new(),
+        })
+    }
+
+    fn poll_buttons(&mut self) -> Result<u32> {
+        self.plugged()?;
+        let mask = (1u32 << self.caps.buttons.len()) - 1;
+        Ok(self.controls.held.load(Ordering::SeqCst) & mask)
+    }
+
+    fn lamp_off(&mut self) -> Result<()> {
+        self.plugged()?;
+        if self.caps.lamp.is_none() {
+            return Err(Error::Unsupported("lamp_off"));
+        }
+        self.controls.lamp_on.store(false, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+/// The made-up scanners as a backend: one device each.
+#[derive(Debug, Clone)]
+pub struct FakeBackend {
+    scanners: Vec<FakeScanner>,
+}
+
+impl FakeBackend {
+    /// A backend with these scanners.
+    pub fn new(scanners: Vec<FakeScanner>) -> Self {
+        Self { scanners }
+    }
+}
+
+impl Backend for FakeBackend {
+    fn name(&self) -> &'static str {
+        "fake"
+    }
+
+    fn list(&self) -> Vec<DeviceInfo> {
+        self.scanners
+            .iter()
+            .enumerate()
+            .map(|(i, s)| DeviceInfo {
+                backend: "fake",
+                id: i.to_string(),
+                name: s.caps.name(),
+            })
+            .collect()
+    }
+
+    fn open(&self, device: &DeviceInfo) -> Result<Box<dyn Scanner>> {
+        let scanner = device
+            .id
+            .parse::<usize>()
+            .ok()
+            .and_then(|i| self.scanners.get(i))
+            .ok_or_else(|| Error::Disconnected(format!("no made-up scanner {}", device.id)))?;
+        Ok(Box::new(scanner.clone()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Area, Registry};
+
+    fn request(dpi: u16, depth: u8) -> ScanRequest {
+        ScanRequest {
+            dpi,
+            area: Area {
+                x: 0,
+                y: 0,
+                width: 400,
+                height: 300,
+            },
+            depth,
+        }
+    }
+
+    #[test]
+    fn a_scan_gives_linear_rgb_of_the_area() {
+        let mut s = FakeScanner::flatbed();
+        let mut stages = Vec::new();
+        let r = s
+            .scan(&request(300, 16), &mut |p| {
+                stages.push(p);
+                true
+            })
+            .unwrap();
+        assert_eq!((r.image.width, r.image.height), (400, 300));
+        assert_eq!(r.image.format, Format::Rgb);
+        assert_eq!(r.image.data.len(), 400 * 300 * 3);
+        assert_eq!(r.samples16.unwrap().len(), 400 * 300 * 3);
+        assert_eq!(stages.first(), Some(&Progress::Starting));
+        assert_eq!(stages.last(), Some(&Progress::Finishing));
+        // The first original starts 0.8 inches in: lid at the corner.
+        assert_eq!(&r.image.data[..3], &LID);
+        let at = |x: usize, y: usize| &r.image.data[(y * 400 + x) * 3..][..3];
+        assert_ne!(at(350, 280), &LID[..], "an original");
+    }
+
+    #[test]
+    fn a_scan_stops_when_asked() {
+        let mut s = FakeScanner::flatbed();
+        let mut seen = 0;
+        let r = s.scan(&request(300, 8), &mut |_| {
+            seen += 1;
+            seen < 2
+        });
+        assert_eq!(r.unwrap_err(), Error::Cancelled);
+    }
+
+    #[test]
+    fn requests_outside_the_capabilities_are_refused() {
+        let mut s = FakeScanner::a3();
+        let go = &mut |_| true;
+        assert!(matches!(
+            s.scan(&request(2400, 8), go),
+            Err(Error::InvalidRequest(_))
+        ));
+        assert!(matches!(
+            s.scan(&request(300, 16), go),
+            Err(Error::InvalidRequest(_))
+        ));
+        let mut too_big = request(300, 8);
+        too_big.area.width = 11.7f64.mul_add(300.0, 1.0) as u32;
+        assert!(matches!(
+            s.scan(&too_big, go),
+            Err(Error::InvalidRequest(_))
+        ));
+        assert!(s.scan(&request(300, 8), go).is_ok());
+    }
+
+    #[test]
+    fn buttons_lamp_and_cable() {
+        let mut s = FakeScanner::flatbed();
+        let c = s.controls();
+        assert_eq!(s.poll_buttons().unwrap(), 0);
+        c.hold(1, true);
+        assert_eq!(s.poll_buttons().unwrap(), 0b10);
+        c.hold(1, false);
+        assert_eq!(s.status().unwrap().lamp, Some(LampState::On));
+        s.lamp_off().unwrap();
+        assert_eq!(s.status().unwrap().lamp, Some(LampState::Off));
+        c.unplug(true);
+        assert!(matches!(s.status(), Err(Error::Disconnected(_))));
+        c.unplug(false);
+        // No lamp: nothing to switch off, and none in the status.
+        let mut a3 = FakeScanner::a3();
+        assert_eq!(a3.lamp_off(), Err(Error::Unsupported("lamp_off")));
+        assert_eq!(a3.status().unwrap().lamp, None);
+        // Only the bits of its two buttons.
+        a3.controls().hold(5, true);
+        assert_eq!(a3.poll_buttons().unwrap(), 0);
+    }
+
+    #[test]
+    fn the_registry_lists_and_opens_every_backend() {
+        let registry = Registry::new().with(FakeBackend::new(vec![
+            FakeScanner::flatbed(),
+            FakeScanner::a3(),
+        ]));
+        let devices = registry.list();
+        let names: Vec<_> = devices.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, ["Prova Piano A4", "Prova Piano A3"]);
+        let second = registry.open(&devices[1]).unwrap();
+        assert_eq!(second.capabilities().max_dpi(), 1200);
+        assert_eq!(second.capabilities().glass_pixels(100), (1170, 1650));
+        assert_eq!(
+            registry.open_first().unwrap().capabilities().model,
+            "Piano A4"
+        );
+        assert!(Registry::new().open_first().is_err());
+    }
+}

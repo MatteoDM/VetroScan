@@ -1,0 +1,16 @@
+[package]
+name = "scanner-api"
+description = "The contract between scanner backends and the application: capabilities, status, scans, buttons"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+scan-imaging.workspace = true
+
+[lints]
+workspace = true

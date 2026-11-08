@@ -359,32 +359,9 @@ pub mod fake {
     use hp3770_core::status::Lamp;
     use scan_imaging::{Format, Mode};
 
-    /// The originals on the glass: left, top, width, height (inches) and
-    /// the colour they are printed in.
-    pub const ORIGINALS: [([f64; 4], [u8; 3]); 3] = [
-        ([0.8, 0.8, 4.0, 2.8], [190, 90, 40]),
-        ([1.0, 5.0, 3.0, 3.0], [40, 90, 170]),
-        ([5.3, 4.5, 2.5, 4.0], [60, 140, 70]),
-    ];
-
-    /// The colour of the glass at a point (inches from the top left).
-    pub fn glass(x: f64, y: f64) -> [u8; 3] {
-        for ([left, top, width, height], colour) in ORIGINALS {
-            let (u, v) = ((x - left) / width, (y - top) / height);
-            if (0.0..1.0).contains(&u) && (0.0..1.0).contains(&v) {
-                // Shaded across, with stripes: something for the
-                // adjustments to change and the crop to find.
-                let stripe = if ((u * 12.0) as i32 + (v * 8.0) as i32) % 2 == 0 {
-                    1.0
-                } else {
-                    0.8
-                };
-                let shade = (0.6 + 0.4 * u) * stripe;
-                return colour.map(|c| (f64::from(c) * shade).round() as u8);
-            }
-        }
-        [236, 236, 232]
-    }
+    // The glass with the originals on it: the same made-up glass as
+    // scanner_api::fake.
+    use scanner_api::fake::glass;
 
     /// The scanner state of the made-up scanner, its lamp on or off.
     pub fn status(lamp_on: bool) -> Status {

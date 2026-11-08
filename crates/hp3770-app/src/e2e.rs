@@ -1288,7 +1288,7 @@ fn the_preview_finds_the_three_originals_and_foto_scans_each() {
     assert!(ui.app.preview.is_some());
     assert_eq!(
         ui.app.found.len(),
-        fake::ORIGINALS.len(),
+        scanner_api::fake::ORIGINALS.len(),
         "{:?}",
         ui.app.found
     );
