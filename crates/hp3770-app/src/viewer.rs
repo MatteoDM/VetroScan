@@ -163,6 +163,7 @@ pub fn viewer<'a, Message: Clone + 'a>(
     on_select: Option<fn(Option<Selection>) -> Message>,
     on_pick: Option<fn(Point) -> Message>,
     mm_per_pixel: f32,
+    grid: bool,
 ) -> Element<'a, Message> {
     let size = picture.map_or(placeholder, |p| p.size);
     let below = Canvas::new(ImageLayer {
@@ -182,6 +183,7 @@ pub fn viewer<'a, Message: Clone + 'a>(
         on_select,
         on_pick,
         mm_per_pixel,
+        grid,
     })
     .width(Length::Fill)
     .height(Length::Fill);
@@ -247,6 +249,8 @@ struct Overlay<Message> {
     on_pick: Option<fn(Point) -> Message>,
     /// Millimetres per image pixel, for the size label (0: no label).
     mm_per_pixel: f32,
+    /// Thirds drawn in the selection (cropping, straightening).
+    grid: bool,
 }
 
 /// What a drag is doing.
@@ -541,6 +545,37 @@ impl<Message> canvas::Program<Message> for Overlay<Message> {
             ] {
                 if w > 0.0 && h > 0.0 {
                     frame.fill_rectangle(Point::new(x, y), Size::new(w, h), shade);
+                }
+            }
+            if self.grid {
+                // Dark under light: seen on white paper and on dark photos.
+                let dark = Stroke::default().with_width(3.0).with_color(Color {
+                    a: 0.35,
+                    ..Color::BLACK
+                });
+                let line = Stroke::default().with_width(1.0).with_color(Color {
+                    a: 0.85,
+                    ..Color::WHITE
+                });
+                for k in [1.0 / 3.0, 2.0 / 3.0] {
+                    let x = top_left.x + size.width * k;
+                    let y = top_left.y + size.height * k;
+                    for stroke in [dark, line] {
+                        frame.stroke(
+                            &Path::line(
+                                Point::new(x, top_left.y),
+                                Point::new(x, top_left.y + size.height),
+                            ),
+                            stroke,
+                        );
+                        frame.stroke(
+                            &Path::line(
+                                Point::new(top_left.x, y),
+                                Point::new(top_left.x + size.width, y),
+                            ),
+                            stroke,
+                        );
+                    }
                 }
             }
             frame.stroke(

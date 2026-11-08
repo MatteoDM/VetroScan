@@ -35,6 +35,7 @@ pub mod scan_modes;
 pub mod session;
 pub mod setup;
 pub mod status;
+pub mod transform;
 pub mod transport;
 
 pub use error::{Error, Result};

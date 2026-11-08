@@ -17,12 +17,14 @@
 
 mod access;
 mod curve;
+mod editor;
 mod histogram;
 mod prefs;
 mod viewer;
 mod wia;
 mod worker;
 
+use editor::{Edit, EditMsg, Editor, Section};
 use histogram::Histogram;
 use hp3770_core::adjust::{self, Adjustments};
 use hp3770_core::convert;
@@ -31,12 +33,14 @@ use hp3770_core::geometry::{Area, GLASS_INCHES, HP_WHITE, RESOLUTIONS};
 use hp3770_core::profile::HP3770;
 use hp3770_core::session::{self, Format, Image, Request, Stage};
 use hp3770_core::status::Status;
+use hp3770_core::transform::Transform;
 use hp3770_export::{ImageFormat, PageSize};
 use iced::widget::{
     button, canvas, checkbox, column, container, pick_list, progress_bar, row, rule, scrollable,
     slider, text, Space,
 };
 use iced::{Alignment, Element, Length, Point, Size, Subscription, Task, Theme};
+use std::borrow::Cow;
 use std::path::PathBuf;
 use std::sync::Arc;
 use viewer::{Picture, Selection, View};
@@ -93,6 +97,8 @@ enum Colour {
     Grey,
     Lineart,
 }
+
+const ALL_COLOURS: [Colour; 3] = [Colour::Rgb, Colour::Grey, Colour::Lineart];
 
 impl std::fmt::Display for Colour {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -776,6 +782,52 @@ fn render(raw: &Image, settings: &Settings, adjust: &Adjustments) -> Image {
     )
 }
 
+/// What comes in from outside when straightening: the paper white of the
+/// linear samples.
+fn fill8() -> [u8; 3] {
+    HP_WHITE.map(|w| w as u8)
+}
+
+fn fill16() -> [u16; 3] {
+    HP_WHITE.map(|w| (w * 256.0) as u16)
+}
+
+/// The linear samples of a scan with the geometry edits.
+fn edited(raw: &Image, t: &Transform) -> Image {
+    let (data, width, height) = t.apply(&raw.data, raw.width, raw.height, 3, &fill8());
+    Image {
+        width,
+        height,
+        dpi: t.output_dpi(raw.width, raw.height, raw.dpi),
+        format: Format::Rgb,
+        data,
+    }
+}
+
+/// What the viewer shows of a page: the adjusted image of the small copy
+/// with `t`, its picture (`size`: the full size it stands for) and a
+/// thumbnail if asked.
+fn draw_page(
+    proxy: &Image,
+    settings: &Settings,
+    adjust: &Adjustments,
+    t: &Transform,
+    size: Size,
+    thumb: bool,
+) -> (Image, Picture, Option<Picture>) {
+    let raw = if t.is_identity() {
+        Cow::Borrowed(proxy)
+    } else {
+        Cow::Owned(edited(proxy, t))
+    };
+    let shown = render(&raw, settings, adjust);
+    let rgb = shown.to_rgb();
+    let mut picture = Picture::from_rgb(shown.width, shown.height, &rgb);
+    picture.size = size;
+    let thumb = thumb.then(|| Picture::from_rgb_max(shown.width, shown.height, &rgb, 240));
+    (shown, picture, thumb)
+}
+
 /// How a scan looks: the adjustments and the black-and-white threshold.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Look {
@@ -814,22 +866,108 @@ struct Page {
     /// The chip's 16-bit samples (same size as `raw.full`), when the scan
     /// was made for a RAW file.
     raw16: Option<Arc<Vec<u16>>>,
+    /// Turns, straightening, crop and size, worked out from the samples
+    /// each time (the samples stay as scanned).
+    transform: Transform,
+    /// The colour mode it was scanned in.
+    scanned_colour: Colour,
 }
 
 impl Page {
     fn new(raw: Raw, settings: Settings) -> Self {
-        let shown = render(&raw.proxy, &settings, &settings.adjust);
-        let rgb = shown.to_rgb();
+        let size = Size::new(raw.full.width as f32, raw.full.height as f32);
+        let (shown, picture, thumb) = draw_page(
+            &raw.proxy,
+            &settings,
+            &settings.adjust,
+            &Transform::default(),
+            size,
+            true,
+        );
+        let thumb = thumb.unwrap_or_else(|| picture.clone());
         Self {
-            picture: Picture::from_rgb(shown.width, shown.height, &rgb),
-            thumb: Picture::from_rgb_max(shown.width, shown.height, &rgb, 240),
+            picture,
+            thumb,
             raw,
             settings,
             own: None,
             shown,
             origin: None,
             raw16: None,
+            transform: Transform::default(),
+            scanned_colour: settings.colour,
         }
+    }
+
+    /// What the editor changes.
+    fn edit(&self) -> Edit {
+        Edit {
+            look: self.own,
+            colour: self.settings.colour,
+            transform: self.transform,
+        }
+    }
+
+    fn set_edit(&mut self, e: Edit) {
+        self.own = e.look;
+        self.settings.colour = e.colour;
+        self.transform = e.transform;
+    }
+
+    /// The settings of an edit of this page.
+    fn settings_with(&self, e: &Edit, shared: &Settings) -> Settings {
+        let mut s = self.settings;
+        s.colour = e.colour;
+        e.look.unwrap_or(Look::of(shared)).put(&mut s);
+        s
+    }
+
+    /// The transform for the small copy and the size the viewer shows.
+    /// `frame`: the whole turned frame, for choosing the crop. When the
+    /// result is smaller than the copy it is drawn at its real size, so
+    /// the softness of a reduction shows.
+    fn preview_geometry(&self, t: &Transform, frame: bool) -> (Transform, Size) {
+        let full = &self.raw.full;
+        if frame {
+            let (w, h) = t.oriented_size(full.width, full.height);
+            return (t.frame_only(), Size::new(w as f32, h as f32));
+        }
+        let (ow, oh) = t.output_size(full.width, full.height);
+        let mut p = Transform { dpi: None, ..*t };
+        if let Some([sx, sy]) = t.scale {
+            let f = self.raw.proxy.width as f32 / full.width.max(1) as f32;
+            let s = [(sx / f).min(1.0), (sy / f).min(1.0)];
+            p.scale = (s != [1.0, 1.0]).then_some(s);
+        }
+        (p, Size::new(ow as f32, oh as f32))
+    }
+
+    /// The scanner's samples at full size with the geometry edits.
+    fn full_samples(&self) -> (Arc<Image>, Option<Arc<Vec<u16>>>) {
+        let t = &self.transform;
+        if t.is_identity() {
+            return (self.raw.full.clone(), self.raw16.clone());
+        }
+        let full = &self.raw.full;
+        let deep = self
+            .raw16
+            .as_ref()
+            .map(|samples| Arc::new(t.apply(samples, full.width, full.height, 3, &fill16()).0));
+        (Arc::new(edited(full, t)), deep)
+    }
+
+    /// A point of the viewer (`frame`: the whole turned frame) on the
+    /// small copy of the samples.
+    fn proxy_point(&self, p: Point, frame: bool) -> Point {
+        let full = &self.raw.full;
+        let t = if frame {
+            self.transform.frame_only()
+        } else {
+            self.transform
+        };
+        let (x, y) = t.source_point(full.width, full.height, p.x, p.y);
+        let k = self.raw.proxy.width as f32 / full.width.max(1) as f32;
+        Point::new(x * k, y * k)
     }
 
     /// The settings it is drawn with: its own look, or the shared one.
@@ -846,11 +984,14 @@ impl Page {
         } else {
             settings.adjust
         };
-        self.shown = render(&self.raw.proxy, &settings, &adjust);
-        let rgb = self.shown.to_rgb();
-        self.picture =
-            Picture::from_rgb(self.shown.width, self.shown.height, &rgb).replacing(&self.picture);
-        self.thumb = Picture::from_rgb_max(self.shown.width, self.shown.height, &rgb, 240);
+        let (t, size) = self.preview_geometry(&self.transform, false);
+        let (shown, picture, thumb) =
+            draw_page(&self.raw.proxy, &settings, &adjust, &t, size, true);
+        self.shown = shown;
+        self.picture = picture.replacing(&self.picture);
+        if let Some(thumb) = thumb {
+            self.thumb = thumb;
+        }
     }
 
     /// The finished image at full resolution.
@@ -858,8 +999,8 @@ impl Page {
     /// samples when the scan has them (smooth shadows after the curves).
     fn finished(&self, shared: &Settings) -> Image {
         let settings = self.effective(shared);
-        let full = &self.raw.full;
-        match &self.raw16 {
+        let (full, deep) = self.full_samples();
+        match &deep {
             Some(samples) => adjust::render_samples(
                 adjust::Samples::Sixteen(samples),
                 full.width,
@@ -870,20 +1011,13 @@ impl Page {
                 false,
                 &HP3770,
             ),
-            None => render(full, &settings, &settings.adjust),
+            None => render(&full, &settings, &settings.adjust),
         }
     }
 
+    /// A quarter turn, part of the page's geometry edits.
     fn rotate(&mut self, clockwise: bool, shared: &Settings) {
-        let turns = if clockwise { 1 } else { 3 };
-        if let Some(samples) = &self.raw16 {
-            let (w, h) = (self.raw.full.width, self.raw.full.height);
-            self.raw16 = Some(Arc::new(detect::rotated16(samples, w, h, turns)));
-        }
-        self.raw = Raw {
-            full: Arc::new(self.raw.full.rotated(turns)),
-            proxy: Arc::new(self.raw.proxy.rotated(turns)),
-        };
+        self.transform.rotate(clockwise);
         self.redraw(false, shared);
     }
 }
@@ -1091,6 +1225,8 @@ enum Target {
 #[derive(Debug)]
 struct Rendered {
     target: Target,
+    /// For [`Target::Page`]: which page was shown (see `App::shown_key`).
+    page: Option<usize>,
     shown: Image,
     picture: Picture,
     thumb: Option<Picture>,
@@ -1192,6 +1328,8 @@ enum Message {
     AcceptRedo,
     RejectRedo,
     NewDocument,
+    /// The editor of a scan already made.
+    Edit(EditMsg),
 }
 
 /// One pass of the scanner: an area of the glass (pixels of the
@@ -1285,6 +1423,10 @@ struct App {
     dirty_page: bool,
     /// Pages following the shared look whose picture is out of date.
     stale: Vec<usize>,
+    /// The editor of a scan, when open.
+    editor: Option<Editor>,
+    /// The part of the editor last used.
+    edit_section: Section,
 }
 
 impl App {
@@ -1357,6 +1499,8 @@ impl App {
                 dirty_preview: false,
                 dirty_page: false,
                 stale: Vec::new(),
+                editor: None,
+                edit_section: Section::Colour,
             },
             iced::system::theme().map(Message::SystemTheme),
         )
@@ -1410,6 +1554,16 @@ impl App {
         match &mut self.redone {
             Some((_, p)) => Some(p),
             None => self.current.and_then(|i| self.pages.get_mut(i)),
+        }
+    }
+
+    /// Which page the result tab shows: the current one, or `None` for a
+    /// rescan waiting for a choice.
+    fn shown_key(&self) -> Option<usize> {
+        if self.redone.is_some() {
+            None
+        } else {
+            self.current
         }
     }
 
@@ -1468,6 +1622,10 @@ impl App {
     /// Saves the settings the panel edits for Ctrl+Z: the page's own look,
     /// or the shared settings.
     fn remember(&mut self, field: Option<Field>) {
+        if self.editor().is_some() {
+            self.edit_remember(field.map(editor::Key::Field));
+            return;
+        }
         let now = std::time::Instant::now();
         let same = matches!(
             (field, self.last_edit),
@@ -1517,6 +1675,18 @@ impl App {
     /// look; otherwise the shared settings, which every page following
     /// them shows. The colour mode of a page shown stays its own.
     fn apply(&mut self, f: impl Fn(&mut Settings)) {
+        if self.editor().is_some() {
+            // The editor gives the page a look of its own.
+            let shared = *self.settings();
+            if let Some(page) = self.shown_mut() {
+                let mut s = page.effective(&shared);
+                f(&mut s);
+                page.settings.colour = s.colour;
+                page.own = Some(Look::of(&s));
+            }
+            self.dirty_page = true;
+            return;
+        }
         if self.editing_page() {
             let shared = *self.settings();
             let Some(page) = self.shown_mut() else {
@@ -1557,43 +1727,96 @@ impl App {
             return Task::none();
         };
         let job = match target {
-            Target::Preview => self
-                .preview
-                .as_ref()
-                .map(|(raw, ..)| (raw.proxy.clone(), shared)),
-            Target::Page => self
-                .shown()
-                .map(|p| (p.raw.proxy.clone(), p.effective(&shared))),
+            Target::Preview => self.preview.as_ref().map(|(raw, ..)| {
+                let adjust = if before {
+                    Adjustments::default()
+                } else {
+                    shared.adjust
+                };
+                (
+                    raw.proxy.clone(),
+                    shared,
+                    adjust,
+                    Transform::default(),
+                    None,
+                    false,
+                )
+            }),
+            Target::Page => self.shown().map(|p| self.page_job(p, true)),
             Target::Index(i) => self
                 .pages
                 .get(i)
                 .filter(|p| p.own.is_none())
-                .map(|p| (p.raw.proxy.clone(), p.effective(&shared))),
+                .map(|p| self.page_job(p, false)),
         };
-        let Some((proxy, settings)) = job else {
+        let Some((proxy, settings, adjust, transform, size, thumb)) = job else {
             return Task::none();
         };
+        let page = self.shown_key();
         self.rendering = true;
         Task::perform(
             async move {
-                let adjust = if before {
-                    Adjustments::default()
-                } else {
-                    settings.adjust
-                };
-                let shown = render(&proxy, &settings, &adjust);
-                let rgb = shown.to_rgb();
-                let picture = Picture::from_rgb(shown.width, shown.height, &rgb);
-                let thumb = (target != Target::Preview)
-                    .then(|| Picture::from_rgb_max(shown.width, shown.height, &rgb, 240));
+                let (shown, mut picture, thumb) = draw_page(
+                    &proxy,
+                    &settings,
+                    &adjust,
+                    &transform,
+                    size.unwrap_or_default(),
+                    thumb,
+                );
+                if size.is_none() {
+                    picture.size = Size::new(shown.width as f32, shown.height as f32);
+                }
                 Arc::new(Rendered {
                     target,
+                    page,
                     shown,
                     picture,
                     thumb,
                 })
             },
             Message::Rendered,
+        )
+    }
+
+    /// What to render of a page: the small copy, settings, adjustments,
+    /// geometry, size shown and whether the thumbnail follows. With the
+    /// editor open "Prima" is the page as it was when it opened.
+    #[allow(clippy::type_complexity)]
+    fn page_job(
+        &self,
+        page: &Page,
+        shown: bool,
+    ) -> (
+        Arc<Image>,
+        Settings,
+        Adjustments,
+        Transform,
+        Option<Size>,
+        bool,
+    ) {
+        let shared = *self.settings();
+        let editor = self.editor().filter(|_| shown);
+        let edit = match editor {
+            Some(e) if self.before => e.start,
+            _ => page.edit(),
+        };
+        let settings = page.settings_with(&edit, &shared);
+        let adjust = if self.before && editor.is_none() && shown {
+            Adjustments::default()
+        } else {
+            settings.adjust
+        };
+        let frame = shown && self.cropping();
+        let (t, size) = page.preview_geometry(&edit.transform, frame);
+        let thumb = !frame && !(self.before && shown);
+        (
+            page.raw.proxy.clone(),
+            settings,
+            adjust,
+            t,
+            Some(size),
+            thumb,
         )
     }
 
@@ -1960,8 +2183,8 @@ impl App {
                 path.with_file_name(format!("{stem}-{:03}.{ext}", i + 1))
             };
             let settings = page.effective(shared);
-            let full = &page.raw.full;
-            let deep = page.raw16.as_ref().and_then(|samples| {
+            let (full, raw16) = page.full_samples();
+            let deep = raw16.as_ref().and_then(|samples| {
                 adjust::render16(
                     samples,
                     full.width,
@@ -2030,8 +2253,8 @@ impl App {
             } else {
                 path.with_file_name(format!("{stem}-{:03}.{ext}", i + 1))
             };
-            let full = &page.raw.full;
-            let raw = match &page.raw16 {
+            let (full, raw16) = page.full_samples();
+            let raw = match &raw16 {
                 Some(samples) => hp3770_export::Linear16::from_linear16(
                     full.width,
                     full.height,
@@ -2039,7 +2262,7 @@ impl App {
                     samples,
                     HP_WHITE.map(|w| w * 256.0),
                 ),
-                None => hp3770_export::Linear16::from_linear8(full, HP_WHITE)
+                None => hp3770_export::Linear16::from_linear8(&full, HP_WHITE)
                     .map_err(|e| e.to_string())?,
             };
             match format {
@@ -2071,12 +2294,30 @@ impl App {
     }
 
     fn handle(&mut self, message: Message) -> Task<Message> {
+        // Leaving the page edited keeps what was done to it.
+        if self.editor.is_some()
+            && matches!(
+                message,
+                Message::Kind(_)
+                    | Message::Tab(Tab::Preview)
+                    | Message::PageMove(..)
+                    | Message::PageDelete(_)
+                    | Message::PageRedo(_)
+                    | Message::NewDocument
+                    | Message::Scan
+                    | Message::Preview
+            )
+        {
+            self.close_editor(true);
+        }
         match message {
+            Message::Edit(m) => self.on_edit(m),
             Message::Worker(event) => self.on_worker(event),
             Message::Rendered(done) => {
                 self.rendering = false;
                 let Ok(Rendered {
                     target,
+                    page: rendered_page,
                     shown,
                     picture,
                     thumb,
@@ -2090,6 +2331,10 @@ impl App {
                             *old = picture.replacing(old);
                             *old_shown = shown;
                         }
+                    }
+                    Target::Page if rendered_page != self.shown_key() => {
+                        // Another page is shown now: draw that one.
+                        self.dirty_page = true;
                     }
                     Target::Page | Target::Index(_) => {
                         let page = match target {
@@ -2326,6 +2571,8 @@ impl App {
             }
             Message::Descreen(screen) => self.change(|s| s.adjust.descreen = screen.0),
             Message::Adaptive(on) => self.change(|s| s.adjust.adaptive = on),
+            Message::Undo if self.editor().is_some() => self.on_edit(EditMsg::Undo),
+            Message::Redo if self.editor().is_some() => self.on_edit(EditMsg::Redo),
             Message::Undo => {
                 if let Some((target, settings)) = self.undo.pop() {
                     match self.restore(target, settings) {
@@ -2358,7 +2605,7 @@ impl App {
                 }
             }
             Message::AutoLevels => {
-                if let Some(raw) = self.active_raw() {
+                if let Some(proxy) = self.active_proxy() {
                     let settings = self.active();
                     let base = Adjustments {
                         black: 0.0,
@@ -2366,7 +2613,7 @@ impl App {
                         sharpen: 0.0,
                         ..settings.adjust
                     };
-                    let shown = render(&raw.proxy, &settings, &base);
+                    let shown = render(&proxy, &settings, &base);
                     let (black, white) = adjust::auto_levels(&shown);
                     self.change(|s| {
                         s.adjust.black = black;
@@ -2375,12 +2622,12 @@ impl App {
                 }
             }
             Message::AutoThreshold => {
-                if let Some(raw) = self.active_raw() {
+                if let Some(proxy) = self.active_proxy() {
                     let settings = Settings {
                         colour: Colour::Grey,
                         ..self.active()
                     };
-                    let grey = render(&raw.proxy, &settings, &settings.adjust);
+                    let grey = render(&proxy, &settings, &settings.adjust);
                     let t = adjust::auto_threshold(&grey.data);
                     self.change(|s| s.threshold = t);
                 }
@@ -2388,10 +2635,18 @@ impl App {
             Message::Eyedropper => self.eyedropper = !self.eyedropper,
             Message::Picked(point) => {
                 self.eyedropper = false;
-                if let Some(raw) = self.active_raw() {
-                    // The viewer gives full-size coordinates.
-                    let scale = raw.proxy.width as f32 / raw.full.width.max(1) as f32;
-                    let sample = raw.sample(Point::new(point.x * scale, point.y * scale));
+                let picked = if self.editing_page() {
+                    // The viewer shows the page with its geometry edits.
+                    let frame = self.cropping();
+                    self.shown()
+                        .map(|p| p.raw.sample(p.proxy_point(point, frame)))
+                } else {
+                    self.preview.as_ref().map(|(raw, ..)| {
+                        let scale = raw.proxy.width as f32 / raw.full.width.max(1) as f32;
+                        raw.sample(Point::new(point.x * scale, point.y * scale))
+                    })
+                };
+                if let Some(sample) = picked {
                     self.change(|s| s.adjust = s.adjust.neutral_at(sample));
                     self.note = format!(
                         "Bilanciamento dal punto scelto (R {} G {} B {})",
@@ -2436,10 +2691,7 @@ impl App {
             Message::Before(on) => {
                 self.before = on;
                 self.redraw_preview();
-                let shared = *self.settings();
-                if let Some(p) = self.shown_mut() {
-                    p.redraw(on, &shared);
-                }
+                self.dirty_page = true;
             }
             Message::RefreshStatus => {
                 if let Some(w) = &self.worker {
@@ -2490,11 +2742,15 @@ impl App {
                 };
             }
             Message::SaveTo(None) => {}
+            Message::PageShow(i) if self.editor.is_some() => self.open_editor(i),
             Message::PageShow(i) => {
                 self.current = Some(i);
                 self.redone = None;
                 self.result_view = View::default();
                 self.tab = Tab::Result;
+            }
+            Message::PageRotate(i, clockwise) if self.editor().is_some_and(|e| e.index == i) => {
+                self.on_edit(EditMsg::Rotate(clockwise));
             }
             Message::PageRotate(i, clockwise) => {
                 let shared = *self.settings();
@@ -2556,7 +2812,19 @@ impl App {
         let K::KeyPressed { key, modifiers, .. } = event else {
             return Task::none();
         };
+        let editing = self.editor().is_some();
         let message = match (key.as_ref(), modifiers.command(), modifiers.shift()) {
+            (Key::Named(Named::Enter), false, _) if editing => Some(EditMsg::Apply.into()),
+            (Key::Named(Named::Escape), _, _) if editing && !self.eyedropper => {
+                Some(EditMsg::Discard.into())
+            }
+            (Key::Character("r"), false, false) if editing => Some(EditMsg::Rotate(true).into()),
+            (Key::Character("r" | "R"), false, true) if editing => {
+                Some(EditMsg::Rotate(false).into())
+            }
+            (Key::Character("e"), false, _) if !editing && self.tab == Tab::Result => {
+                self.current.map(|i| EditMsg::Open(i).into())
+            }
             (Key::Character("z"), true, false) => Some(Message::Undo),
             (Key::Character("z"), true, true) | (Key::Character("y"), true, _) => {
                 Some(Message::Redo)
@@ -2585,12 +2853,20 @@ impl App {
         }
     }
 
-    /// The raw scan the panel acts on.
-    fn active_raw(&self) -> Option<Raw> {
+    /// The small copy of the samples the panel acts on: the page with its
+    /// geometry edits, or the preview.
+    fn active_proxy(&self) -> Option<Arc<Image>> {
         if self.editing_page() {
-            self.shown().map(|p| p.raw.clone())
+            self.shown().map(|p| {
+                let (t, _) = p.preview_geometry(&p.transform, false);
+                if t.is_identity() {
+                    p.raw.proxy.clone()
+                } else {
+                    Arc::new(edited(&p.raw.proxy, &t))
+                }
+            })
         } else {
-            self.preview.as_ref().map(|(raw, ..)| raw.clone())
+            self.preview.as_ref().map(|(raw, ..)| raw.proxy.clone())
         }
     }
 
@@ -2656,6 +2932,7 @@ impl App {
     fn on_scan(&mut self, purpose: Purpose, image: Image, samples16: Option<Vec<u16>>) {
         match purpose {
             Purpose::Preview => {
+                self.close_editor(true);
                 let raw = Raw::new(image);
                 let settings = *self.settings();
                 let shown = render(&raw.proxy, &settings, &settings.adjust);
@@ -2689,6 +2966,7 @@ impl App {
     /// A page (or photo) scanned: added, or put in place of the one being
     /// redone.
     fn add_page(&mut self, image: Image, origin: Option<Found>, samples16: Option<Vec<u16>>) {
+        self.close_editor(true);
         let (w, h, dpi) = (image.width, image.height, image.dpi);
         let mut page = Page::new(Raw::new(image), *self.settings());
         page.origin = origin;
@@ -3034,43 +3312,53 @@ impl App {
         let mut list = column![text(format!("{header} · {n}")).size(11)].spacing(10);
         for (i, page) in self.pages.iter().enumerate() {
             let selected = self.current == Some(i) && self.tab == Tab::Result;
-            let thumb = button(
-                iced::widget::image(page.thumb.handle.clone())
-                    .width(Length::Fill)
-                    .height(140),
+            let thumb = iced::widget::mouse_area(
+                button(
+                    iced::widget::image(page.thumb.handle.clone())
+                        .width(Length::Fill)
+                        .height(140),
+                )
+                .padding(2)
+                .style(move |theme: &Theme, status| {
+                    let mut style = button::text(theme, status);
+                    style.border = iced::Border {
+                        radius: 6.0.into(),
+                        width: 2.0,
+                        color: if selected {
+                            theme.palette().primary
+                        } else {
+                            iced::Color::TRANSPARENT
+                        },
+                    };
+                    style
+                })
+                .on_press(Message::PageShow(i)),
             )
-            .padding(2)
-            .style(move |theme: &Theme, status| {
-                let mut style = button::text(theme, status);
-                style.border = iced::Border {
-                    radius: 6.0.into(),
-                    width: 2.0,
-                    color: if selected {
-                        theme.palette().primary
-                    } else {
-                        iced::Color::TRANSPARENT
-                    },
-                };
-                style
-            })
-            .on_press(Message::PageShow(i));
+            .on_double_click(EditMsg::Open(i).into());
+            let mut label = format!("{}", i + 1);
+            if page.own.is_some() {
+                label.push_str(" · propria");
+            }
+            if !page.transform.is_identity() {
+                label.push_str(" · ✎");
+            }
+            let edited_here = self.editor().is_some_and(|e| e.index == i);
             list = list.push(
                 column![
                     thumb,
                     row![
-                        text(if page.own.is_some() {
-                            format!("{} · propria", i + 1)
-                        } else {
-                            format!("{}", i + 1)
-                        })
-                        .size(12)
-                        .width(Length::Fill),
+                        text(label).size(12).width(Length::Fill),
                         tool("↑", Message::PageMove(i, false), i > 0),
                         tool("↓", Message::PageMove(i, true), i + 1 < n),
                         tool("↻", Message::PageRotate(i, true), idle),
                     ]
                     .align_y(Alignment::Center),
                     row![
+                        tool(
+                            "Modifica",
+                            EditMsg::Open(i).into(),
+                            !edited_here && self.redone.is_none()
+                        ),
                         tool("Rifai", Message::PageRedo(i), idle),
                         Space::new().width(Length::Fill),
                         tool("Elimina", Message::PageDelete(i), idle),
@@ -3126,6 +3414,7 @@ impl App {
                     Some(Message::Select),
                     pick,
                     25.4 / f32::from(PREVIEW_DPI),
+                    false,
                 ),
                 self.preview_view.scale,
             ),
@@ -3135,12 +3424,19 @@ impl App {
                     Self::glass(),
                     "Nessuna scansione: premi «Scansiona»",
                     self.result_view,
-                    None,
+                    self.crop_selection(),
                     Vec::new(),
                     Message::View,
-                    None,
+                    self.cropping()
+                        .then_some(editor::crop_message as fn(Option<Selection>) -> Message),
                     pick,
-                    0.0,
+                    if self.cropping() {
+                        self.shown()
+                            .map_or(0.0, |p| 25.4 / f32::from(p.raw.full.dpi.max(1)))
+                    } else {
+                        0.0
+                    },
+                    self.cropping(),
                 ),
                 self.result_view.scale,
             ),
@@ -3178,8 +3474,15 @@ impl App {
             ]
             .spacing(2),
         );
+        let edit = (self.tab == Tab::Result
+            && self.editor().is_none()
+            && self.redone.is_none()
+            && self.shown().is_some())
+        .then(|| self.current.map(|i| EditMsg::Open(i).into()))
+        .flatten();
         let tools = card(
             column![
+                small("Modifica…", edit, false),
                 small("Contagocce", Some(Message::Eyedropper), self.eyedropper),
                 small(
                     "Togli selezione",
@@ -3233,6 +3536,14 @@ impl App {
                     .align_x(iced::alignment::Horizontal::Right)
                     .align_y(iced::alignment::Vertical::Bottom),
             );
+        if let Some(bar) = self.editor_bar() {
+            layers = layers.push(
+                container(bar)
+                    .padding(14)
+                    .width(Length::Fill)
+                    .align_x(iced::alignment::Horizontal::Center),
+            );
+        }
         if let Some(progress) = self.progress_card() {
             layers = layers.push(
                 container(progress)
@@ -3362,6 +3673,35 @@ impl App {
             tab("Preferenze", Pane::Prefs),
         ]
         .spacing(2);
+        if self.editor().is_some() {
+            return container(
+                column![
+                    scrollable(container(self.editor_pane()).padding([12, 16]))
+                        .height(Length::Fill),
+                    rule::horizontal(1),
+                    container(
+                        row![
+                            button(text("Scarta").size(14).center().width(Length::Fill))
+                                .width(Length::Fill)
+                                .padding([9, 12])
+                                .style(button::secondary)
+                                .on_press(EditMsg::Discard.into()),
+                            button(text("Applica").size(14).center().width(Length::Fill))
+                                .width(Length::Fill)
+                                .padding([9, 12])
+                                .on_press(EditMsg::Apply.into()),
+                        ]
+                        .spacing(8)
+                    )
+                    .padding(12),
+                ]
+                .height(Length::Fill),
+            )
+            .width(352)
+            .height(Length::Fill)
+            .style(surface)
+            .into();
+        }
         let content = match self.pane {
             Pane::Scan => self.scan_pane(),
             Pane::Adjust => self.adjust_pane(),
@@ -3403,7 +3743,7 @@ impl App {
             labelled(
                 "Colore",
                 pick_list(
-                    [Colour::Rgb, Colour::Grey, Colour::Lineart],
+                    ALL_COLOURS,
                     Some(s.colour),
                     Message::Colour
                 )
@@ -3549,8 +3889,6 @@ impl App {
     }
 
     fn adjust_pane(&self) -> Element<'_, Message> {
-        let s = self.active();
-        let lineart = s.colour == Colour::Lineart;
         let editing = if self.editing_page() {
             match self.kind {
                 Kind::Document => format!("Pagina {}", self.current.map_or(0, |i| i + 1)),
@@ -3559,6 +3897,44 @@ impl App {
         } else {
             "Prossima scansione".to_string()
         };
+        let scope: Element<'_, Message> = match (self.kind, self.editing_page()) {
+            (Kind::Document, true) => {
+                let own = self.shown().is_some_and(|p| p.own.is_some());
+                column![
+                    checkbox(own)
+                        .label("Solo questa pagina")
+                        .on_toggle(Message::OwnLook)
+                        .text_size(13),
+                    text(if own {
+                        "Le modifiche valgono solo per questa pagina."
+                    } else {
+                        "Le modifiche valgono per l'anteprima e per tutte le pagine \
+                         che non hanno regolazioni proprie."
+                    })
+                    .size(11),
+                ]
+                .spacing(4)
+                .into()
+            }
+            (Kind::Document, false) => text(
+                "Le modifiche valgono per l'anteprima e per tutte le pagine \
+                 che non hanno regolazioni proprie.",
+            )
+            .size(11)
+            .into(),
+            (Kind::Photo, _) => text("Anteprima e foto hanno sempre le stesse regolazioni.")
+                .size(11)
+                .into(),
+        };
+        let top = column![text(editing.to_uppercase()).size(11), scope].spacing(10);
+        self.adjust_controls(top.into())
+    }
+
+    /// The adjustments (presets, histogram, groups) under `top`: the
+    /// "Regola" pane, and the colours of the editor.
+    fn adjust_controls<'a>(&'a self, top: Element<'a, Message>) -> Element<'a, Message> {
+        let s = self.active();
+        let lineart = s.colour == Colour::Lineart;
         let histogram: Element<'_, Message> = {
             let shown = if self.editing_page() {
                 self.shown().map(|p| &p.shown)
@@ -3793,38 +4169,8 @@ impl App {
                 .align_y(Alignment::Center),
             );
         }
-        let scope: Element<'_, Message> = match (self.kind, self.editing_page()) {
-            (Kind::Document, true) => {
-                let own = self.shown().is_some_and(|p| p.own.is_some());
-                column![
-                    checkbox(own)
-                        .label("Solo questa pagina")
-                        .on_toggle(Message::OwnLook)
-                        .text_size(13),
-                    text(if own {
-                        "Le modifiche valgono solo per questa pagina."
-                    } else {
-                        "Le modifiche valgono per l'anteprima e per tutte le pagine \
-                         che non hanno regolazioni proprie."
-                    })
-                    .size(11),
-                ]
-                .spacing(4)
-                .into()
-            }
-            (Kind::Document, false) => text(
-                "Le modifiche valgono per l'anteprima e per tutte le pagine \
-                 che non hanno regolazioni proprie.",
-            )
-            .size(11)
-            .into(),
-            (Kind::Photo, _) => text("Anteprima e foto hanno sempre le stesse regolazioni.")
-                .size(11)
-                .into(),
-        };
         column![
-            text(editing.to_uppercase()).size(11),
-            scope,
+            top,
             presets,
             histogram,
             base,
