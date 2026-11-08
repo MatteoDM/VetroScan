@@ -436,6 +436,34 @@ impl std::fmt::Display for PageSheet {
     }
 }
 
+/// The chip switches the lamp off by itself after this many minutes (the
+/// HP driver's timer, set at every start-up): the longest choice.
+const LAMP_SCANNER: u8 = 13;
+
+/// When the lamp goes off: minutes without scanning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LampAfter(u8);
+
+const LAMP_CHOICES: [LampAfter; 6] = [
+    LampAfter(0),
+    LampAfter(1),
+    LampAfter(2),
+    LampAfter(5),
+    LampAfter(10),
+    LampAfter(LAMP_SCANNER),
+];
+
+impl std::fmt::Display for LampAfter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            0 => f.write_str("Appena finita la scansione"),
+            1 => f.write_str("Dopo 1 minuto"),
+            LAMP_SCANNER => write!(f, "Dopo {LAMP_SCANNER} minuti (come il driver HP)"),
+            m => write!(f, "Dopo {m} minuti"),
+        }
+    }
+}
+
 /// Lowest quality of the PDF's pictures offered, percent.
 const PDF_QUALITY_MIN: u8 = 30;
 
@@ -1739,6 +1767,9 @@ enum Message {
     ConfirmSave,
     /// The window's close button.
     CloseRequested(iced::window::Id),
+    /// The lamp is off (or the scanner did not answer in time): close.
+    Close(iced::window::Id),
+    LampAfter(LampAfter),
 }
 
 /// A question asked before an action that throws away scans not saved:
@@ -1886,6 +1917,9 @@ struct App {
     estimating: bool,
     /// The largest PDF as typed (none: shown from the settings).
     limit_draft: Option<String>,
+    /// Minutes without scanning before the lamp goes off (0: as soon as a
+    /// scan is over).
+    lamp_off: u8,
 }
 
 impl App {
@@ -1970,6 +2004,7 @@ impl App {
                 pdf_estimate: None,
                 estimating: false,
                 limit_draft: None,
+                lamp_off: stored.lamp_off_minutes.min(LAMP_SCANNER),
             },
             iced::system::theme().map(Message::SystemTheme),
         )
@@ -2788,6 +2823,15 @@ impl App {
             photo_buttons: self.photo_buttons.iter().map(|a| a.key().into()).collect(),
             document: self.document.to_stored(),
             photo: self.photo.to_stored(),
+            lamp_off_minutes: self.lamp_off,
+        }
+    }
+
+    /// Tells the scanner thread when to switch the lamp off.
+    fn send_lamp_timer(&self) {
+        if let Some(worker) = &self.worker {
+            let after = std::time::Duration::from_secs(60 * u64::from(self.lamp_off));
+            worker.send(Command::LampTimer(after));
         }
     }
 
@@ -3272,6 +3316,8 @@ impl App {
                 self.document_buttons = ButtonAction::from_keys(Kind::Document, &[]);
                 self.photo_buttons = ButtonAction::from_keys(Kind::Photo, &[]);
                 self.theme = ThemeChoice::System;
+                self.lamp_off = d.lamp_off_minutes;
+                self.send_lamp_timer();
                 self.undo.clear();
                 self.redo_stack.clear();
                 self.shared_changed();
@@ -3669,8 +3715,27 @@ impl App {
                     false
                 };
                 if !asked {
-                    return iced::window::close(id);
+                    // The lamp off first: nobody is going to scan.
+                    let Some(worker) = self.worker.clone() else {
+                        return iced::window::close(id);
+                    };
+                    self.note = "Spegnimento della lampada…".into();
+                    return Task::perform(
+                        async move {
+                            let (done, wait) = std::sync::mpsc::channel();
+                            worker.send(Command::LampOff(Some(done)));
+                            // Not longer: during a scan the thread answers
+                            // only at its end.
+                            let _ = wait.recv_timeout(std::time::Duration::from_secs(2));
+                        },
+                        move |()| Message::Close(id),
+                    );
                 }
+            }
+            Message::Close(id) => return iced::window::close(id),
+            Message::LampAfter(LampAfter(minutes)) => {
+                self.lamp_off = minutes;
+                self.send_lamp_timer();
             }
             Message::PageShow(i) if self.editor.is_some() => self.open_editor(i),
             Message::PageShow(i) => {
@@ -3906,6 +3971,7 @@ impl App {
             Event::Ready(handle) => {
                 handle.send(Command::Status);
                 self.worker = Some(handle);
+                self.send_lamp_timer();
             }
             Event::Status(status) => {
                 self.access_denied = status.is_err() && access::denied();
@@ -5641,6 +5707,23 @@ impl App {
             text("Valgono anche con l'app in secondo piano; ignorati durante una scansione.")
                 .size(11),
             self.wia_row(),
+            heading("Lampada"),
+            labelled(
+                "Spegnila",
+                pick_list(
+                    LAMP_CHOICES,
+                    Some(LampAfter(self.lamp_off)),
+                    Message::LampAfter
+                )
+                .width(Length::Fill)
+                .into()
+            ),
+            text(
+                "Senza scansioni per questo tempo l'app spegne la lampada, e la spegne \
+                 sempre chiudendosi. Riaccenderla costa circa 10 secondi di riscaldamento \
+                 alla scansione dopo. Lo scanner la spegne comunque da solo dopo 13 minuti."
+            )
+            .size(11),
             heading("Impostazioni"),
             text(format!("Salvate in {path}")).size(11),
             button(text("Ripristina impostazioni di fabbrica").size(13))

@@ -393,6 +393,40 @@ fn closing_with_nothing_to_lose_closes_at_once() {
 }
 
 #[test]
+fn closing_switches_the_lamp_off_first() {
+    let mut ui = Ui::new();
+    ui.scan(1);
+    ui.send(Message::Save);
+    let lamp = |ui: &Ui| match &ui.app.status {
+        Some(Ok(s)) => Some(s.lamp),
+        _ => None,
+    };
+    ui.send(Message::RefreshStatus);
+    ui.settle();
+    assert_eq!(lamp(&ui), Some(hp3770_core::status::Lamp::Flatbed));
+    ui.send(Message::CloseRequested(iced::window::Id::unique()));
+    assert!(ui.closed);
+    ui.settle();
+    assert_eq!(lamp(&ui), Some(hp3770_core::status::Lamp::Off));
+}
+
+#[test]
+fn when_the_lamp_goes_off_is_chosen_and_remembered() {
+    use crate::LampAfter;
+    {
+        let mut ui = Ui::new();
+        ui.send(Message::Pane(crate::Pane::Prefs));
+        assert!(ui.shows("Lampada"));
+        assert_eq!(ui.app.lamp_off, 2, "the default");
+        ui.send(Message::LampAfter(LampAfter(0)));
+        std::mem::forget(ui);
+    }
+    let (app, _) = App::new();
+    assert_eq!(app.lamp_off, 0);
+    testing::clean_up();
+}
+
+#[test]
 fn closing_during_a_scan_asks() {
     let mut ui = Ui::with_pace(Duration::from_millis(300));
     ui.send(Message::Scan);

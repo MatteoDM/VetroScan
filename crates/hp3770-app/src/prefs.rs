@@ -139,6 +139,9 @@ pub struct Prefs {
     pub photo_buttons: Vec<String>,
     pub document: StoredMode,
     pub photo: StoredMode,
+    /// Minutes without scanning before the app switches the lamp off (0:
+    /// as soon as a scan is over).
+    pub lamp_off_minutes: u8,
 }
 
 impl Default for Prefs {
@@ -166,6 +169,7 @@ impl Default for Prefs {
                 output: "jpeg".into(),
                 ..StoredMode::default()
             },
+            lamp_off_minutes: 2,
         }
     }
 }

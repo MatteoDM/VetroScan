@@ -25,6 +25,22 @@ pub enum Command {
     Status,
     /// Make a scan.
     Scan(Purpose, Box<Request>),
+    /// Switch the lamp off after this long without scanning (the chip's
+    /// own timer, 13 minutes, stays as a safety net).
+    LampTimer(Duration),
+    /// Switch the lamp off now (the app is closing); says when done.
+    LampOff(Option<std_mpsc::Sender<()>>),
+}
+
+/// "Appena finita la scansione": a short pause all the same, so that the
+/// passes of one scan (several originals, one after the other) do not each
+/// wait for the lamp to warm up again.
+pub const LAMP_SOON: Duration = Duration::from_secs(15);
+
+/// Whether a lamp last used at `used` (none: off) is due to go off after
+/// `after` without scanning.
+pub fn lamp_due(used: Option<Instant>, after: Duration, now: Instant) -> bool {
+    used.is_some_and(|t| now.saturating_duration_since(t) >= after.max(LAMP_SOON))
 }
 
 /// Why a scan is made: the interface puts the image in different places.
@@ -126,6 +142,11 @@ struct Worker {
     /// When the scanner was last opened for the buttons (to retry slowly
     /// after it went away).
     last_open: Option<Instant>,
+    /// When the lamp was last needed (none: switched off since); it may be
+    /// on when the app starts.
+    lamp_used: Option<Instant>,
+    /// How long without scanning before the lamp goes off.
+    lamp_after: Duration,
 }
 
 impl Worker {
@@ -136,6 +157,33 @@ impl Worker {
             chip: None,
             held: 0,
             last_open: None,
+            lamp_used: Some(Instant::now()),
+            // Until the app says: the default of the preferences.
+            lamp_after: Duration::from_secs(120),
+        }
+    }
+
+    /// Switches the flatbed lamp off (if the scanner is open), and tells
+    /// the interface the new state.
+    fn lamp_off(&mut self) {
+        let Some(chip) = self.chip.as_mut() else {
+            return;
+        };
+        // lamp_flatbed reads the chip's block; the copy kept by a scan is
+        // not needed to switch off.
+        let mut init = hp3770_core::init::Registers::default();
+        match chip.lamp_flatbed(&mut init, false) {
+            Ok(()) => {
+                self.lamp_used = None;
+                log("lampada spenta");
+                let status = chip.status().map_err(|e| e.to_string());
+                self.emit(Event::Status(status));
+            }
+            Err(e) => {
+                // Not again every 150 ms: the chip's own timer will.
+                self.lamp_used = None;
+                log(&format!("lampada non spenta: {e}"));
+            }
         }
     }
 
@@ -178,8 +226,21 @@ impl Worker {
                     self.emit(Event::Done(purpose, result.map(Arc::new)));
                     // Presses during the scan are not taken.
                     self.held = 0xff;
+                    self.lamp_used = Some(Instant::now());
                 }
-                Err(std_mpsc::RecvTimeoutError::Timeout) => self.poll_buttons(),
+                Ok(Command::LampTimer(after)) => self.lamp_after = after,
+                Ok(Command::LampOff(done)) => {
+                    self.lamp_off();
+                    if let Some(done) = done {
+                        let _ = done.send(());
+                    }
+                }
+                Err(std_mpsc::RecvTimeoutError::Timeout) => {
+                    self.poll_buttons();
+                    if lamp_due(self.lamp_used, self.lamp_after, Instant::now()) {
+                        self.lamp_off();
+                    }
+                }
                 Err(std_mpsc::RecvTimeoutError::Disconnected) => return,
             }
         }
@@ -324,15 +385,15 @@ pub mod fake {
         [236, 236, 232]
     }
 
-    /// The scanner state of the made-up scanner.
-    pub fn status() -> Status {
+    /// The scanner state of the made-up scanner, its lamp on or off.
+    pub fn status(lamp_on: bool) -> Status {
         Status {
             usb2: true,
             chipset_id: 6,
             init_done: true,
             executing: false,
             head_at_home: true,
-            lamp: Lamp::Flatbed,
+            lamp: if lamp_on { Lamp::Flatbed } else { Lamp::Off },
             tma_attached: false,
             buttons_held: 0,
             link_word: 1024,
@@ -404,9 +465,32 @@ pub mod fake {
         pace: Duration,
         mut emit: impl FnMut(Event),
     ) {
-        while let Ok(command) = commands.recv() {
+        // The lamp as the real thread handles it: on after a scan, off after
+        // the time set without scanning, or when asked.
+        let mut lamp_used = Some(Instant::now());
+        let mut lamp_after = Duration::from_secs(120);
+        loop {
+            let command = match commands.recv_timeout(Duration::from_millis(50)) {
+                Ok(command) => command,
+                Err(std_mpsc::RecvTimeoutError::Timeout) => {
+                    if lamp_due(lamp_used, lamp_after, Instant::now()) {
+                        lamp_used = None;
+                        emit(Event::Status(Ok(status(false))));
+                    }
+                    continue;
+                }
+                Err(std_mpsc::RecvTimeoutError::Disconnected) => return,
+            };
             match command {
-                Command::Status => emit(Event::Status(Ok(status()))),
+                Command::Status => emit(Event::Status(Ok(status(lamp_used.is_some())))),
+                Command::LampTimer(after) => lamp_after = after,
+                Command::LampOff(done) => {
+                    lamp_used = None;
+                    emit(Event::Status(Ok(status(false))));
+                    if let Some(done) = done {
+                        let _ = done.send(());
+                    }
+                }
                 Command::Scan(purpose, request) => {
                     let stages = [
                         Stage::Starting,
@@ -428,6 +512,7 @@ pub mod fake {
                     } else {
                         Ok(Arc::new(scan(&request)))
                     };
+                    lamp_used = Some(Instant::now());
                     emit(Event::Done(purpose, result));
                 }
             }
@@ -457,6 +542,21 @@ pub mod fake {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_lamp_goes_off_after_the_time_chosen_never_mid_job() {
+        let now = Instant::now();
+        let ago = |s: u64| Some(now - Duration::from_secs(s));
+        let two = Duration::from_secs(120);
+        assert!(!lamp_due(ago(60), two, now));
+        assert!(lamp_due(ago(121), two, now));
+        // Already off: nothing to do.
+        assert!(!lamp_due(None, two, now));
+        // "As soon as the scan is over" still lets the passes of one scan
+        // follow each other with the lamp on.
+        assert!(!lamp_due(ago(5), Duration::ZERO, now));
+        assert!(lamp_due(ago(16), Duration::ZERO, now));
+    }
 
     #[test]
     fn a_scan_stopped_by_the_user_is_not_an_error() {

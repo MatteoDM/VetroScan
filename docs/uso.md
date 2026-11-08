@@ -605,9 +605,15 @@ La quarta scheda a destra. Ogni cambiamento si salva da solo.
   **Instant Share** nel modo in cui sei. Per impostare l'altro modo, passa prima a quello.
 - Su **Windows**, con il driver HP: **Usa i tasti dello scanner solo con questa app** (vedi
   sopra).
+- **Lampada · Spegnila**: dopo quanto tempo senza scansioni l'app spegne la lampada:
+  *Appena finita la scansione* (in realtà dopo 15 secondi, così le foto acquisite una dopo
+  l'altra non aspettano ognuna la lampada), dopo 1, 2 (di base), 5 o 10 minuti, o dopo 13
+  come il driver HP. Chiudendosi l'app la spegne sempre. Una lampada spenta si riaccende da
+  sola alla scansione dopo, con circa 10 secondi di riscaldamento. Lo scanner la spegne
+  comunque da solo dopo 13 minuti, anche se l'app si chiude male.
 - **Impostazioni**: dice in che file sono salvate; **Ripristina impostazioni di fabbrica**
-  rimette tutto come al primo avvio (modi, cartella, nomi, tasti, tema). I preset salvati
-  restano.
+  rimette tutto come al primo avvio (modi, cartella, nomi, tasti, tema, lampada). I preset
+  salvati restano.
 
 Il **tema** (Sistema, Chiaro, Scuro) si sceglie in alto a destra, nella barra.
 
@@ -684,7 +690,9 @@ aspetta il pallino verde e ripeti la scansione (per una pagina venuta a metà, u
   un'altra porta, direttamente al computer.
 - 1200 e 2400 dpi su un foglio intero richiedono minuti e molta memoria: seleziona solo l'area
   che serve o abbassa la risoluzione.
-- La prima scansione dopo un po' di riposo aspetta che la lampada si scaldi.
+- La prima scansione dopo un po' di riposo aspetta che la lampada si scaldi (circa 10
+  secondi). Se succede troppo spesso, in **Preferenze → Lampada** fai spegnere la lampada più
+  tardi.
 
 ### L'anteprima non trova le foto sul vetro
 

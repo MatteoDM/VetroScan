@@ -14,6 +14,11 @@ manca.
 
 ## [Unreleased]
 
+### Added
+- **Lampada**: l'app la spegne dopo un tempo senza scansioni scelto nelle Preferenze (da
+  «appena finita la scansione» a 13 minuti, di base 2) e sempre chiudendosi, invece di
+  lasciarla accesa 13 minuti; il timer dello scanner resta come sicurezza.
+
 ## [0.1.0] - 2026-11-08
 
 Prima versione.
