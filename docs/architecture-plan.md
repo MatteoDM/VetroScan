@@ -447,8 +447,18 @@ It needs no new hardware, only slides and negatives to put in the holder.
   densest of each channel on its own: the cyan cast of the light, neutral parts went away.
   `hp3770 develop` turns a saved scan (NAME-16bit.png) into its picture again in a second,
   without the scanner.
-  Still open: the light uneven along the strip (a correction along the travel, measured once
-  on the empty holder); slides not tried yet (their mode would be the glass's, the gains at their
+  **The adapter's light, measured with the holder empty** (9 November, `tma-scan
+  --calibrate-at`): along the window it varies by a few percent only (red +4 %, blue +2 % over
+  75 mm; the "1.3 times" seen before was saturation); the slot gets a third of the window's
+  light, and `[CalibTransparent]`'s white, 81/83/70, is exactly 245 over those ratios: with it
+  the window's clear light comes out at the full scale (with 245 on the slot it came out three
+  times too bright, hence the gains at their maximum and red saturated on the base). The
+  negatives' line is now twice the glass's. The calibration waits for the adapter's lamp to be
+  steady (it gains about 18 % in its first 15 s): two scans in a row agree within 0.2 %. The
+  final negatives at 1200 dpi: no channel saturated, natural colours, 114 s.
+  Still open: the last few percent of light along the strip (a correction measured once on the
+  empty holder, if it shows); blue's signal on a negative's base is the lowest (HP gives each
+  colour its own exposure for that; not understood yet); slides not tried yet (their mode would be the glass's, the gains at their
   maximum: perhaps the negatives' longer line for them too); the contract and the app (below).
 - **Driver**: the adapter's lamp (done: bit 5 of `E946` and bit 6 of `E965`, see above), its
   calibration (no white strip under the lid: what the HP driver does instead comes from the
