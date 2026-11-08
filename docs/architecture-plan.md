@@ -1,9 +1,10 @@
 # Plan: from "an app for the HP 3770" to "an app for scanners"
 
 Status: **phases 0–7 done and published (v0.1.2, v0.2.0, v0.3.0), with the double final
-check; phases 8–9 postponed until there is hardware** (plan written on 8 November 2026,
-after v0.1.1; updated the same day with the languages, the new name and the postponed
-phases). Each phase ends with a commit, green tests and a version; what is done is marked
+check; phases 8–9 postponed until there is hardware; phases 10–11 (films on the 3770,
+precise moves from the keyboard) planned** (plan written on 8 November 2026, after v0.1.1;
+updated the same day with the languages, the new name, the postponed phases and phases
+10–11). Each phase ends with a commit, green tests and a version; what is done is marked
 here.
 
 Order: first the refactoring (phases 1–4), then languages, the project in English and the
@@ -369,6 +370,95 @@ In order of return for cost:
 
 Each backend only implements `trait Scanner`: app, imaging and export do not change.
 
+## Phase 10 · slides and negatives with the HP 3770's adapter · planned
+
+Added on 8 November 2026. Until then the documents said the HP 3770 has no adapter for
+films: it is wrong. The 3770 has one built into the lid (a light panel with a holder for
+**two 35 mm slides or one strip of negatives**, and a cable to the "TMA" socket at the back):
+HP user's manual `c00208907`, sections "Scan slides and negatives" and "Transparent materials
+adapter (TMA) specifications". Matteo's scanner reports it plugged in (`hp3770 probe` of
+7 November: `E969` = `ED`, bit 1 clear, the test `status_from_the_hardware_probe`), and the
+HP driver has the private WIA property 71685 "TMA Method".
+
+It needs no new hardware, only slides and negatives to put in the holder.
+
+- **Correct the documents first**: `rts8822.rs` (the comment by `transparency: false`),
+  `docs/usage.md` (the Film button), the CHANGELOG entry of v0.3.0 (a note in the new
+  version, the past entry stays). The README already lists the adapter as missing.
+- **Captures of the HP driver**, the same way as the ones of 7 November (`wia1scan` with
+  "TMA Method" set, USBPcap): the adapter's start-up and warm-up (the manual asks for at least
+  30 s), a preview of the holder, a slide and a strip of negatives at 600, 1200 and 2400 dpi,
+  8 and 16 bits. The HP images are the reference for the comparison.
+- **Driver**: the adapter's lamp (bit 4 of `E955`, already read by `Lamp::Transparency`), its
+  calibration (no white strip under the lid: what the HP driver does instead comes from the
+  captures), the area of the holder; `hp3900` (`ST_TA`, `ST_NEG` in `hp3900_rts8822.c`) is the
+  map, as for the flatbed. `Capabilities::transparency` becomes true for the 3770 and
+  `DeviceStatus::adapter` says whether it is plugged in.
+- **Contract**: `ScanRequest` gets the source (glass, slide, negative) and `Capabilities` the
+  frames of the holder, in the adapter's own coordinates.
+- **Imaging** (in `scan-imaging`, it can start before the captures, on made-up samples):
+  negatives done properly, on the linear 16-bit samples: the film base measured on the
+  unexposed edge, the orange mask removed channel by channel, the inversion in density, then
+  levels and grey balance per channel; for slides, the full dynamic range of the 16 bits. The
+  frames found by themselves in the holder (`detect`), each one a page.
+- **App**: the **Film** button becomes active (Slide, Negative) only with `transparency` and
+  the adapter plugged in; e2e with a made-up scanner that has the adapter, one with it
+  unplugged and one without it (capabilities rule).
+- **Done when:** the adapter's start-up and calibration match the captures; a slide and a
+  negative come out comparable to the HP driver's (or better for negatives); smoke tests on
+  the real scanner with a slide in the holder.
+- **Limits to say in the guide**: 1200 dpi real across the sensor, about 2 megapixels for a
+  35 mm frame (fine for the screen and 10 × 15 prints); no infrared, so no automatic dust
+  removal.
+- **Later, for quality**: a scanner made for films. Researched on 8 November 2026: the HP
+  G4010 / G4050 (Genesys GL843) work in SANE only on the glass, the adapter "not supported
+  yet", so it would be reverse engineering again; better a Canon CanoScan 9000F / 9000F Mark II
+  (SANE `pixma`, films and infrared complete) or an Epson Perfection V700 / V750 / V800 / V850
+  (`epson2`); not the Epson V500 / V550 / V600 / V370, which need a closed Epson plugin. These
+  are backends of phase 9.
+
+## Phase 11 · moving things precisely from the keyboard · planned
+
+Added on 8 November 2026, at the user's request: in the **Output** pane the page must move on
+the sheet in every direction, and be corrected one step at a time from the keyboard; the same
+wherever something on the screen is moved with the mouse.
+
+Where it stands today: in Output the page can be dragged only with "Fill the sheet" and only
+when it overflows (`Layout::focus` chooses which part is kept); with "Actual size" and "Fit
+to the sheet" it is always centred. Nothing moves with the arrows: `App::on_key` has no arrow keys.
+
+- **Output, the page on the sheet**: it moves in every direction with every placement.
+  `Layout::focus` also places a page smaller than the room inside the margin (0: left or top,
+  0.5: centred, 1: right or bottom), so the default stays centred and the PDFs made so far
+  come out identical (golden test). Dragged with the mouse (`sheet.rs`) and with the keys; the
+  distance from the sheet's edges in mm next to the preview, typed by hand too, and a
+  "Centre" button. "Apply to all pages" carries the position too.
+- **The same keys everywhere**, on whatever is active in the pane shown:
+  - arrows: move by 1 mm; **Shift** + arrows: 10 mm; **Alt** + arrows: 0.1 mm (or one pixel
+    of the scan, whichever is larger);
+  - **Ctrl** + arrows (Cmd on macOS): the size instead of the position (right and bottom
+    edge), with the same steps;
+  - **Home**: centred; a series of presses within a second is one undo step, like a slider
+    dragged;
+  - never while a text field has the key (as all shortcuts already); at the edge it stops.
+- **Other places where a selection moves** (found in the code):
+  1. **Scan, the area on the preview** (`viewer::Selection`, eight handles): position and size
+     with the keys, kept on the glass; also X, Y, width and height in mm, typed.
+  2. **Editor, the crop** (the same `Selection`): position and size with the keys; with fixed
+     proportions the size keeps them.
+  3. **Editor, straighten**: `[` and `]` turn by 0.1°, with Shift by 1° (the buttons −1°,
+     −0.1°, +0.1°, +1° already exist, the keys do not).
+  4. **Adjust, the curve** (`curve.rs`): the point clicked last moves with the arrows by one
+     level (Shift: 10); Tab goes to the next point, Delete takes it away (not the two ends).
+  5. **The strip of pages**: Alt + left and right move the page shown before or after the
+     others (`Message::PageMove` already exists for the buttons); Page Up and Page Down show
+     the previous and next page.
+  6. **The zoomed view**: with nothing to move, the arrows pan the image.
+- **Done when:** an e2e for each place (1 mm, 10 mm, 0.1 mm, at the edge it stops, one undo
+  step for a series, nothing moves while typing in a field); the PDF golden test unchanged for
+  centred pages; the keys in the usage guide's table of shortcuts, in Italian and English.
+- Low risk, no hardware: it can come before phase 10.
+
 ## Summary
 
 | Phase | Version | Risk | Without new hardware? |
@@ -380,3 +470,5 @@ Each backend only implements `trait Scanner`: app, imaging and export do not cha
 | 7 · new name + final check (done) | 0.3.0 | medium: updates and preferences | yes |
 | 8 · other HP (postponed) | to be decided | high | no: testers needed |
 | 9 · other brands (postponed) | to be decided | medium | eSCL yes, with a network scanner |
+| 10 · slides and negatives on the 3770 (planned) | to be decided | medium: captures needed | yes: the 3770's own adapter |
+| 11 · precise moves from the keyboard (planned) | to be decided | low | yes |
