@@ -17,10 +17,12 @@ GitHub; here they are in English.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-08
+
 ### Added
 - **Moving precisely from the keyboard**, the same keys wherever something moves with the
   mouse: the arrows move by 1 mm, **Shift** + arrows by 10 mm, **Alt** + arrows by 0.1 mm (or a
-  pixel), **Ctrl** + arrows change the size, **Home** goes back to the middle. They move the
+  pixel), **Ctrl** (⌘ on macOS) + arrows change the size, **Home** goes back to the middle. They move the
   area to scan on the preview, the crop in the editor, the page on its PDF sheet, the point of
   the curve clicked last (**Tab** the next one, **Delete** away) and a zoomed image. **[** and
   **]** straighten by 0.1° in the editor (**Shift**: 1°); **Page Up** / **Page Down** show the
@@ -222,7 +224,8 @@ First version.
 - Texts with a run of spaces in the middle (note on RAW, on 16 bits and on the buttons in
   Windows); the button of the default folder uses the system's separator.
 
-[Unreleased]: https://github.com/MatteoDM/scanner/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/MatteoDM/scanner/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/MatteoDM/scanner/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/MatteoDM/scanner/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/MatteoDM/scanner/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/MatteoDM/scanner/compare/v0.1.2...v0.2.0
