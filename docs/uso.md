@@ -455,8 +455,20 @@ pronto, per esempio `documento-2026-11-08-153012.pdf`, nella
 | **JPEG** | un'immagine per pagina, compressa | pagine a colori da mandare in fretta |
 | **TIFF** | un'immagine per pagina, senza perdita | come PNG, per programmi che vogliono TIFF |
 
-Per il PDF si sceglie anche la **Pagina PDF**: *Pagina come la scansione* (la pagina ha la
-misura dell'area acquisita), *A4* o *Letter*.
+Per il PDF si sceglie anche il **Foglio**: *Come la scansione* (la pagina ha la misura
+dell'area acquisita), A4, A3, A5, Letter, Legal, Foto 10 × 15 o 13 × 18 cm. Su un foglio
+vero si sceglie poi **Sul foglio**:
+
+| Sul foglio | Cosa fa | Quando |
+|---|---|---|
+| **Dimensione reale** | la scansione alla sua misura, al centro; rimpicciolita solo se non ci sta | stampare al 100%: un documento A4 resta A4, una foto 10 × 15 resta 10 × 15 |
+| **Adatta al foglio** | la scansione intera, grande quanto il foglio permette dentro il **Margine** | un ritaglio piccolo (un dettaglio, una foto tessera) ingrandito su un A4 |
+| **Riempi il foglio** | copre il foglio dentro il margine, tagliando quello che avanza ai lati | stampe di foto senza bordi bianchi, su 10 × 15 o 13 × 18 |
+
+Il foglio si gira da solo (orizzontale) per le scansioni più larghe che alte. Per avere
+proprio la forma del foglio, ritaglia prima nell'[editor](#modificare-una-scansione-già-fatta)
+con la proporzione *A4 / A3 / A5* o *Foto 10 × 15*: con **Adatta al foglio** il ritaglio
+riempie allora tutto il foglio, margine a parte.
 
 ### Foto
 
@@ -467,6 +479,7 @@ misura dell'area acquisita), *A4* o *Letter*.
 | **TIFF** | senza perdita, per archivio e programmi di stampa |
 | **WebP** | senza perdita come PNG, ma più piccolo; per il web |
 | **AVIF** | compresso come JPEG ma molto più piccolo; non tutti i programmi lo aprono |
+| **PDF** | per stampare: la foto su un foglio (A4, 10 × 15…) alla misura vera, adattata o a pieno foglio, come per i documenti qui sopra |
 | **RAW · TIFF 16 bit lineare** | per sviluppare la foto in Photoshop o in un altro programma di fotoritocco |
 | **RAW · DNG (Lightroom, Camera Raw)** | per sviluppare la foto in Lightroom o Camera Raw |
 

@@ -17,7 +17,7 @@ use std::fmt;
 use std::io::{Seek, Write};
 use std::path::{Path, PathBuf};
 
-pub use pdf::PageSize;
+pub use pdf::{Layout, PageSize, Placed, Placement};
 pub use raw::{save_deep, save_dng, save_tiff16, Linear16};
 
 /// Error of an export.
@@ -249,10 +249,16 @@ pub fn save_tiff(path: &Path, pages: &[Image]) -> Result<()> {
     Ok(())
 }
 
-/// Writes `pages` as a PDF document (see [`pdf`]).
-pub fn save_pdf(path: &Path, pages: &[Image], size: PageSize, jpeg_quality: u8) -> Result<()> {
+/// Writes `pages` as a PDF document (see [`pdf`]), laid out on `layout`'s
+/// sheet (a bare [`PageSize`] keeps each scan at its real size).
+pub fn save_pdf(
+    path: &Path,
+    pages: &[Image],
+    layout: impl Into<Layout>,
+    jpeg_quality: u8,
+) -> Result<()> {
     let mut file = std::io::BufWriter::new(std::fs::File::create(path)?);
-    pdf::write(&mut file, pages, size, jpeg_quality)?;
+    pdf::write(&mut file, pages, layout, jpeg_quality)?;
     file.flush()?;
     Ok(())
 }

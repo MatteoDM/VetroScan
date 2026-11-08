@@ -490,6 +490,112 @@ fn every_photo_format_in_black_and_white() {
     every_output_offered_is_saved(Kind::Photo, crate::Colour::Lineart);
 }
 
+// ------------------------------------------------- paper
+
+/// The page box and the image matrix of the first page of a PDF saved.
+fn pdf_page(ui: &Ui) -> ([f64; 4], [f64; 6], bool) {
+    let name = ui
+        .saved()
+        .into_iter()
+        .find(|n| n.ends_with(".pdf"))
+        .expect("a PDF");
+    let bytes = std::fs::read(ui.app.folder().join(name)).unwrap();
+    let text = String::from_utf8_lossy(&bytes);
+    let numbers = |s: &str| -> Vec<f64> {
+        s.split_whitespace()
+            .filter_map(|w| w.parse().ok())
+            .collect()
+    };
+    let media = text.split("/MediaBox [").nth(1).unwrap();
+    let media = numbers(media.split(']').next().unwrap());
+    let content = text.split("stream\nq ").nth(1).unwrap();
+    let content = content.split(" cm").next().unwrap();
+    let clipped = content.contains("re W n");
+    let matrix = numbers(content.rsplit("re W n").next().unwrap());
+    (
+        media.try_into().unwrap(),
+        matrix.try_into().unwrap(),
+        clipped,
+    )
+}
+
+const MM_PT: f64 = 72.0 / 25.4;
+
+#[test]
+fn a_cropped_photo_fitted_to_a4_fills_it_inside_the_margin() {
+    use crate::{Margin, PdfFit, PdfSize};
+    let mut ui = Ui::new();
+    ui.send(Message::Kind(Kind::Photo));
+    ui.click("Anteprima");
+    // One original only: the first, 4 × 2.8 inches, landscape.
+    ui.send(Message::DropFound(2));
+    ui.send(Message::DropFound(1));
+    ui.scan(1);
+    ui.send(Message::Output(crate::Output::Pdf));
+    ui.send(Message::Pane(crate::Pane::Output));
+    assert!(ui.shows("Foglio"));
+    assert!(!ui.shows("Margine"), "no margin at real size");
+    ui.send(Message::PdfSize(PdfSize::A4));
+    ui.send(Message::PdfFit(PdfFit::Page));
+    ui.send(Message::PdfMargin(Margin(10)));
+    assert!(ui.shows("Margine"));
+    ui.send(Message::Save);
+    let (media, m, clipped) = pdf_page(&ui);
+    // A4 turned for a landscape photo.
+    assert!((media[2] - 297.0 * MM_PT).abs() < 0.1, "{media:?}");
+    assert!((media[3] - 210.0 * MM_PT).abs() < 0.1, "{media:?}");
+    // As wide or as tall as the sheet less 10 mm each side, centred.
+    let (aw, ah) = ((297.0 - 20.0) * MM_PT, (210.0 - 20.0) * MM_PT);
+    let (dw, dh) = (m[0], m[3]);
+    assert!(
+        (dw - aw).abs() < 0.5 || (dh - ah).abs() < 0.5,
+        "{m:?} in {aw} × {ah}"
+    );
+    assert!(dw <= aw + 0.5 && dh <= ah + 0.5);
+    assert!((m[4] - (media[2] - dw) / 2.0).abs() < 0.5);
+    assert!(!clipped);
+}
+
+#[test]
+fn a_photo_filling_a_10x15_sheet_is_cut_at_the_margin() {
+    use crate::{Margin, PdfFit, PdfSize};
+    let mut ui = Ui::new();
+    ui.send(Message::Kind(Kind::Photo));
+    ui.click("Anteprima");
+    // The square original only.
+    ui.send(Message::DropFound(2));
+    ui.send(Message::DropFound(0));
+    ui.scan(1);
+    ui.send(Message::Output(crate::Output::Pdf));
+    ui.send(Message::PdfSize(PdfSize::Photo10x15));
+    ui.send(Message::PdfFit(PdfFit::Fill));
+    ui.send(Message::PdfMargin(Margin(0)));
+    ui.send(Message::Save);
+    let (media, m, clipped) = pdf_page(&ui);
+    assert!((media[2] - 100.0 * MM_PT).abs() < 0.1, "{media:?}");
+    assert!(clipped, "what overflows is cut");
+    assert!(m[3] >= media[3] - 0.5, "covers the height: {m:?}");
+}
+
+#[test]
+fn the_sheet_chosen_is_remembered() {
+    use crate::{Margin, PdfFit, PdfSize};
+    {
+        let mut ui = Ui::new();
+        ui.send(Message::Kind(Kind::Document));
+        ui.send(Message::PdfSize(PdfSize::A5));
+        ui.send(Message::PdfFit(PdfFit::Fill));
+        ui.send(Message::PdfMargin(Margin(15)));
+        // Kept for the next start: the test's folder stays until the end.
+        std::mem::forget(ui);
+    }
+    let (app, _) = App::new();
+    assert_eq!(app.document.pdf_size, PdfSize::A5);
+    assert_eq!(app.document.pdf_fit, PdfFit::Fill);
+    assert_eq!(app.document.pdf_margin, 15);
+    testing::clean_up();
+}
+
 #[test]
 fn saving_twice_in_the_same_second_writes_over_nothing() {
     use hp3770_export::ImageFormat;

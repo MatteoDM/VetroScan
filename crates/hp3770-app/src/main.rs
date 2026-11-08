@@ -196,6 +196,8 @@ fn outputs(kind: Kind, colour: Colour, depth: u8) -> Vec<Output> {
             Output::Image(ImageFormat::Tiff),
             Output::Image(ImageFormat::WebP),
             Output::Image(ImageFormat::Avif { quality: 80 }),
+            // To print: the photo on a sheet (A4, 10 × 15…).
+            Output::Pdf,
             Output::Raw(RawFormat::Tiff16),
             Output::Raw(RawFormat::Dng),
         ],
@@ -266,19 +268,57 @@ fn image_format(path: &std::path::Path, output: Output) -> ImageFormat {
     }
 }
 
+/// The sheet of the PDF pages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PdfSize {
     Fit,
     A4,
+    A3,
+    A5,
     Letter,
+    Legal,
+    Photo10x15,
+    Photo13x18,
+}
+
+const PDF_SIZES: [PdfSize; 8] = [
+    PdfSize::Fit,
+    PdfSize::A4,
+    PdfSize::A3,
+    PdfSize::A5,
+    PdfSize::Letter,
+    PdfSize::Legal,
+    PdfSize::Photo10x15,
+    PdfSize::Photo13x18,
+];
+
+impl PdfSize {
+    /// The name in the preferences file.
+    fn key(self) -> &'static str {
+        match self {
+            Self::Fit => "scansione",
+            Self::A4 => "a4",
+            Self::A3 => "a3",
+            Self::A5 => "a5",
+            Self::Letter => "letter",
+            Self::Legal => "legal",
+            Self::Photo10x15 => "10x15",
+            Self::Photo13x18 => "13x18",
+        }
+    }
 }
 
 impl std::fmt::Display for PdfSize {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Self::Fit => "Pagina come la scansione",
-            Self::A4 => "A4",
-            Self::Letter => "Letter",
+            Self::Fit => "Come la scansione",
+            Self::A4 => "A4 (21 × 29,7 cm)",
+            Self::A3 => "A3 (29,7 × 42 cm)",
+            Self::A5 => "A5 (14,8 × 21 cm)",
+            Self::Letter => "Letter (8,5 × 11\")",
+            Self::Legal => "Legal (8,5 × 14\")",
+            Self::Photo10x15 => "Foto 10 × 15 cm",
+            Self::Photo13x18 => "Foto 13 × 18 cm",
         })
     }
 }
@@ -288,7 +328,58 @@ impl From<PdfSize> for PageSize {
         match s {
             PdfSize::Fit => PageSize::Fit,
             PdfSize::A4 => PageSize::A4,
+            PdfSize::A3 => PageSize::A3,
+            PdfSize::A5 => PageSize::A5,
             PdfSize::Letter => PageSize::Letter,
+            PdfSize::Legal => PageSize::Legal,
+            PdfSize::Photo10x15 => PageSize::Photo10x15,
+            PdfSize::Photo13x18 => PageSize::Photo13x18,
+        }
+    }
+}
+
+/// Where the scan goes on the sheet of a PDF page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PdfFit {
+    Actual,
+    Page,
+    Fill,
+}
+
+const PDF_FITS: [PdfFit; 3] = [PdfFit::Actual, PdfFit::Page, PdfFit::Fill];
+
+impl PdfFit {
+    fn key(self) -> &'static str {
+        match self {
+            Self::Actual => "reale",
+            Self::Page => "adatta",
+            Self::Fill => "riempi",
+        }
+    }
+}
+
+impl std::fmt::Display for PdfFit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Actual => "Dimensione reale",
+            Self::Page => "Adatta al foglio",
+            Self::Fill => "Riempi il foglio (taglia i bordi)",
+        })
+    }
+}
+
+/// Margins offered for a scan fitted to the sheet, millimetres.
+const PDF_MARGINS: [u8; 5] = [0, 5, 10, 15, 20];
+
+/// A margin in the list of choices.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Margin(u8);
+
+impl std::fmt::Display for Margin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            0 => f.write_str("Nessuno (al vivo)"),
+            mm => write!(f, "{mm} mm"),
         }
     }
 }
@@ -320,6 +411,9 @@ struct Settings {
     adjust: Adjustments,
     output: Output,
     pdf_size: PdfSize,
+    pdf_fit: PdfFit,
+    /// Margin of a scan fitted to the sheet (or filling it), millimetres.
+    pdf_margin: u8,
     auto_save: bool,
     /// Find the originals on the glass (photos, cards, receipts) and scan
     /// each one straightened, as its own image.
@@ -337,9 +431,24 @@ impl Settings {
             adjust: Adjustments::default(),
             output: Output::Pdf,
             pdf_size: PdfSize::Fit,
+            pdf_fit: PdfFit::Actual,
+            pdf_margin: 10,
             auto_save: false,
             auto_crop: false,
             depth: 8,
+        }
+    }
+
+    /// How the PDF pages are laid out.
+    fn layout(&self) -> hp3770_export::Layout {
+        hp3770_export::Layout {
+            size: self.pdf_size.into(),
+            placement: match self.pdf_fit {
+                PdfFit::Actual => hp3770_export::Placement::Actual,
+                PdfFit::Page => hp3770_export::Placement::FitPage,
+                PdfFit::Fill => hp3770_export::Placement::Fill,
+            },
+            margin_mm: f64::from(self.pdf_margin),
         }
     }
 
@@ -393,12 +502,9 @@ impl Settings {
                 Output::Image(ImageFormat::Bmp) => "bmp",
             }
             .into(),
-            pdf_size: match self.pdf_size {
-                PdfSize::Fit => "scansione",
-                PdfSize::A4 => "a4",
-                PdfSize::Letter => "letter",
-            }
-            .into(),
+            pdf_size: self.pdf_size.key().into(),
+            pdf_fit: self.pdf_fit.key().into(),
+            pdf_margin: Some(self.pdf_margin),
             auto_save: self.auto_save,
             auto_crop: Some(self.auto_crop),
             depth: Some(self.depth),
@@ -501,11 +607,18 @@ impl Settings {
                 sharpen: a.sharpen,
             },
             output,
-            pdf_size: match m.pdf_size.as_str() {
-                "a4" => PdfSize::A4,
-                "letter" => PdfSize::Letter,
-                _ => PdfSize::Fit,
-            },
+            pdf_size: PDF_SIZES
+                .into_iter()
+                .find(|s| s.key() == m.pdf_size)
+                .unwrap_or(base.pdf_size),
+            pdf_fit: PDF_FITS
+                .into_iter()
+                .find(|f| f.key() == m.pdf_fit)
+                .unwrap_or(base.pdf_fit),
+            pdf_margin: m
+                .pdf_margin
+                .filter(|mm| PDF_MARGINS.contains(mm))
+                .unwrap_or(base.pdf_margin),
             auto_save: m.auto_save,
             auto_crop: m.auto_crop.unwrap_or(base.auto_crop),
             depth,
@@ -1364,6 +1477,8 @@ enum Message {
     Colour(Colour),
     Output(Output),
     PdfSize(PdfSize),
+    PdfFit(PdfFit),
+    PdfMargin(Margin),
     AutoSave(bool),
     AutoCrop(bool),
     /// Find the originals on the preview again.
@@ -2467,7 +2582,7 @@ impl App {
         let folder = path.parent().unwrap_or(std::path::Path::new("."));
         let format = image_format(path, settings.output);
         match writer(settings.output, path, n) {
-            Writer::Pdf => hp3770_export::save_pdf(path, &pages, settings.pdf_size.into(), 88),
+            Writer::Pdf => hp3770_export::save_pdf(path, &pages, settings.layout(), 88),
             Writer::Tiff => hp3770_export::save_tiff(path, &pages),
             Writer::Zip => hp3770_export::save_zip(path, &name, &pages, ImageFormat::Png),
             // One image per page, next to the chosen name.
@@ -2833,6 +2948,8 @@ impl App {
             }
             Message::Output(output) => self.settings_mut().output = output,
             Message::PdfSize(size) => self.settings_mut().pdf_size = size,
+            Message::PdfFit(fit) => self.settings_mut().pdf_fit = fit,
+            Message::PdfMargin(Margin(mm)) => self.settings_mut().pdf_margin = mm,
             Message::AutoSave(on) => self.settings_mut().auto_save = on,
             Message::AutoCrop(on) => self.settings_mut().auto_crop = on,
             Message::Detect => {
@@ -5086,16 +5203,53 @@ impl App {
             );
         }
         if self.settings().output == Output::Pdf {
+            let s = *self.settings();
             pane = pane.push(labelled(
-                "Pagina PDF",
-                pick_list(
-                    [PdfSize::Fit, PdfSize::A4, PdfSize::Letter],
-                    Some(self.settings().pdf_size),
-                    Message::PdfSize,
-                )
-                .width(Length::Fill)
-                .into(),
+                "Foglio",
+                pick_list(PDF_SIZES, Some(s.pdf_size), Message::PdfSize)
+                    .width(Length::Fill)
+                    .into(),
             ));
+            if s.pdf_size != PdfSize::Fit {
+                pane = pane.push(labelled(
+                    "Sul foglio",
+                    pick_list(PDF_FITS, Some(s.pdf_fit), Message::PdfFit)
+                        .width(Length::Fill)
+                        .into(),
+                ));
+                if s.pdf_fit != PdfFit::Actual {
+                    pane = pane.push(labelled(
+                        "Margine",
+                        pick_list(
+                            PDF_MARGINS.map(Margin),
+                            Some(Margin(s.pdf_margin)),
+                            Message::PdfMargin,
+                        )
+                        .width(Length::Fill)
+                        .into(),
+                    ));
+                }
+                pane = pane.push(
+                    text(match s.pdf_fit {
+                        PdfFit::Actual => {
+                            "Ogni scansione alla sua misura vera, al centro del foglio \
+                             (rimpicciolita solo se non ci sta): stampata al 100% \
+                             misura come l'originale."
+                        }
+                        PdfFit::Page => {
+                            "Ogni scansione grande quanto il foglio permette, intera, \
+                             dentro il margine: un ritaglio piccolo riempie l'A4."
+                        }
+                        PdfFit::Fill => {
+                            "Ogni scansione copre il foglio dentro il margine; quello \
+                             che avanza ai lati si taglia, come nelle stampe delle foto."
+                        }
+                    })
+                    .size(11),
+                );
+                pane = pane
+                    .push(text("Il foglio si gira da solo per le scansioni orizzontali.").size(11));
+            }
         }
         pane = pane
             .push(heading("Cartella"))

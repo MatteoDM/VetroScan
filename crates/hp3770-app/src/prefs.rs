@@ -73,8 +73,13 @@ pub struct StoredMode {
     pub threshold: u8,
     /// "pdf", "tiff-pagine", "png", "jpeg", "tiff", "webp" or "avif".
     pub output: String,
-    /// "scansione", "a4" or "letter".
+    /// "scansione", "a4", "a3", "a5", "letter", "legal", "10x15" or "13x18".
     pub pdf_size: String,
+    /// Where the scan goes on the sheet: "reale", "adatta" or "riempi".
+    pub pdf_fit: String,
+    /// Margin of a scan fitted to the sheet, millimetres (absent: the
+    /// default).
+    pub pdf_margin: Option<u8>,
     pub auto_save: bool,
     /// Find the originals on the glass and scan each on its own (absent:
     /// the default of the way of working).
@@ -93,6 +98,8 @@ impl Default for StoredMode {
             threshold: hp3770_core::convert::DEFAULT_THRESHOLD,
             output: "pdf".into(),
             pdf_size: "scansione".into(),
+            pdf_fit: "reale".into(),
+            pdf_margin: None,
             auto_save: false,
             auto_crop: None,
             depth: None,
