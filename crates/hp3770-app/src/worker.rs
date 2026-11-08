@@ -195,38 +195,75 @@ impl Worker {
         if self.chip.is_none() {
             if self
                 .last_open
-                .is_some_and(|t| t.elapsed() < Duration::from_secs(2))
+                .is_some_and(|t| t.elapsed() < Duration::from_millis(300))
             {
                 return;
             }
             self.last_open = Some(Instant::now());
-            if self.chip().is_err() {
+            if let Err(e) = self.chip() {
+                log(&format!("scanner non aperto: {e}"));
                 return;
             }
+            log("scanner riaperto");
             let status = self
                 .chip()
                 .and_then(|c| c.status().map_err(|e| e.to_string()));
             self.emit(Event::Status(status));
-            // Not a press: whatever is held when the scanner comes back.
-            self.held = 0xff;
+            // A button still held when the scanner comes back is the press
+            // that made it go away (Windows reacting to the same press).
+            self.held = 0;
         }
         let Some(chip) = self.chip.as_mut() else {
             return;
         };
-        let Ok(held) = chip.buttons_held() else {
-            self.chip = None;
-            return;
+        let held = match chip.buttons_held() {
+            Ok(held) => held,
+            Err(e) => {
+                log(&format!("lettura tasti non riuscita: {e}"));
+                self.chip = None;
+                return;
+            }
         };
         let pressed = held & !self.held;
         self.held = held;
+        if pressed == 0 {
+            return;
+        }
         // One button at a time: several at once is a bad read.
         if pressed.count_ones() != 1 {
+            log(&format!("lettura scartata: {pressed:02x}"));
             return;
         }
         for button in [Button::Scan, Button::Copy, Button::InstantShare] {
             if pressed & button.mask() != 0 {
+                log(&format!("tasto {}", button.name()));
                 self.emit(Event::Button(button));
             }
         }
+    }
+}
+
+/// Appends a line to the log of the buttons (`tasti.log` next to the
+/// settings), to tell what happened when a press seems lost.
+fn log(line: &str) {
+    use std::io::Write;
+    let Some(dir) = dirs::config_dir().map(|d| d.join("hp3770")) else {
+        return;
+    };
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("tasti.log");
+    // Keep it small: start again past 256 KB.
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > 256 * 1024) {
+        let _ = std::fs::remove_file(&path);
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0.0, |d| d.as_secs_f64());
+        let _ = writeln!(f, "{now:.3} {line}");
     }
 }

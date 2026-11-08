@@ -121,6 +121,15 @@ enum Command {
         #[arg(long, default_value_t = hp3770_core::convert::HP_SHARPEN)]
         sharpen: f32,
     },
+    /// Find the originals on a preview of the glass (a PNG scanned at 200
+    /// dpi, as `scan --dpi 200 --linear`) and print where they are.
+    Detect {
+        /// The preview.
+        input: PathBuf,
+        /// Only this part: left, top, width, height in pixels.
+        #[arg(long, value_delimiter = ',')]
+        crop: Option<Vec<usize>>,
+    },
     /// Print the front-panel buttons as they are pressed.
     Buttons {
         /// Stop after this many presses (default: run until Ctrl+C).
@@ -190,6 +199,7 @@ fn main() -> ExitCode {
                 (mode, threshold, linear, sharpen, !no_fast_travel),
             )
         }),
+        Command::Detect { input, crop } => detect(&input, crop.as_deref()),
         Command::Buttons { count, method, raw } => {
             open(cli.backend).and_then(|s| buttons(s, count, method, raw))
         }
@@ -625,6 +635,60 @@ fn dump(out: &mut String, base: u16, data: &[u8]) {
         let address = usize::from(base) + i * 16;
         let _ = writeln!(out, "{address:04X}: {}", hex(line));
     }
+}
+
+/// Prints the originals found on a preview.
+fn detect(
+    input: &std::path::Path,
+    crop: Option<&[usize]>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use hp3770_core::session::{Format, Image};
+    let decoder = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(input)?));
+    let mut reader = decoder.read_info()?;
+    let mut data = vec![
+        0;
+        reader
+            .output_buffer_size()
+            .ok_or("immagine troppo grande")?
+    ];
+    let info = reader.next_frame(&mut data)?;
+    data.truncate(info.buffer_size());
+    let format = match (info.color_type, info.bit_depth) {
+        (png::ColorType::Rgb, png::BitDepth::Eight) => Format::Rgb,
+        (png::ColorType::Grayscale, png::BitDepth::Eight) => Format::Grey,
+        other => return Err(format!("formato non gestito: {other:?}").into()),
+    };
+    let image = Image {
+        width: info.width as usize,
+        height: info.height as usize,
+        dpi: 200,
+        format,
+        data,
+    };
+    let image = match crop {
+        Some(&[x, y, w, h]) => image.cropped(x, y, w, h),
+        _ => image,
+    };
+    let found = hp3770_core::detect::objects(&image);
+    let mm = 25.4 / 200.0;
+    println!("{} originals", found.len());
+    for (i, f) in found.iter().enumerate() {
+        let b = f.bounds();
+        println!(
+            "{}: centre {:.1}, {:.1} mm, {:.1} x {:.1} mm, turned {:.1} deg (box {:.0},{:.0} {:.0}x{:.0} px)",
+            i + 1,
+            f.cx * mm,
+            f.cy * mm,
+            f.width * mm,
+            f.height * mm,
+            f.angle,
+            b[0],
+            b[1],
+            b[2],
+            b[3]
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]

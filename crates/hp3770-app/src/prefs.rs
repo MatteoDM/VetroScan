@@ -76,6 +76,9 @@ pub struct StoredMode {
     /// "scansione", "a4" or "letter".
     pub pdf_size: String,
     pub auto_save: bool,
+    /// Find the originals on the glass and scan each on its own (absent:
+    /// the default of the way of working).
+    pub auto_crop: Option<bool>,
     pub adjust: StoredAdjust,
 }
 
@@ -88,6 +91,7 @@ impl Default for StoredMode {
             output: "pdf".into(),
             pdf_size: "scansione".into(),
             auto_save: false,
+            auto_crop: None,
             adjust: StoredAdjust::default(),
         }
     }

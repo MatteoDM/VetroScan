@@ -158,6 +158,7 @@ pub fn viewer<'a, Message: Clone + 'a>(
     hint: &'a str,
     view: View,
     selection: Option<Selection>,
+    marks: Vec<[[f32; 2]; 4]>,
     on_view: fn(View) -> Message,
     on_select: Option<fn(Option<Selection>) -> Message>,
     on_pick: Option<fn(Point) -> Message>,
@@ -176,6 +177,7 @@ pub fn viewer<'a, Message: Clone + 'a>(
         size,
         view,
         selection,
+        marks,
         on_view,
         on_select,
         on_pick,
@@ -235,6 +237,9 @@ struct Overlay<Message> {
     size: Size,
     view: View,
     selection: Option<Selection>,
+    /// Originals found on the glass (corners in image pixels), numbered;
+    /// drawn while there is no selection.
+    marks: Vec<[[f32; 2]; 4]>,
     on_view: fn(View) -> Message,
     on_select: Option<fn(Option<Selection>) -> Message>,
     /// When set, a left click picks the image point under the pointer (the
@@ -475,6 +480,39 @@ impl<Message> canvas::Program<Message> for Overlay<Message> {
             &Path::rectangle(rect.position(), rect.size()),
             Stroke::default().with_color(theme.extended_palette().background.strong.color),
         );
+        if self.selection.is_none() {
+            let primary = theme.palette().primary;
+            for (i, corners) in self.marks.iter().enumerate() {
+                let at = corners.map(|[x, y]| Point::new(rect.x + x * scale, rect.y + y * scale));
+                let outline = Path::new(|b| {
+                    b.move_to(at[0]);
+                    for p in &at[1..] {
+                        b.line_to(*p);
+                    }
+                    b.close();
+                });
+                frame.fill(&outline, Color { a: 0.12, ..primary });
+                frame.stroke(
+                    &outline,
+                    Stroke::default().with_width(2.0).with_color(primary),
+                );
+                // The number, at the centre.
+                let c = Point::new(
+                    at.iter().map(|p| p.x).sum::<f32>() / 4.0,
+                    at.iter().map(|p| p.y).sum::<f32>() / 4.0,
+                );
+                frame.fill(&Path::circle(c, 14.0), primary);
+                frame.fill_text(canvas::Text {
+                    content: (i + 1).to_string(),
+                    position: c,
+                    color: Color::WHITE,
+                    size: 15.0.into(),
+                    align_x: iced::widget::text::Alignment::Center,
+                    align_y: iced::alignment::Vertical::Center,
+                    ..canvas::Text::default()
+                });
+            }
+        }
         if let Some(s) = self.selection {
             let top_left = Point::new(rect.x + s.x * scale, rect.y + s.y * scale);
             let size = Size::new(s.width * scale, s.height * scale);

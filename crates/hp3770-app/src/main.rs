@@ -19,11 +19,13 @@ mod curve;
 mod histogram;
 mod prefs;
 mod viewer;
+mod wia;
 mod worker;
 
 use histogram::Histogram;
 use hp3770_core::adjust::{self, Adjustments};
 use hp3770_core::convert;
+use hp3770_core::detect::{self, Found};
 use hp3770_core::geometry::{Area, GLASS_INCHES, RESOLUTIONS};
 use hp3770_core::profile::HP3770;
 use hp3770_core::session::{self, Format, Image, Request, Stage};
@@ -201,6 +203,9 @@ struct Settings {
     output: Output,
     pdf_size: PdfSize,
     auto_save: bool,
+    /// Find the originals on the glass (photos, cards, receipts) and scan
+    /// each one straightened, as its own image.
+    auto_crop: bool,
 }
 
 impl Settings {
@@ -213,6 +218,7 @@ impl Settings {
             output: Output::Pdf,
             pdf_size: PdfSize::Fit,
             auto_save: false,
+            auto_crop: false,
         }
     }
 
@@ -220,6 +226,7 @@ impl Settings {
         Self {
             dpi: 600,
             output: Output::Image(ImageFormat::Jpeg { quality: 92 }),
+            auto_crop: true,
             ..Self::document()
         }
     }
@@ -267,6 +274,7 @@ impl Settings {
             }
             .into(),
             auto_save: self.auto_save,
+            auto_crop: Some(self.auto_crop),
             adjust: prefs::StoredAdjust {
                 temperature: a.temperature,
                 tint: a.tint,
@@ -364,6 +372,7 @@ impl Settings {
                 _ => PdfSize::Fit,
             },
             auto_save: m.auto_save,
+            auto_crop: m.auto_crop.unwrap_or(base.auto_crop),
         }
     }
 }
@@ -710,6 +719,9 @@ struct Page {
     shown: Image,
     picture: Picture,
     thumb: Picture,
+    /// Where it was found on the glass (pixels of the preview), when it
+    /// was cut out by the automatic crop: "Rifai" scans just that again.
+    origin: Option<Found>,
 }
 
 impl Page {
@@ -723,6 +735,7 @@ impl Page {
             settings,
             own: None,
             shown,
+            origin: None,
         }
     }
 
@@ -1014,6 +1027,9 @@ enum Message {
     /// A button's action in the current way of working: which button and
     /// what it does.
     ButtonAction(usize, ButtonAction),
+    /// Make Windows leave the scanner buttons alone (or not).
+    WiaQuiet(bool),
+    WiaDone(Result<(), String>),
     ChooseFolder,
     Folder(Option<PathBuf>),
     DefaultFolder,
@@ -1029,6 +1045,11 @@ enum Message {
     Output(Output),
     PdfSize(PdfSize),
     AutoSave(bool),
+    AutoCrop(bool),
+    /// Find the originals on the preview again.
+    Detect,
+    /// Leave out one of the originals found.
+    DropFound(usize),
     Toggle(Group),
     Adjust(Field, f32),
     /// Text typed in the number of a field.
@@ -1057,6 +1078,24 @@ enum Message {
     NewDocument,
 }
 
+/// One pass of the scanner: an area of the glass (pixels of the
+/// preview) and the originals in it, each cut out of the scan.
+#[derive(Debug, Clone)]
+struct Job {
+    bounds: [f32; 4],
+    crops: Vec<Found>,
+    /// The area asked of the scanner (pixels at the resolution).
+    area: Option<Area>,
+}
+
+/// Largest single pass for several originals; beyond it each is scanned
+/// on its own.
+const ONE_PASS: f64 = 700e6;
+
+/// Cut inside the edge of a found original (millimetres): its edge is
+/// blurred and a sliver of the lid would show.
+const INSET_MM: f32 = 0.4;
+
 // --------------------------------------------------------------------- app
 
 struct App {
@@ -1079,6 +1118,8 @@ struct App {
     photo_buttons: [ButtonAction; 3],
     /// Print the next photo when it arrives (photocopy).
     print_next: bool,
+    /// Whether Windows leaves the buttons alone (None: nothing to set).
+    wia_quiet: Option<bool>,
     /// What was last written to the preferences file.
     saved: prefs::Prefs,
     /// The raw preview of the glass, its adjusted image and picture.
@@ -1086,6 +1127,13 @@ struct App {
     preview_view: View,
     result_view: View,
     selection: Option<Selection>,
+    /// Originals found on the preview (pixels of the preview).
+    found: Vec<Found>,
+    /// The pass running and those still to do.
+    job: Option<Job>,
+    jobs: std::collections::VecDeque<Job>,
+    /// Originals of this scan acquired so far, and how many in all.
+    batch: (usize, usize),
     open: Vec<Group>,
     eyedropper: bool,
     before: bool,
@@ -1157,11 +1205,16 @@ impl App {
                 document_buttons: ButtonAction::from_keys(Kind::Document, &stored.document_buttons),
                 photo_buttons: ButtonAction::from_keys(Kind::Photo, &stored.photo_buttons),
                 print_next: false,
+                wia_quiet: wia::quiet(),
                 saved: stored.clone(),
                 preview: None,
                 preview_view: View::default(),
                 result_view: View::default(),
                 selection: None,
+                found: Vec::new(),
+                job: None,
+                jobs: std::collections::VecDeque::new(),
+                batch: (0, 0),
                 open: vec![Group::Tone, Group::Colour],
                 eyedropper: false,
                 before: false,
@@ -1461,7 +1514,11 @@ impl App {
     /// The scan: the chip's linear colour data, every adjustment is done
     /// afterwards.
     fn request(&self) -> Request {
-        let (x, y, w, h) = self.area_mm();
+        self.request_mm(self.area_mm())
+    }
+
+    /// The scan of an area given in millimetres.
+    fn request_mm(&self, (x, y, w, h): (f64, f64, f64, f64)) -> Request {
         let dpi = self.settings().dpi;
         Request {
             linear: true,
@@ -1473,8 +1530,79 @@ impl App {
         }
     }
 
+    /// The passes for the originals found, when the automatic crop applies
+    /// (it on, something found, no selection): all in one pass, or each
+    /// on its own when one pass would take too much memory.
+    fn plan(&self) -> Vec<Job> {
+        if !self.settings().auto_crop || self.selection.is_some() || self.found.is_empty() {
+            return Vec::new();
+        }
+        let glass = Self::glass();
+        let margin = f32::from(PREVIEW_DPI) / 25.4;
+        let expand = |b: [f32; 4]| {
+            let (l, t) = ((b[0] - margin).max(0.0), (b[1] - margin).max(0.0));
+            let r = (b[0] + b[2] + margin).min(glass.width);
+            let bottom = (b[1] + b[3] + margin).min(glass.height);
+            [l, t, r - l, bottom - t]
+        };
+        let union = self
+            .found
+            .iter()
+            .map(Found::bounds)
+            .reduce(|a, b| {
+                let (l, t) = (a[0].min(b[0]), a[1].min(b[1]));
+                let r = (a[0] + a[2]).max(b[0] + b[2]);
+                let bottom = (a[1] + a[3]).max(b[1] + b[3]);
+                [l, t, r - l, bottom - t]
+            })
+            .map(expand)
+            .unwrap_or_default();
+        let one = Job {
+            bounds: union,
+            crops: self.found.clone(),
+            area: None,
+        };
+        if self.found.len() == 1 || self.job_memory(&one) <= ONE_PASS {
+            vec![one]
+        } else {
+            self.found
+                .iter()
+                .map(|f| Job {
+                    bounds: expand(f.bounds()),
+                    crops: vec![*f],
+                    area: None,
+                })
+                .collect()
+        }
+    }
+
+    /// The scan of a pass.
+    fn job_request(&self, job: &Job) -> Request {
+        let mm = |px: f32| f64::from(px) * 25.4 / f64::from(PREVIEW_DPI);
+        let [x, y, w, h] = job.bounds;
+        self.request_mm((mm(x), mm(y), mm(w), mm(h)))
+    }
+
+    fn job_memory(&self, job: &Job) -> f64 {
+        Self::bytes(&self.job_request(job), self.settings().dpi)
+    }
+
+    fn bytes(request: &Request, dpi: u16) -> f64 {
+        let a = request.area;
+        let raw = 3.0 * f64::from(a.width) * f64::from(a.height);
+        if dpi > 1200 {
+            raw * 2.0
+        } else {
+            raw
+        }
+    }
+
     /// Bytes the scan takes in memory.
     fn memory(&self) -> f64 {
+        let plan = self.plan();
+        if !plan.is_empty() {
+            return plan.iter().map(|j| self.job_memory(j)).fold(0.0, f64::max);
+        }
         let a = self.request().area;
         let raw = 3.0 * f64::from(a.width) * f64::from(a.height);
         if self.settings().dpi > 1200 {
@@ -1497,7 +1625,16 @@ impl App {
                 dpi: PREVIEW_DPI,
                 ..self.request()
             }
+        } else if let Some(job) = self.next_job() {
+            let mut request = self.job_request(&job);
+            self.job = Some(Job {
+                area: Some(request.area),
+                ..job
+            });
+            request.dpi = self.settings().dpi;
+            request
         } else {
+            self.batch = (0, 1);
             self.request()
         };
         if let (Some(worker), None) = (&self.worker, &self.busy) {
@@ -1505,6 +1642,57 @@ impl App {
             self.busy = Some((purpose, None));
             self.eyedropper = false;
         }
+    }
+
+    /// The pass to scan now: the next of the running scan, or the first
+    /// of a new plan (also for "Rifai" on an original cut out).
+    fn next_job(&mut self) -> Option<Job> {
+        if self.busy.is_some() || self.worker.is_none() {
+            return None;
+        }
+        if let Some(job) = self.jobs.pop_front() {
+            return Some(job);
+        }
+        if let Some(i) = self.redo {
+            let origin = self.pages.get(i).and_then(|p| p.origin)?;
+            let margin = f32::from(PREVIEW_DPI) / 25.4;
+            let b = origin.bounds();
+            self.batch = (0, 1);
+            return Some(Job {
+                bounds: [
+                    (b[0] - margin).max(0.0),
+                    (b[1] - margin).max(0.0),
+                    b[2] + 2.0 * margin,
+                    b[3] + 2.0 * margin,
+                ],
+                crops: vec![origin],
+                area: None,
+            });
+        }
+        let mut plan: std::collections::VecDeque<Job> = self.plan().into();
+        let first = plan.pop_front()?;
+        self.batch = (0, self.found.len());
+        self.jobs = plan;
+        Some(first)
+    }
+
+    /// The images of a scan: the originals cut out and straightened, or
+    /// the whole scan.
+    fn cut(image: Image, job: Option<&Job>) -> Vec<(Image, Option<Found>)> {
+        let Some((job, area)) = job.and_then(|j| Some((j, j.area?))) else {
+            return vec![(image, None)];
+        };
+        let factor = f32::from(image.dpi) / f32::from(PREVIEW_DPI);
+        let inset = INSET_MM / 25.4 * f32::from(image.dpi);
+        job.crops
+            .iter()
+            .map(|c| {
+                let mut f = c.scaled(factor, -(area.x as f32), -(area.y as f32));
+                f.width = (f.width - 2.0 * inset).max(1.0);
+                f.height = (f.height - 2.0 * inset).max(1.0);
+                (image.straightened(&f), Some(*c))
+            })
+            .collect()
     }
 
     /// The usual folder of saved scans: Pictures\Scansioni.
@@ -1584,14 +1772,7 @@ impl App {
     /// Writes the document (all pages) or the shown photo to `path`.
     fn write(&self, path: &std::path::Path) -> Result<String, String> {
         let settings = self.settings();
-        let pages: Vec<Image> = match self.kind {
-            Kind::Document => self.pages.iter().map(|p| p.finished(settings)).collect(),
-            Kind::Photo => self
-                .shown()
-                .map(|p| p.finished(settings))
-                .into_iter()
-                .collect(),
-        };
+        let pages: Vec<Image> = self.pages.iter().map(|p| p.finished(settings)).collect();
         if pages.is_empty() {
             return Err("niente da salvare".into());
         }
@@ -1689,6 +1870,20 @@ impl App {
             Message::Tab(tab) => self.tab = tab,
             Message::Pane(pane) => self.pane = pane,
             Message::StartMode(mode) => self.start_mode = mode,
+            Message::WiaQuiet(on) => {
+                self.note = "Conferma la richiesta di Windows (amministratore)…".into();
+                return Task::perform(async move { wia::set_quiet(on) }, Message::WiaDone);
+            }
+            Message::WiaDone(result) => {
+                self.wia_quiet = wia::quiet();
+                self.note = match result {
+                    Ok(()) if self.wia_quiet == Some(true) => {
+                        "Windows non apre più la sua app ai tasti dello scanner".into()
+                    }
+                    Ok(()) => "Windows torna ad aprire la sua app ai tasti dello scanner".into(),
+                    Err(e) => format!("Non cambiato: {e}"),
+                };
+            }
             Message::ButtonAction(i, action) => match self.kind {
                 Kind::Document => self.document_buttons[i] = action,
                 Kind::Photo => self.photo_buttons[i] = action,
@@ -1745,6 +1940,18 @@ impl App {
             Message::Output(output) => self.settings_mut().output = output,
             Message::PdfSize(size) => self.settings_mut().pdf_size = size,
             Message::AutoSave(on) => self.settings_mut().auto_save = on,
+            Message::AutoCrop(on) => self.settings_mut().auto_crop = on,
+            Message::Detect => {
+                if let Some((raw, _, _)) = &self.preview {
+                    self.found = detect::objects(&raw.full);
+                    self.note = Self::found_note(self.found.len());
+                }
+            }
+            Message::DropFound(i) => {
+                if i < self.found.len() {
+                    self.found.remove(i);
+                }
+            }
             Message::Toggle(group) => {
                 if let Some(i) = self.open.iter().position(|g| *g == group) {
                     self.open.remove(i);
@@ -1800,6 +2007,7 @@ impl App {
                 if let Some(mut new) = factory.or(user) {
                     // The output folder behaviour stays the user's.
                     new.auto_save = self.settings().auto_save;
+                    new.auto_crop = self.settings().auto_crop;
                     self.change(|s| *s = new);
                     self.note = format!("Preset «{name}» applicato (Ctrl+Z per tornare indietro)");
                 }
@@ -2137,6 +2345,8 @@ impl App {
                         self.redo = None;
                         self.redo_auto = false;
                         self.print_next = false;
+                        self.job = None;
+                        self.jobs.clear();
                         self.note = format!("Errore: {e}");
                         if purpose == Purpose::Page {
                             notify("Scansione non riuscita", &e, true);
@@ -2151,72 +2361,136 @@ impl App {
         }
     }
 
+    fn found_note(n: usize) -> String {
+        match n {
+            0 => "Anteprima pronta: trascina per scegliere l'area, regola a destra".into(),
+            1 => {
+                "Anteprima pronta: un originale riconosciuto, sarà ritagliato e raddrizzato".into()
+            }
+            n => format!(
+                "Anteprima pronta: {n} originali riconosciuti, ognuno diventa un'immagine \
+                 raddrizzata"
+            ),
+        }
+    }
+
     fn on_scan(&mut self, purpose: Purpose, image: Image) {
-        let raw = Raw::new(image);
         match purpose {
             Purpose::Preview => {
+                let raw = Raw::new(image);
                 let settings = *self.settings();
                 let shown = render(&raw.proxy, &settings, &settings.adjust);
                 let picture = Picture::from_rgb(shown.width, shown.height, &shown.to_rgb());
+                self.found = detect::objects(&raw.full);
                 self.preview = Some((raw, shown, picture));
                 self.preview_view = View::default();
                 self.tab = Tab::Preview;
-                self.note =
-                    "Anteprima pronta: trascina per scegliere l'area, regola a destra".into();
+                self.note = if self.settings().auto_crop {
+                    Self::found_note(self.found.len())
+                } else {
+                    Self::found_note(0)
+                };
             }
             Purpose::Page => {
-                let (w, h, dpi) = (raw.full.width, raw.full.height, raw.full.dpi);
-                let page = Page::new(raw, *self.settings());
-                match (self.redo.take(), self.kind) {
-                    (Some(index), _) if std::mem::take(&mut self.redo_auto) => {
-                        if index < self.pages.len() {
-                            self.pages[index] = page;
-                            self.current = Some(index);
-                        }
-                        self.note = format!("Pagina {} rifatta", index + 1);
-                        notify(&self.note, "", false);
-                    }
-                    (Some(index), _) => {
-                        self.redone = Some((index, page));
-                        self.note = format!(
-                            "Nuova scansione della pagina {}: tienila o lascia la vecchia",
-                            index + 1
-                        );
-                    }
-                    (None, Kind::Document) => {
-                        self.pages.push(page);
-                        self.current = Some(self.pages.len() - 1);
-                        self.note = format!(
-                            "Pagina {} acquisita · {w} × {h} pixel a {dpi} dpi",
-                            self.pages.len()
-                        );
-                        notify(&format!("Pagina {} acquisita", self.pages.len()), "", false);
-                    }
-                    (None, Kind::Photo) => {
-                        self.pages = vec![page];
-                        self.current = Some(0);
-                        if std::mem::take(&mut self.print_next) {
-                            self.print_shown();
-                        }
-                        self.note = format!("Foto acquisita · {w} × {h} pixel a {dpi} dpi");
-                        if self.photo.auto_save {
-                            let folder = self.folder();
-                            let _ = std::fs::create_dir_all(&folder);
-                            let path = folder
-                                .join(Self::stamped(self.name(), self.photo.output.extension()));
-                            self.note = match self.write(&path) {
-                                Ok(_) => {
-                                    notify("Foto salvata", &path.display().to_string(), false);
-                                    format!("Foto salvata in {}", path.display())
-                                }
-                                Err(e) => format!("Salvataggio non riuscito: {e}"),
-                            };
-                        }
-                    }
+                let job = self.job.take();
+                for (image, origin) in Self::cut(image, job.as_ref()) {
+                    self.add_page(image, origin);
                 }
                 self.result_view = View::default();
                 self.tab = Tab::Result;
+                if self.jobs.is_empty() {
+                    self.finish_batch();
+                } else {
+                    self.start(Purpose::Page);
+                }
             }
+        }
+    }
+
+    /// A page (or photo) scanned: added, or put in place of the one being
+    /// redone.
+    fn add_page(&mut self, image: Image, origin: Option<Found>) {
+        let (w, h, dpi) = (image.width, image.height, image.dpi);
+        let mut page = Page::new(Raw::new(image), *self.settings());
+        page.origin = origin;
+        let first = self.batch.0 == 0;
+        self.batch.0 += 1;
+        let of = if self.batch.1 > 1 {
+            format!(" ({} di {})", self.batch.0, self.batch.1)
+        } else {
+            String::new()
+        };
+        match (self.redo, self.kind) {
+            (Some(index), _) if self.redo_auto => {
+                self.redo = None;
+                self.redo_auto = false;
+                if index < self.pages.len() {
+                    self.pages[index] = page;
+                    self.current = Some(index);
+                }
+                self.note = format!("Pagina {} rifatta", index + 1);
+                notify(&self.note, "", false);
+            }
+            (Some(index), _) => {
+                self.redo = None;
+                self.redone = Some((index, page));
+                self.note = format!(
+                    "Nuova scansione della pagina {}: tienila o lascia la vecchia",
+                    index + 1
+                );
+            }
+            (None, Kind::Document) => {
+                self.pages.push(page);
+                self.current = Some(self.pages.len() - 1);
+                self.note = format!(
+                    "Pagina {} acquisita{of} · {w} × {h} pixel a {dpi} dpi",
+                    self.pages.len()
+                );
+                notify(&format!("Pagina {} acquisita", self.pages.len()), "", false);
+            }
+            (None, Kind::Photo) => {
+                if first {
+                    self.pages.clear();
+                }
+                self.pages.push(page);
+                self.current = Some(if first { 0 } else { self.current.unwrap_or(0) });
+                self.note = format!("Foto acquisita{of} · {w} × {h} pixel a {dpi} dpi");
+            }
+        }
+    }
+
+    /// After the last pass: in Foto mode, print (photocopy) and save if
+    /// asked.
+    fn finish_batch(&mut self) {
+        if self.kind != Kind::Photo || self.redone.is_some() {
+            return;
+        }
+        let n = self.pages.len();
+        if std::mem::take(&mut self.print_next) {
+            self.print_shown();
+        }
+        if self.photo.auto_save && n > 0 {
+            let folder = self.folder();
+            let _ = std::fs::create_dir_all(&folder);
+            let path = folder.join(Self::stamped(self.name(), self.photo.output.extension()));
+            self.note = match self.write(&path) {
+                Ok(_) if n > 1 => {
+                    notify(
+                        &format!("{n} foto salvate"),
+                        &folder.display().to_string(),
+                        false,
+                    );
+                    format!("{n} foto salvate in {}", folder.display())
+                }
+                Ok(_) => {
+                    notify("Foto salvata", &path.display().to_string(), false);
+                    format!("Foto salvata in {}", path.display())
+                }
+                Err(e) => format!("Salvataggio non riuscito: {e}"),
+            };
+        } else if n > 1 {
+            self.note = format!("{n} foto acquisite: scegli a sinistra, salva con «Salva»");
+            notify(&format!("{n} foto acquisite"), "", false);
         }
     }
 
@@ -2227,6 +2501,7 @@ impl App {
     fn on_button(&mut self, button: hp3770_core::device::Button) {
         use hp3770_core::device::Button;
         if self.busy.is_some() {
+            self.note = format!("Tasto {} ignorato: scansione in corso", button.name());
             return;
         }
         let index = match button {
@@ -2244,7 +2519,14 @@ impl App {
                 self.start(Purpose::Page);
             }
             ButtonAction::RedoLast => match self.pages.len() {
-                0 => self.start(Purpose::Page),
+                0 => {
+                    self.note = "Nessuna pagina da rifare: Scan acquisisce la prima".into();
+                    notify(
+                        "Nessuna pagina da rifare",
+                        "Premi Scan per la prima pagina",
+                        false,
+                    );
+                }
                 n => {
                     self.redone = None;
                     self.redo = Some(n - 1);
@@ -2260,10 +2542,11 @@ impl App {
             }
             ButtonAction::SaveDocument => {
                 if self.pages.is_empty() {
+                    self.note = "Documento vuoto: premi Scan per acquisire una pagina".into();
                     notify(
                         "Documento vuoto",
                         "Premi Scan per acquisire una pagina",
-                        true,
+                        false,
                     );
                     return;
                 }
@@ -2316,7 +2599,7 @@ impl App {
 
     fn view(&self) -> Element<'_, Message> {
         let mut body = row![].height(Length::Fill);
-        if self.kind == Kind::Document {
+        if self.kind == Kind::Document || self.pages.len() > 1 {
             body = body.push(self.strip());
         }
         body = body.push(self.stage()).push(self.inspector());
@@ -2416,9 +2699,12 @@ impl App {
             },
             ..Default::default()
         });
-        let next = match self.kind {
-            Kind::Document => format!("Scansiona pagina {}", self.pages.len() + 1),
-            Kind::Photo => "Scansiona foto".into(),
+        let planned = self.plan().iter().map(|j| j.crops.len()).sum::<usize>();
+        let next = match (self.kind, planned) {
+            (Kind::Document, 0 | 1) => format!("Scansiona pagina {}", self.pages.len() + 1),
+            (Kind::Document, n) => format!("Scansiona {n} pagine"),
+            (Kind::Photo, 0 | 1) => "Scansiona foto".into(),
+            (Kind::Photo, n) => format!("Scansiona {n} foto"),
         };
         let bar = row![
             text("Scanjet 3770").size(15),
@@ -2461,7 +2747,11 @@ impl App {
                 .on_press_maybe(enabled.then_some(message))
         };
         let n = self.pages.len();
-        let mut list = column![text(format!("PAGINE · {n}")).size(11)].spacing(10);
+        let header = match self.kind {
+            Kind::Document => "PAGINE",
+            Kind::Photo => "FOTO",
+        };
+        let mut list = column![text(format!("{header} · {n}")).size(11)].spacing(10);
         for (i, page) in self.pages.iter().enumerate() {
             let selected = self.current == Some(i) && self.tab == Tab::Result;
             let thumb = button(
@@ -2547,6 +2837,11 @@ impl App {
                     "Premi «Anteprima» per vedere il vetro",
                     self.preview_view,
                     self.selection,
+                    if self.settings().auto_crop {
+                        self.found.iter().map(|f| f.corners()).collect()
+                    } else {
+                        Vec::new()
+                    },
                     Message::View,
                     Some(Message::Select),
                     pick,
@@ -2561,6 +2856,7 @@ impl App {
                     "Nessuna scansione: premi «Scansiona»",
                     self.result_view,
                     None,
+                    Vec::new(),
                     Message::View,
                     None,
                     pick,
@@ -2713,6 +3009,13 @@ impl App {
         let what = match purpose {
             Purpose::Preview => "Anteprima".to_string(),
             Purpose::Page => match self.kind {
+                _ if self.job.as_ref().is_some_and(|j| j.crops.len() > 1) => format!(
+                    "Scansione di {} originali in una passata",
+                    self.job.as_ref().map_or(0, |j| j.crops.len())
+                ),
+                _ if self.batch.1 > 1 => {
+                    format!("Scansione {} di {}", self.batch.0 + 1, self.batch.1)
+                }
                 Kind::Document => format!("Scansione pagina {}", self.pages.len() + 1),
                 Kind::Photo => "Scansione foto".to_string(),
             },
@@ -2827,19 +3130,95 @@ impl App {
                 .into()
             ),
             heading("Area"),
-            text(if self.selection.is_none() {
-                "Tutto il formato A4. Trascina sull'anteprima per scegliere un'area.".to_string()
-            } else {
-                format!("Da {x:.0}, {y:.0} mm · {wmm:.0} × {hmm:.0} mm")
-            })
-            .size(12),
-            text(format!(
-                "{w} × {h} pixel · in memoria {:.0} MB",
-                memory / 1e6
-            ))
-            .size(12),
+            checkbox(self.settings().auto_crop)
+                .label("Ritaglio automatico")
+                .on_toggle(Message::AutoCrop)
+                .text_size(13),
         ]
         .spacing(10);
+        let plan = self.plan();
+        if !plan.is_empty() {
+            let n = self.found.len();
+            pane = pane.push(
+                text(match n {
+                    1 => "Un originale riconosciuto sul vetro: sarà ritagliato e raddrizzato."
+                        .to_string(),
+                    n => format!(
+                        "{n} originali riconosciuti sul vetro: ognuno diventa un'immagine, \
+                         ritagliata e raddrizzata{}.",
+                        if plan.len() == 1 {
+                            ", in una passata sola"
+                        } else {
+                            ", uno alla volta"
+                        }
+                    ),
+                })
+                .size(12),
+            );
+            let mm = 25.4 / f32::from(PREVIEW_DPI);
+            for (i, f) in self.found.iter().enumerate() {
+                let tilt = if f.angle == 0.0 {
+                    "dritto".to_string()
+                } else {
+                    format!("storto di {:.1}°", f.angle.abs()).replace('.', ",")
+                };
+                pane = pane.push(
+                    row![
+                        text(format!(
+                            "{} · {:.0} × {:.0} mm · {tilt}",
+                            i + 1,
+                            f.width * mm,
+                            f.height * mm
+                        ))
+                        .size(12)
+                        .width(Length::Fill),
+                        button(text("Escludi").size(11))
+                            .padding([1, 6])
+                            .style(button::text)
+                            .on_press(Message::DropFound(i)),
+                    ]
+                    .align_y(Alignment::Center),
+                );
+            }
+            pane = pane.push(text(format!("in memoria fino a {:.0} MB", memory / 1e6)).size(12));
+        } else {
+            if self.settings().auto_crop && self.preview.is_some() {
+                pane = pane.push(
+                    text(if self.selection.is_some() {
+                        "La selezione ha la precedenza sul ritaglio automatico."
+                    } else {
+                        "Nessun originale riconosciuto (un foglio bianco sul coperchio \
+                         bianco può sfuggire): trascina sull'anteprima per scegliere l'area."
+                    })
+                    .size(11),
+                );
+            }
+            pane = pane
+                .push(
+                    text(if self.selection.is_none() {
+                        "Tutto il formato A4. Trascina sull'anteprima per scegliere un'area."
+                            .to_string()
+                    } else {
+                        format!("Da {x:.0}, {y:.0} mm · {wmm:.0} × {hmm:.0} mm")
+                    })
+                    .size(12),
+                )
+                .push(
+                    text(format!(
+                        "{w} × {h} pixel · in memoria {:.0} MB",
+                        memory / 1e6
+                    ))
+                    .size(12),
+                );
+        }
+        if self.settings().auto_crop && self.preview.is_some() {
+            pane = pane.push(
+                button(text("Riconosci di nuovo").size(12))
+                    .padding([3, 8])
+                    .style(button::secondary)
+                    .on_press(Message::Detect),
+            );
+        }
         if memory > LARGE_SCAN {
             pane = pane.push(
                 text(format!(
@@ -2851,7 +3230,7 @@ impl App {
                 .style(text::danger),
             );
         }
-        if self.settings().dpi > 1200 && self.selection.is_none() {
+        if self.settings().dpi > 1200 && self.selection.is_none() && plan.is_empty() {
             pane = pane.push(
                 text("2400 dpi servono per piccoli originali: seleziona l'area sull'anteprima.")
                     .size(12)
@@ -3161,6 +3540,36 @@ impl App {
         .into()
     }
 
+    /// Whether Windows opens its own scan app on a button press, and the
+    /// switch (Windows only, with the HP driver).
+    fn wia_row(&self) -> Element<'_, Message> {
+        match self.wia_quiet {
+            None => Space::new().into(),
+            Some(quiet) => column![
+                text(if quiet {
+                    "Windows lascia i tasti a questa app."
+                } else {
+                    "Windows apre anche la sua app di scansione a ogni tasto,                      e toglie lo scanner a questa."
+                })
+                .size(11),
+                button(
+                    text(if quiet {
+                        "Ridai i tasti a Windows"
+                    } else {
+                        "Usa i tasti dello scanner solo con questa app"
+                    })
+                    .size(12)
+                )
+                .padding([4, 10])
+                .style(if quiet { button::secondary } else { button::primary })
+                .on_press(Message::WiaQuiet(!quiet)),
+                text("Chiede una volta la conferma di amministratore.").size(11),
+            ]
+            .spacing(4)
+            .into(),
+        }
+    }
+
     /// The choice of what a front-panel button does.
     fn button_choice(&self, index: usize, label: &'static str) -> Element<'_, Message> {
         let (options, current): (&[ButtonAction], ButtonAction) = match self.kind {
@@ -3243,6 +3652,7 @@ impl App {
             self.button_choice(2, "Instant Share"),
             text("Valgono anche con l'app in secondo piano; ignorati durante una scansione.")
                 .size(11),
+            self.wia_row(),
             heading("Impostazioni"),
             text(format!("Salvate in {path}")).size(11),
             button(text("Ripristina impostazioni di fabbrica").size(13))
