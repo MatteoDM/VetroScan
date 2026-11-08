@@ -556,6 +556,7 @@ impl<T: Transport> Chip<T> {
         // the sensor's (2400 at 2400 dpi).
         let y = scan.resolution_y.max(dpi);
         let read = |left, width, height, resolution_y| ScanParams {
+            negative: scan.negative,
             depth: 8,
             resolution_x: dpi,
             resolution_y,

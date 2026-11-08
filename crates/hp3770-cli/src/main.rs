@@ -585,6 +585,7 @@ fn tma_scan(
     let request = Request {
         linear: true,
         transparency: true,
+        negative: film == Some(FilmArg::Negative),
         depth: 16,
         adjust: Adjustments {
             sharpen: 0.0,

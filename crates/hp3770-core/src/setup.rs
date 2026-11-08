@@ -29,7 +29,7 @@
 use crate::init::Registers;
 use crate::motor::{self, StepTables};
 use crate::profile::Profile;
-use crate::scan_modes::{self, Cph, SampleRate, ScanMode, Timing};
+use crate::scan_modes::{self, Cph, Exposure, SampleRate, ScanMode, Timing};
 use crate::{Error, Result};
 
 /// Size of the chip RAM in bytes (`mem_total` in hp3900).
@@ -55,6 +55,10 @@ pub struct ScanParams {
     pub width: u32,
     /// Lines.
     pub height: u32,
+    /// With the transparency adapter, the scan modes for negatives
+    /// ([`scan_modes::negative_mode`]): a longer line and an exposure of
+    /// its own for each colour.
+    pub negative: bool,
 }
 
 /// How the chip arranges the lines of the three colours, which the CCD
@@ -204,7 +208,12 @@ pub fn setup(
     hw: &Hardware,
     gain_offset: &GainOffset,
 ) -> Result<SetupInfo> {
-    let mode = scan_modes::colour_mode(params.resolution_x).ok_or_else(|| {
+    let mode = if params.negative {
+        scan_modes::negative_mode(params.resolution_x)
+    } else {
+        scan_modes::colour_mode(params.resolution_x)
+    }
+    .ok_or_else(|| {
         Error::InvalidArgument(format!("no scan mode at {} dpi", params.resolution_x))
     })?;
     let timing = mode.timing;
@@ -224,11 +233,24 @@ pub fn setup(
         line *= 1;
     }
     let line = line - 1;
-    for offset in [0x36, 0x3c, 0x42] {
-        regs.set_lsb(offset, 0, 3);
-    }
-    for offset in [0x33, 0x39, 0x3f] {
-        regs.set_lsb(offset, mode.ctpc, 3);
+    // Each colour's exposure (`EXPT`, E836, E83C, E842) and maximum
+    // exposure (`MEXPT`, E833, E839, E83F); without them in the mode, 0 and
+    // the line period. hp3900 also sets `EXPT` to `MEXPT` where `EXPT` is
+    // 0 and `MEXPT` shorter than the line: never so in the HP 3770's modes.
+    let exposure = mode.exposure.unwrap_or(
+        [Exposure {
+            expt: 0,
+            mexpt: mode.ctpc,
+        }; 3],
+    );
+    for (c, e) in exposure.iter().enumerate() {
+        let expt = if e.expt == 0 && line > e.mexpt {
+            e.mexpt
+        } else {
+            e.expt
+        };
+        regs.set_lsb(0x36 + 6 * c, expt, 3);
+        regs.set_lsb(0x33 + 6 * c, e.mexpt, 3);
     }
     regs.set_lsb(0x30, line, 3);
 

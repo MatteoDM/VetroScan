@@ -431,11 +431,21 @@ It needs no new hardware, only slides and negatives to put in the holder.
     the least dense film inside a frame can be light leaking past its edges), the gaps found
     against the film within 20 mm (the adapter's light is not even along the strip: its
     middle gets about 1.3 times the light of the slot), a positive of at most 2 decades.
-  Still open: the gains end at their maximum (31) on the slot, so the adapter's light is dim
-  for the sensor's exposure of the glass and the shadows of the positive are noisy: the
-  exposure of the scan modes for the adapter (hp3900 has them per type of scan) is the next
-  step; the light uneven along the strip (a correction along the travel, measured once on the
-  empty holder); slides not tried yet; the contract and the app (below) not started.
+  **Exposure for negatives** (the same night): the HP configuration has scan modes of their own
+  for the adapter, `[ScanTAColorMode*]` (slides: the glass's line) and `[ScanNegColorMode*]`
+  (negatives: a longer line, an exposure per colour). `scan_modes::NEGATIVE_MODES` take the
+  second `CTPC` of each, three times the glass's line, every colour exposed for all of it:
+  the gains come out at 11-16 (HP's own starting gains for negatives are 6/12/14), the slot
+  neutral, the noise halved (slot 3.3-4.5 % to 1.5-1.9 %, the dark of the holder 42-65 % to
+  20-30 %); 1200 dpi takes 153 s. Tried and left: the first `CTPC` (six times: gains at their
+  minimum and the brightest channel saturated in the calibration's reads) and HP's exposure
+  per colour (`EXPT`/`MEXPT`, kept in `NEGATIVE_EXPOSURES`: `MEXPT` how long, `EXPT` where it
+  starts; with them the calibration's reads, lengthened by `set_multi_exposure`, and the scan
+  did not expose red alike).
+  Still open: the light uneven along the strip (a correction along the travel, measured once
+  on the empty holder); the colour balance of the positive (a little cool with the new
+  exposure); slides not tried yet (their mode would be the glass's, the gains at their
+  maximum: perhaps the negatives' longer line for them too); the contract and the app (below).
 - **Driver**: the adapter's lamp (done: bit 5 of `E946` and bit 6 of `E965`, see above), its
   calibration (no white strip under the lid: what the HP driver does instead comes from the
   captures), the area of the holder; `hp3900` (`ST_TA`, `ST_NEG` in `hp3900_rts8822.c`) is the

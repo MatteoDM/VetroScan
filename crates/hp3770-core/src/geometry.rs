@@ -131,6 +131,7 @@ pub fn hp_window(dpi: u16, area: Area) -> Result<(ScanParams, Hardware)> {
         )));
     }
     let params = ScanParams {
+        negative: false,
         depth: 8,
         resolution_x: dpi / across as u16,
         resolution_y: dpi,

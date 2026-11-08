@@ -114,6 +114,7 @@ mod tests {
         // sent 105 lines more than the image (setup's extra lines, one more
         // than the samples need).
         let params = ScanParams {
+            negative: false,
             depth: 8,
             resolution_x: 1200,
             resolution_y: 2400,

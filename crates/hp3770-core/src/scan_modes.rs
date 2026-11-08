@@ -108,6 +108,21 @@ pub struct ScanMode {
     pub dummy_line: u8,
     /// Use the second motor resource table (`MotorPhase=1`).
     pub motor_phase: bool,
+    /// Exposure of red, green and blue (`EXPTn`, `MEXPTn`); `None` for the
+    /// whole line (`EXPT` 0, `MEXPT` the line period), as on the glass.
+    pub exposure: Option<[Exposure; 3]>,
+}
+
+/// The exposure of one colour in a line, in clock ticks: `EXPT` and
+/// `MEXPT` of the HP configuration, written to `E836`/`E833` (red),
+/// `E83C`/`E839` (green), `E842`/`E83F` (blue). How the chip uses the two is
+/// not known; the HP driver's values are copied as they are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Exposure {
+    /// `EXPT`.
+    pub expt: u32,
+    /// `MEXPT`.
+    pub mexpt: u32,
 }
 
 /// Timing 1, 1200 dpi colour: `[Timing]` section 4 of the file, line 15232.
@@ -378,6 +393,7 @@ pub const COLOUR_MODES: [ScanMode; 5] = [
         motor_back_step: 96,
         dummy_line: 1,
         motor_phase: true,
+        exposure: None,
     },
     // [ScanColorMode2] SampleRate=0 SystemClock=0x5 ScanMotorStepType=1 0
     // CTPC=11999 15983 15999 Timing=2 MotorCurve=0 9 MotorBackStep=128 256
@@ -393,6 +409,7 @@ pub const COLOUR_MODES: [ScanMode; 5] = [
         motor_back_step: 128,
         dummy_line: 1,
         motor_phase: true,
+        exposure: None,
     },
     // [ScanColorMode3] SampleRate=0 SystemClock=0x4 ScanMotorStepType=1 0
     // CTPC=2999 3983 3999 3983 2799 Timing=3 MotorCurve=10
@@ -408,6 +425,7 @@ pub const COLOUR_MODES: [ScanMode; 5] = [
         motor_back_step: 256,
         dummy_line: 1,
         motor_phase: false,
+        exposure: None,
     },
     // [ScanColorMode4] SampleRate=0 SystemClock=4 ScanMotorStepType=1
     // CTPC=1991 2999 Timing=4 MotorCurve=11 MotorBackStep=1024 256 928.
@@ -422,6 +440,7 @@ pub const COLOUR_MODES: [ScanMode; 5] = [
         motor_back_step: 1024,
         dummy_line: 1,
         motor_phase: false,
+        exposure: None,
     },
     // [ScanColorMode5] SampleRate=0 SystemClock=4 ScanMotorStepType=1
     // CTPC=2999 3983 3007 Timing=3 4 MotorCurve=12 MotorBackStep=1024 256
@@ -437,8 +456,118 @@ pub const COLOUR_MODES: [ScanMode; 5] = [
         motor_back_step: 1024,
         dummy_line: 1,
         motor_phase: false,
+        exposure: None,
     },
 ];
+
+/// The exposures of a negative mode: red, green, blue as (`EXPT`, `MEXPT`).
+const fn exposures(e: [(u32, u32); 3]) -> Option<[Exposure; 3]> {
+    Some([
+        Exposure {
+            expt: e[0].0,
+            mexpt: e[0].1,
+        },
+        Exposure {
+            expt: e[1].0,
+            mexpt: e[1].1,
+        },
+        Exposure {
+            expt: e[2].0,
+            mexpt: e[2].1,
+        },
+    ])
+}
+
+/// Colour scan modes for negatives with the transparency adapter, by
+/// resolution (`[ScanNegColorMode1]`-`[ScanNegColorMode5]`, next to the
+/// glass's sections in the file). The line is three times as long as on
+/// the glass: the second value of `CTPC` (the first, six times as long,
+/// tried on 8 November 2026, gave so much light that the calibration's
+/// gains ended at their minimum, 0.91 times, and the brightest channel
+/// saturated in its reads; with the glass's line they ended at their
+/// maximum, 3.1 times, and the shadows were noisy). The motor runs at
+/// constant speed (`MotorCurve=0`) at every resolution.
+///
+/// The HP configuration also gives each colour its own exposure, kept here
+/// in [`NEGATIVE_EXPOSURES`] but not used: `MEXPT` is how long the colour
+/// is exposed and `EXPT` where in the line it starts (`EXPT` + `MEXPT` is
+/// the line), red about 0.7 of the line, green 0.4, blue all of it. Tried on
+/// 8 November 2026: the calibration's reads (which [`crate::setup`]
+/// lengthens with `set_multi_exposure` when the motor runs at constant
+/// speed) and the scan then do not expose red and green alike: red came
+/// out at its gain's maximum in the calibration and saturated in the scan.
+/// Until the chip's use of the two is understood, every colour gets the
+/// whole longer line, as on the glass.
+pub const NEGATIVE_MODES: [ScanMode; 5] = [
+    // [ScanNegColorMode1] SystemClock=5 CTPC=71399 35999 (the second) Timing=1
+    // MotorBackStep=96 256 MEXPT1=50999 EXPT1=20399 MEXPT2=30599
+    // EXPT2=40799 MEXPT3=71399 EXPT3=0 MotorPhase=1.
+    ScanMode {
+        ctpc: 35999,
+        motor_curve: None,
+        motor_back_step: 96,
+        motor_phase: true,
+        exposure: None,
+        ..COLOUR_MODES[0]
+    },
+    // [ScanNegColorMode2]: as mode 1, Timing=2, MotorBackStep=128.
+    ScanMode {
+        ctpc: 35999,
+        motor_curve: None,
+        motor_back_step: 128,
+        motor_phase: true,
+        exposure: None,
+        ..COLOUR_MODES[1]
+    },
+    // [ScanNegColorMode3] SystemClock=4 CTPC=17807 8999 (the second) Timing=3
+    // MotorBackStep=256 MEXPT1=12719 EXPT1=5087 MEXPT2=7631 EXPT2=10175
+    // MEXPT3=17807 EXPT3=0 MotorPhase=1.
+    ScanMode {
+        ctpc: 8999,
+        motor_curve: None,
+        motor_back_step: 256,
+        motor_phase: true,
+        exposure: None,
+        ..COLOUR_MODES[2]
+    },
+    // [ScanNegColorMode4] SystemClock=4 CTPC=11759 5975 (the second) Timing=4
+    // MotorBackStep=1024 MEXPT1=8399 EXPT1=3359 MEXPT2=5039 EXPT2=6719
+    // MEXPT3=11759 EXPT3=0 MotorPhase=1.
+    ScanMode {
+        ctpc: 5975,
+        motor_curve: None,
+        motor_back_step: 1024,
+        motor_phase: true,
+        exposure: None,
+        ..COLOUR_MODES[3]
+    },
+    // [ScanNegColorMode5]: the exposures of mode 3, Timing=3,
+    // MotorBackStep=1024.
+    ScanMode {
+        ctpc: 8999,
+        motor_curve: None,
+        motor_back_step: 1024,
+        motor_phase: true,
+        exposure: None,
+        ..COLOUR_MODES[4]
+    },
+];
+
+/// The HP configuration's exposures of red, green and blue (`EXPTn`,
+/// `MEXPTn`) for each mode of [`NEGATIVE_MODES`], in the same order. Not
+/// used (see [`NEGATIVE_MODES`]).
+pub const NEGATIVE_EXPOSURES: [Option<[Exposure; 3]>; 5] = [
+    exposures([(20399, 50999), (40799, 30599), (0, 71399)]),
+    exposures([(20399, 50999), (40799, 30599), (0, 71399)]),
+    exposures([(5087, 12719), (10175, 7631), (0, 17807)]),
+    exposures([(3359, 8399), (6719, 5039), (0, 11759)]),
+    exposures([(5087, 12719), (10175, 7631), (0, 17807)]),
+];
+
+/// The scan mode for negatives at a horizontal resolution.
+pub fn negative_mode(resolution: u16) -> Option<&'static ScanMode> {
+    NEGATIVE_MODES.iter().find(|m| m.resolution == resolution)
+}
 
 /// The colour scan mode for a horizontal resolution (`RTS_GetScanmode`).
 pub fn colour_mode(resolution: u16) -> Option<&'static ScanMode> {

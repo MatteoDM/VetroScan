@@ -47,6 +47,11 @@ pub struct Request {
     /// [`crate::profile::Transparency::area`]). Experimental: checked on
     /// one scanner, no capture of the HP driver to compare with.
     pub transparency: bool,
+    /// With [`Request::transparency`], negatives: the scan modes for
+    /// negatives (a line about six times as long, an exposure per colour;
+    /// [`crate::scan_modes::negative_mode`]), for the calibration and the
+    /// scan alike.
+    pub negative: bool,
 }
 
 /// The transparency adapter's lamp warms up for at least this long (HP's
@@ -65,6 +70,7 @@ impl Request {
             fast_travel: true,
             depth: 8,
             transparency: false,
+            negative: false,
         }
     }
 }
@@ -143,6 +149,7 @@ pub fn scan<T: Transport>(
     progress: &mut dyn FnMut(Stage) -> bool,
 ) -> Result<(Image, Report)> {
     let (mut params, hw) = geometry::scan_window(request.dpi, request.area)?;
+    params.negative = request.transparency && request.negative;
     match request.depth {
         8 => {}
         16 => params.depth = 16,

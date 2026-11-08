@@ -781,6 +781,7 @@ fn hp_reads(
 ) -> Vec<BlockRead> {
     use hp3770_core::setup::{ArrangeLine, Hardware, ScanParams};
     let read = |left, width, height, resolution_y| ScanParams {
+        negative: false,
         depth: 8,
         resolution_x: dpi,
         resolution_y,
@@ -1035,6 +1036,7 @@ fn get_image_matches_the_hp_driver() {
     init.0[0x13] |= 0x80;
     init.0[0x154..0x156].copy_from_slice(&blocks[1].0[0x154..0x156]);
     let params = ScanParams {
+        negative: false,
         depth: 8,
         resolution_x: 300,
         resolution_y: 300,
@@ -1087,6 +1089,7 @@ fn white_strip_read_matches_the_hp_driver() {
     init.0[0x13] |= 0x80;
     init.0[0x154..0x156].copy_from_slice(&blocks[15].0[0x154..0x156]);
     let params = ScanParams {
+        negative: false,
         depth: 8,
         resolution_x: 300,
         resolution_y: 200,
@@ -1258,6 +1261,7 @@ fn scan_matches_the_hp_driver() {
         scan: true,
         lamp_off: false,
         params: ScanParams {
+            negative: false,
             depth: 8,
             resolution_x: 300,
             resolution_y: 300,
@@ -1389,6 +1393,7 @@ fn calibration_flow_matches_the_hp_driver() {
     let mut init = Registers::default();
     init.0.copy_from_slice(&blocks[0].0);
     let scan = ScanParams {
+        negative: false,
         depth: 8,
         resolution_x: 300,
         resolution_y: 300,
