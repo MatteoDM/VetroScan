@@ -319,7 +319,12 @@ jobs:
           test -x /usr/bin/hp3770
           test ! -e /usr/bin/hp3770-app
           test -f /usr/lib/udev/rules.d/70-hp3770.rules
-          if dpkg -s hp3770 >/dev/null 2>&1; then echo "hp3770 still installed" >&2; exit 1; fi
+          # Replaced, dpkg may still know the old package as "config-files": that is fine.
+          status="$(dpkg-query -W -f='${db:Status-Status}' hp3770 2>/dev/null || true)"
+          case "$status" in
+            "" | not-installed | config-files) ;;
+            *) echo "hp3770 still there: $status" >&2; exit 1 ;;
+          esac
           sudo apt-get remove -y vetroscan
           echo "hp3770 v0.2.0 replaced by vetroscan"
 
