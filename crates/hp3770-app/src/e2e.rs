@@ -889,7 +889,8 @@ fn ctrl_d_duplicates_the_page_shown() {
         modified_key: iced::keyboard::Key::Character("d".into()),
         physical_key: iced::keyboard::key::Physical::Code(iced::keyboard::key::Code::KeyD),
         location: iced::keyboard::Location::Standard,
-        modifiers: iced::keyboard::Modifiers::CTRL,
+        // Ctrl, or Cmd on macOS, as every shortcut of the app.
+        modifiers: iced::keyboard::Modifiers::COMMAND,
         text: None,
         repeat: false,
     };
