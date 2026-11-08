@@ -1,6 +1,6 @@
 # Piano: da «app per l'HP 3770» ad «app per scanner»
 
-Stato: **Fasi 0 e 1 fatte (v0.1.2; la Fase 1 esce con la v0.2.0); prossima: Fase 2**
+Stato: **Fasi 0, 1 e 2 fatte (v0.1.2; le Fasi 1–2 escono con la v0.2.0); prossima: Fase 3**
 (piano scritto l'8 novembre 2026, dopo la v0.1.1; aggiornato l'8 novembre 2026 con le lingue,
 il nome nuovo e le fasi rimandate). Ogni fase si chiude con un commit, i test verdi e una
 versione; qui si segna cosa è fatto.
@@ -92,6 +92,20 @@ Nuovo crate **`scanner-api`**, che non sa niente di USB né di chip:
 - Errori comuni: annullato, scollegato, occupato, altro.
 - **Fatto quando:** il trait è documentato e lo scanner finto lo implementa.
 
+Fatta. Com'è andata:
+
+- `scanner-api` dipende solo da `scan-imaging` (per `Image` e `Tone`). Una scansione dà
+  sempre i campioni **lineari** a colori (8 bit, e 16 se chiesti): l'app fa già da sé
+  regolazioni, grigio e bianco e nero, quindi `ScanRequest` è solo risoluzione, area e
+  profondità; `Capabilities::modes` dice cosa lo scanner offre di suo.
+- `poll_buttons()` dà i tasti premuti ora (bit `i` = `capabilities().buttons[i]`); chi
+  legge riconosce le pressioni. `lamp_off()` ha un'implementazione di base che risponde
+  `Unsupported`. `check()` controlla una richiesta contro le capacità.
+- Lo scanner finto è `scanner_api::fake`, in due modelli: `flatbed()` (come il 3770) e
+  `a3()` (vetro A3, fino a 1200 dpi, solo 8 bit, due tasti, niente lampada), con
+  `Controls` per tenere premuti i tasti e staccare il cavo. L'app usa già la sua immagine
+  del vetro.
+
 ## Fase 3 · l'HP 3770 dietro il contratto → v0.2.0
 
 - Backend **`rts8822`** nel driver: `impl Scanner` per chip + profilo.
@@ -163,16 +177,15 @@ Documentazione, commit e note di rilascio passano all'inglese; l'app resta itali
 
 ## Fase 7 · un nome nuovo, non legato all'HP 3770 → v0.4.0
 
-Con più scanner il nome «HP Scanjet 3770» non descrive più l'app. Proposta: **Scansia**
-(italiano: lo scaffale dove si mettono in ordine le carte; contiene «scan» e si pronuncia
-facilmente anche in inglese). Alternative: **Platen** (il vetro dello scanner, in inglese),
-**Vetro**. Prima di scegliere si controlla che il nome sia libero: crates.io, GitHub,
-Flathub, AUR, Homebrew, marchi registrati. **Decisione dell'utente.**
+Con più scanner il nome «HP Scanjet 3770» non descrive più l'app. **Deciso dall'utente
+(8 novembre 2026): retroscan.** Si scrive `retroscan` in binari, pacchetti, crate e cartelle,
+«RetroScan» dove lo si mostra (titolo, barra, menu). Prima di pubblicare si controlla che sia
+libero: crates.io, GitHub, Flathub, AUR, Homebrew, marchi registrati.
 
-- **Cosa cambia nome**: titolo della finestra e nome nella barra, binari (`scansia` per
+- **Cosa cambia nome**: titolo della finestra e nome nella barra, binari (`retroscan` per
   l'app, la CLI resta anche come `hp3770` finché serve), pacchetti
-  (`scansia-vX.Y.Z-<sistema>.<ext>`), `.desktop` e icona, bundle macOS e `.dmg`,
-  crate dell'app e dell'export (`scansia-app`, `scansia-export`; il driver resta
+  (`retroscan-vX.Y.Z-<sistema>.<ext>`), `.desktop` e icona, bundle macOS e `.dmg`,
+  crate dell'app e dell'export (`retroscan-app`, `retroscan-export`; il driver resta
   `hp3770-core`, o diventa `rts88xx` con la Fase 8), README e documenti.
 - **Cosa non deve rompersi**:
   - Windows: **l'`AppId` dell'installer non cambia** (è così che Windows aggiorna e
@@ -182,7 +195,7 @@ Flathub, AUR, Homebrew, marchi registrati. **Decisione dell'utente.**
     l'aggiornamento sostituisce il vecchio; la regola udev resta valida (cambia solo il nome
     del file, con la vecchia tolta in `postinstall.sh`). AUR: pacchetto nuovo e `hp3770-git`
     che rimanda a quello.
-  - Preferenze e preset: la cartella passa da `…/hp3770` a `…/scansia`; al primo avvio si
+  - Preferenze e preset: la cartella passa da `…/hp3770` a `…/retroscan`; al primo avvio si
     copiano i file vecchi (migrazione con test), senza perdere niente.
   - Il repository GitHub (`MatteoDM/scanner`) è già generico; i link alle release vecchie
     restano validi.
