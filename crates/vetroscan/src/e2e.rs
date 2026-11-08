@@ -1444,6 +1444,8 @@ fn the_app_speaks_english_when_asked_and_italian_again() {
     let mut ui = Ui::new();
     assert!(ui.shows("Anteprima"));
     ui.send(Message::Language(LangChoice::En));
+    // The note of before was Italian: it gives way to one in English.
+    assert_eq!(ui.app.note, "Language changed");
     assert!(ui.shows("Preview"));
     assert!(ui.shows("Scan page 1"));
     assert!(!ui.shows("Anteprima"));
@@ -1466,8 +1468,16 @@ fn the_app_speaks_english_when_asked_and_italian_again() {
     ] {
         assert!(ui.shows(label), "{label}");
     }
-    // Numbers the English way.
+    // Numbers the English way: in the editor, next to the sliders, in the
+    // sizes of the PDF.
     assert_eq!(crate::editor::number(2.5, 1), "2.5");
+    assert_eq!(crate::Field::Exposure.format(0.5), "0.50");
+    assert_eq!(crate::human_size(4_928_307), "4.7 MB");
+    // In the editor "Annulla" is Undo, in the questions Cancel.
+    ui.send(Message::Edit(crate::EditMsg::Open(0)));
+    assert!(ui.shows("Undo"));
+    assert!(!ui.shows("Cancel"));
+    ui.send(Message::Edit(crate::EditMsg::Discard));
     ui.send(Message::Pane(crate::Pane::Output));
     ui.send(Message::Save);
     assert_eq!(ui.saved().len(), 1, "{:?} {}", ui.saved(), ui.app.note);
@@ -1475,8 +1485,11 @@ fn the_app_speaks_english_when_asked_and_italian_again() {
     // Remembered, and back to Italian.
     assert_eq!(ui.app.prefs().language, "english");
     ui.send(Message::Language(LangChoice::It));
+    assert_eq!(ui.app.note, "Lingua cambiata");
     assert!(ui.shows("Anteprima"));
     assert_eq!(crate::editor::number(2.5, 1), "2,5");
+    assert_eq!(crate::Field::Exposure.format(0.5), "0,50");
+    assert_eq!(crate::human_size(4_928_307), "4,7 MB");
 }
 
 #[test]
@@ -1534,8 +1547,32 @@ fn tour() {
         shot(&mut ui, "prefs");
         ui.send(Message::Edit(EditMsg::Open(0)));
         shot(&mut ui, "editor");
+        ui.send(Message::Edit(EditMsg::Section(
+            crate::editor::Section::Frame,
+        )));
+        shot(&mut ui, "editor-crop");
+        ui.send(Message::Edit(EditMsg::Section(
+            crate::editor::Section::Size,
+        )));
+        shot(&mut ui, "editor-size");
         ui.send(Message::Edit(EditMsg::Discard));
         ui.send(Message::Kind(Kind::Photo));
         shot(&mut ui, "question");
+        // Photo: the originals found on the glass, its formats, its buttons.
+        ui.send(Message::Confirm(true));
+        ui.send(Message::Pane(crate::Pane::Scan));
+        ui.send(Message::Preview);
+        ui.settle();
+        shot(&mut ui, "photo-scan");
+        ui.scan(1);
+        // The photo kept from the document is not saved: scan anyway.
+        if ui.question().is_some() {
+            ui.send(Message::Confirm(true));
+            ui.settle();
+        }
+        ui.send(Message::Pane(crate::Pane::Output));
+        shot(&mut ui, "photo-output");
+        ui.send(Message::Pane(crate::Pane::Prefs));
+        shot(&mut ui, "photo-prefs");
     }
 }

@@ -1,9 +1,9 @@
 # Installing the driver and the app, system by system
 
-The **HP Scanjet 3770** (USB `03f0:2505`) works with an app, **VetroScan** (`vetroscan`), and a command
-(`hp3770`) that talk to the scanner directly over USB. **No SANE, no kernel modules, no HP
-software are needed**: the "driver" is inside the app. What changes from one system to
-another is only **how the system lets a normal program open the scanner**.
+The **HP Scanjet 3770** (USB `03f0:2505`) works with an app, **VetroScan** (`vetroscan`),
+and a command (`hp3770`) that talk to the scanner directly over USB. **No SANE, no kernel
+modules, no HP software are needed**: the "driver" is inside the app. What changes from one
+system to another is only **how the system lets a normal program open the scanner**.
 
 | System | What the scanner needs | Package to download |
 |---|---|---|
@@ -84,10 +84,10 @@ What the packages install:
 4. Open the app from the application launcher (in Omarchy **Super + Alt + Space**, type
    "VetroScan").
 
-If you had installed from source with `cargo install` or the AUR package `vetroscan-git`
-(`hp3770-git` before v0.3), remove them first: `cargo uninstall vetroscan hp3770-cli` or
-`sudo pacman -R vetroscan-git`. A package of v0.2 or older (`hp3770`) is replaced by the new
-one by itself.
+If you had installed from source with `cargo install` or the AUR package `vetroscan-git`,
+remove them first: `cargo uninstall vetroscan hp3770-cli` or `sudo pacman -R vetroscan-git`
+(up to v0.2 they were called `hp3770-app` and `hp3770-git`). A package of v0.2 or older
+(`hp3770`) is replaced by the new one by itself.
 
 **Updating:** download the new package and repeat step 2.
 **Uninstalling:** `sudo pacman -R vetroscan`
@@ -333,7 +333,10 @@ sudo ln -sf "/Applications/VetroScan.app/Contents/MacOS/hp3770" /usr/local/bin/h
 
 Then, with the scanner plugged in, `hp3770 list` and `hp3770 status`.
 
-- **Updating:** download the new `.dmg` and drag the app over the old one.
+- **Updating:** download the new `.dmg` and drag the app over the old one. Up to v0.2 the
+  app was called **HP Scanjet 3770**: drag that one to the Bin, and if you had made the link
+  to the `hp3770` command, make it again as above (it pointed inside the old app). The
+  settings come along.
 - **Uninstalling:** drag **VetroScan** from Applications to the Bin, and
   `sudo rm /usr/local/bin/hp3770` if you had made the link.
 - **The photocopy** prints on the Mac's default printer.

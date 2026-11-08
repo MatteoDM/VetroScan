@@ -393,7 +393,7 @@ viewer, or the **E** key while looking at a page.
 - Changing mode, going back to the preview, making a new scan or moving, deleting or redoing a
   page, the editor closes **keeping** the changes.
 
-Above the viewer there is the bar **Editing page N** with **Cancel**, **Redo**, **Discard** and
+Above the viewer there is the bar **Editing page N** with **Undo**, **Redo**, **Discard** and
 **Apply**. The editor has its own history: **Ctrl+Z** and **Ctrl+Y** undo and redo only the
 steps made inside it. **Back to the original**, at the top right of the panel, puts the page
 back as it was just scanned (this too is undone with Ctrl+Z).
@@ -632,7 +632,8 @@ The fourth tab on the right. Every change is saved by itself.
 
   If it does not exist, the app makes it the first time you save.
 - **File names**: how file names start, separately for **Documents** and **Photo** (by
-  default `documento` and `foto`). Date and time come after; below there is an example.
+  default `documento` and `foto`, in Italian like the folder). Date and time come after;
+  below there is an example.
 - **Scanner**: with several scanners connected, **Use** chooses which one.
 - **Scanner buttons in Document / in Photo**: what each button of the scanner in use does in
   the mode you are in. To set the other mode, go to it first. Only for a scanner with buttons.

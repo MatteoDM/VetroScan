@@ -816,7 +816,10 @@ impl App {
                 .style(button::secondary)
                 .on_press(m.into())
         };
-        let nudge = |label: &'static str, d: f32| {
+        // "−0,1°" in Italian, "−0.1°" in English.
+        let nudge = |d: f32| {
+            let sign = if d < 0.0 { "−" } else { "+" };
+            let label = format!("{sign}{}°", number(d.abs(), 1));
             button(text(label).size(11).center().width(Length::Fill))
                 .width(Length::Fill)
                 .padding([3, 4])
@@ -899,13 +902,7 @@ impl App {
                 slider(-MAX_ANGLE..=MAX_ANGLE, angle, |a| EditMsg::Angle(a).into()).step(0.1f32)
             )
             .on_double_click(EditMsg::Angle(0.0).into()),
-            row![
-                nudge("−1°", -1.0),
-                nudge("−0,1°", -0.1),
-                nudge("+0,1°", 0.1),
-                nudge("+1°", 1.0),
-            ]
-            .spacing(4),
+            row![nudge(-1.0), nudge(-0.1), nudge(0.1), nudge(1.0),].spacing(4),
             text(tr(
                 "Allinea un bordo o una riga di testo alla griglia. Finché non scegli un \
                  ritaglio, gli angoli vuoti vengono tagliati da soli.",
@@ -1088,7 +1085,10 @@ impl App {
                     &[("name", &self.page_name(e.index))]
                 ))
                 .size(13),
-                small(tr("Annulla"), (!e.undo.is_empty()).then_some(EditMsg::Undo)),
+                small(
+                    tr("undo|Annulla"),
+                    (!e.undo.is_empty()).then_some(EditMsg::Undo)
+                ),
                 small(tr("Ripeti"), (!e.redo.is_empty()).then_some(EditMsg::Redo)),
                 button(text(tr("Scarta")).size(13))
                     .style(button::secondary)

@@ -280,7 +280,7 @@ and folders, "VetroScan" where it is shown; free on crates.io and on GitHub. Bel
     start the old files are copied (migration with a test), without losing anything.
   - The GitHub repository (`MatteoDM/scanner`) is already generic; the links to old releases
     stay valid.
-- **Done when:** an installation of v0.3.x updates to the new one on Windows and on Linux
+- **Done when:** an installation of v0.2.0 updates to the new one on Windows and on Linux
   (deb and rpm) keeping preferences and presets, and the final checks below are clean.
 
 How it went:

@@ -37,6 +37,13 @@ GitHub; here they are in English.
   README is in `README.it.md`. The guides have English names: `docs/install.md`,
   `docs/install-linux.md`, `docs/usage.md`, `docs/usb-protocol.md`.
 
+### Fixed
+- Texts cut off in the right panel: the action «Save the document and open the folder» of
+  the scanner buttons in the Preferences, and the PDF orientation «Automatic» (it was
+  «Automatic (like the scan)»).
+- The percentages of blacks and whites clipped under the histogram have a decimal comma in
+  Italian, like the other numbers.
+
 ## [0.2.0] - 2026-11-08
 
 ### Added

@@ -412,7 +412,7 @@ impl Sheet {
 impl std::fmt::Display for Sheet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Self::Auto => tr("Automatico (come la scansione)"),
+            Self::Auto => tr("Automatico"),
             Self::Portrait => tr("Verticale"),
             Self::Landscape => tr("Orizzontale"),
         })
@@ -498,7 +498,7 @@ fn human_size(bytes: u64) -> String {
         } else {
             format!("{mb:.0}")
         };
-        format!("{} MB", text.replace('.', ","))
+        format!("{} MB", i18n::decimal(text))
     }
 }
 
@@ -1694,7 +1694,7 @@ impl Field {
 
     fn format(self, v: f32) -> String {
         if self.step() < 1.0 {
-            format!("{v:.2}").replace('.', ",")
+            i18n::decimal(format!("{v:.2}"))
         } else {
             format!("{v:.0}")
         }
@@ -3484,7 +3484,12 @@ impl App {
             Message::Theme(choice) => self.theme = choice,
             Message::Language(choice) => {
                 self.language = choice;
+                let before = i18n::current();
                 i18n::set(choice.resolve());
+                // The last note was written in the old language.
+                if i18n::current() != before {
+                    self.note = tr("Lingua cambiata").into();
+                }
             }
             Message::Kind(kind) => {
                 // Not during a scan: its pages go where the mode says.
@@ -5116,10 +5121,12 @@ impl App {
             s.pdf_limit_kb
                 .map(|kb| {
                     let mb = f64::from(kb) / 1024.0;
-                    format!("{mb:.2}")
-                        .trim_end_matches('0')
-                        .trim_end_matches('.')
-                        .replace('.', ",")
+                    i18n::decimal(
+                        format!("{mb:.2}")
+                            .trim_end_matches('0')
+                            .trim_end_matches('.')
+                            .to_string(),
+                    )
                 })
                 .unwrap_or_default()
         });
@@ -5746,7 +5753,7 @@ impl App {
                 text(trf(
                     "Scansione molto grande: circa {gb} GB e alcuni minuti. \
                      Seleziona un'area o abbassa la risoluzione se non serve tutta.",
-                    &[("gb", &format!("{:.1}", memory / 1e9))],
+                    &[("gb", &i18n::decimal(format!("{:.1}", memory / 1e9)))],
                 ))
                 .size(12)
                 .style(text::danger),
@@ -5854,12 +5861,15 @@ impl App {
                     column![
                         canvas(hist).width(Length::Fill).height(84),
                         row![
-                            text(trf("Neri tagliati {p}%", &[("p", &format!("{black:.1}"))],))
-                                .size(11)
-                                .width(Length::Fill),
+                            text(trf(
+                                "Neri tagliati {p}%",
+                                &[("p", &i18n::decimal(format!("{black:.1}")))],
+                            ))
+                            .size(11)
+                            .width(Length::Fill),
                             text(trf(
                                 "Bianchi tagliati {p}%",
-                                &[("p", &format!("{white:.1}"))],
+                                &[("p", &i18n::decimal(format!("{white:.1}")))],
                             ))
                             .size(11),
                         ],
@@ -6242,19 +6252,22 @@ impl App {
         col.into()
     }
 
-    /// The choice of what a front-panel button does.
+    /// The choice of what a front-panel button does: the label above, so
+    /// that the longest action ("Save the document and open the folder")
+    /// has the whole width.
     fn button_choice(&self, index: usize, label: String) -> Element<'_, Message> {
         let options = ButtonAction::allowed(self.kind);
         let current = self.button_action(self.kind, index);
-        labelled(
-            label,
+        column![
+            text(label).size(13),
             pick_list(options, Some(current), move |a| {
                 Message::ButtonAction(index, a)
             })
             .width(Length::Fill)
-            .text_size(13)
-            .into(),
-        )
+            .text_size(13),
+        ]
+        .spacing(4)
+        .into()
     }
 
     fn prefs_pane(&self) -> Element<'_, Message> {

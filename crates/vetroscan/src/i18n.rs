@@ -138,10 +138,16 @@ pub fn current() -> Lang {
 }
 
 /// The text `it` (Italian) in the language in use.
+///
+/// An Italian word with two meanings in English carries its meaning in
+/// front, gettext's `msgctxt`: `tr("undo|Annulla")` is "Annulla" in Italian
+/// and the English of the key `undo|Annulla` ("Undo"), while
+/// `tr("Annulla")` stays "Cancel".
 pub fn tr(it: &'static str) -> &'static str {
+    let italian = it.split_once('|').map_or(it, |(_, text)| text);
     match current() {
-        Lang::It => it,
-        Lang::En => english().get(it).copied().unwrap_or(it),
+        Lang::It => italian,
+        Lang::En => english().get(it).copied().unwrap_or(italian),
     }
 }
 

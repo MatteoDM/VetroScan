@@ -43,7 +43,10 @@ Every change visible to whoever uses the app or the `hp3770` command goes under
    ```bash
    I18N_KEYS=keys.json cargo test -p vetroscan i18n::keys -- --ignored
    ```
-4. A literal that is not for people (a command, a registry name, a file name) but looks like
+4. An Italian word with two meanings in English gets its meaning in front, separated by
+   `|`: `tr("undo|Annulla")` shows "Annulla" in Italian and "Undo" in English, while
+   `tr("Annulla")` is "Cancel". The English entry has the whole key.
+5. A literal that is not for people (a command, a registry name, a file name) but looks like
    text is marked with `// not translated` on its line or the line before.
 
 ## Scanner functions

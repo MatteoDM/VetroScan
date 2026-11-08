@@ -1,8 +1,8 @@
 # Installing the scanner on a new computer with Omarchy
 
 A step-by-step guide, also for people who have never used the terminal. At the end the
-**HP Scanjet 3770** works with its app, **VetroScan**, which opens from the applications menu like any
-other program.
+**HP Scanjet 3770** works with its app, **VetroScan**, which opens from the applications
+menu like any other program.
 
 Time: about 15 minutes, almost all of it waiting while the computer compiles.
 
@@ -192,6 +192,18 @@ cargo install --path crates/hp3770-cli --locked
 
 The app's settings stay: they are saved in `~/.config/vetroscan`.
 
+Up to v0.2 the app was called "HP Scanjet 3770" and its program `hp3770-app`. Updating from
+one of those versions, after the commands above do step 6 again and remove the old program
+and its menu entry, so that the menu does not show two apps:
+
+```sh
+cargo uninstall hp3770-app
+rm ~/.local/share/applications/hp3770-app.desktop
+rm ~/.local/share/icons/hicolor/scalable/apps/hp3770-app.svg
+```
+
+The settings of the old version are copied at the first start of the new one.
+
 ---
 
 ## Problems
@@ -244,7 +256,7 @@ rm ~/.local/share/applications/vetroscan.desktop
 rm ~/.local/share/icons/hicolor/scalable/apps/vetroscan.svg
 sudo rm /etc/udev/rules.d/70-hp3770.rules
 rm -r ~/Work/scanner          # the downloaded code
-rm -r ~/.config/vetroscan        # the settings (optional)
+rm -r ~/.config/vetroscan     # the settings (optional)
 ```
 
 The saved scans are not touched.
