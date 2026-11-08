@@ -915,7 +915,9 @@ impl Look {
 
 /// A page of the document (or the photo): its raw scan, the settings it
 /// was scanned with, and what is shown. It looks like the shared settings
-/// of its way of working, unless it has a look of its own.
+/// of its way of working, unless it has a look of its own. A copy shares
+/// the scan (the samples are behind `Arc`s).
+#[derive(Clone)]
 struct Page {
     raw: Raw,
     settings: Settings,
@@ -1390,6 +1392,16 @@ enum Message {
     PageRotate(usize, bool),
     PageMove(usize, bool),
     PageDelete(usize),
+    /// A copy of the page right after it: the same scan, cut, turned and
+    /// adjusted on its own (several photos from one scan).
+    PageDuplicate(usize),
+    /// The mouse went down on a page of the strip: shown, and maybe
+    /// dragged to another place.
+    PagePress(usize),
+    /// A page dragged is over this one.
+    PageHover(usize),
+    /// The mouse went up: a page dragged goes where it was let go.
+    PageDrop,
     PageRedo(usize),
     AcceptRedo,
     RejectRedo,
@@ -1538,6 +1550,9 @@ struct App {
     after_save: Option<Message>,
     /// Set while a confirmed action runs: it does not ask again.
     confirmed: bool,
+    /// A page of the strip held down: where it was, and the page it is
+    /// over now (where it goes if let go).
+    drag: Option<(usize, Option<usize>)>,
 }
 
 impl App {
@@ -1617,6 +1632,7 @@ impl App {
                 confirm: None,
                 after_save: None,
                 confirmed: false,
+                drag: None,
             },
             iced::system::theme().map(Message::SystemTheme),
         )
@@ -1641,6 +1657,14 @@ impl App {
             iced::system::theme_changes().map(Message::SystemTheme),
             iced::keyboard::listen().map(Message::Key),
             iced::window::close_requests().map(Message::CloseRequested),
+            // A page dragged in the strip is let go wherever the mouse goes
+            // up (no-op when nothing is dragged).
+            iced::event::listen_with(|event, _, _| match event {
+                iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
+                    iced::mouse::Button::Left,
+                )) => Some(Message::PageDrop),
+                _ => None,
+            }),
         ])
     }
 
@@ -1713,6 +1737,7 @@ impl App {
                 | Message::PageRotate(..)
                 | Message::PageMove(..)
                 | Message::PageDelete(_)
+                | Message::PageDuplicate(_)
                 | Message::AcceptRedo
         )
     }
@@ -2610,6 +2635,7 @@ impl App {
                     | Message::Tab(Tab::Preview)
                     | Message::PageMove(..)
                     | Message::PageDelete(_)
+                    | Message::PageDuplicate(_)
                     | Message::PageRedo(_)
                     | Message::NewDocument
                     | Message::Scan
@@ -3190,6 +3216,51 @@ impl App {
                     self.pages_changed();
                 }
             }
+            Message::PageDuplicate(i) => {
+                // Not while a new scan waits for a choice: "Rifai" knows
+                // its page by its place.
+                if self.busy.is_none() && self.redone.is_none() && i < self.pages.len() {
+                    let copy = self.pages[i].clone();
+                    self.pages.insert(i + 1, copy);
+                    self.current = Some(i + 1);
+                    self.tab = Tab::Result;
+                    self.result_view = View::default();
+                    self.pages_changed();
+                    self.note = format!(
+                        "{} duplicata: la copia è la {}, da ritagliare e regolare a parte",
+                        self.page_title(i),
+                        self.page_name(i + 1)
+                    );
+                }
+            }
+            Message::PagePress(i) => {
+                if i < self.pages.len() {
+                    if self.busy.is_none() && self.redone.is_none() {
+                        self.drag = Some((i, None));
+                    }
+                    return self.handle(Message::PageShow(i));
+                }
+            }
+            Message::PageHover(j) => {
+                if let Some((from, over)) = &mut self.drag {
+                    *over = (j != *from).then_some(j);
+                }
+            }
+            Message::PageDrop => {
+                if let Some((from, Some(to))) = self.drag.take() {
+                    let n = self.pages.len();
+                    if self.busy.is_none() && self.redone.is_none() && from < n && to < n {
+                        self.close_editor(true);
+                        let page = self.pages.remove(from);
+                        self.pages.insert(to, page);
+                        self.current = Some(to);
+                        self.pages_changed();
+                        self.unsaved = true;
+                        let name = item_name(self.kind, to, n);
+                        self.note = format!("Spostata: ora è la {name}");
+                    }
+                }
+            }
             Message::PageDelete(i) => {
                 if self.busy.is_none() && i < self.pages.len() {
                     let title = self.page_title(i);
@@ -3290,6 +3361,9 @@ impl App {
             (Key::Character("p"), true, _) => Some(Message::Preview),
             (Key::Named(Named::Enter), true, _) => Some(Message::Scan),
             (Key::Character("s"), true, _) => Some(Message::Save),
+            (Key::Character("d"), true, _) if !editing && self.tab == Tab::Result => {
+                self.current.map(Message::PageDuplicate)
+            }
             (Key::Character("f"), false, _) => Some(Message::Fit),
             (Key::Character("1"), false, _) => Some(Message::ActualSize),
             (Key::Character("\\"), false, _) => Some(Message::Before(!self.before)),
@@ -3872,18 +3946,40 @@ impl App {
             Kind::Photo => "FOTO",
         };
         let mut list = column![text(format!("{header} · {n}")).size(11)].spacing(10);
+        // Where a page dragged would go: a bar before or after the page it
+        // is over.
+        let drop_at = match self.drag {
+            Some((from, Some(to))) => Some((to, from > to)),
+            _ => None,
+        };
+        let bar = || {
+            container(Space::new().height(3).width(Length::Fill)).style(|theme: &Theme| {
+                container::Style {
+                    background: Some(theme.palette().primary.into()),
+                    border: iced::Border {
+                        radius: 2.0.into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }
+            })
+        };
+        let dragging = self.drag.is_some_and(|(_, over)| over.is_some());
         for (i, page) in self.pages.iter().enumerate() {
             let selected = self.current == Some(i) && self.tab == Tab::Result;
-            let thumb = iced::widget::mouse_area(
-                button(
+            if drop_at == Some((i, true)) {
+                list = list.push(bar());
+            }
+            // Click to show, double click to edit, drag to move.
+            let thumb = mouse_area(
+                container(
                     iced::widget::image(page.thumb.handle.clone())
                         .width(Length::Fill)
                         .height(140),
                 )
                 .padding(2)
-                .style(move |theme: &Theme, status| {
-                    let mut style = button::text(theme, status);
-                    style.border = iced::Border {
+                .style(move |theme: &Theme| container::Style {
+                    border: iced::Border {
                         radius: 6.0.into(),
                         width: 2.0,
                         color: if selected {
@@ -3891,12 +3987,19 @@ impl App {
                         } else {
                             iced::Color::TRANSPARENT
                         },
-                    };
-                    style
-                })
-                .on_press(Message::PageShow(i)),
+                    },
+                    ..Default::default()
+                }),
             )
-            .on_double_click(EditMsg::Open(i).into());
+            .on_press(Message::PagePress(i))
+            .on_enter(Message::PageHover(i))
+            .on_release(Message::PageDrop)
+            .on_double_click(EditMsg::Open(i).into())
+            .interaction(if dragging {
+                iced::mouse::Interaction::Grabbing
+            } else {
+                iced::mouse::Interaction::Pointer
+            });
             let mut label = format!("{}", i + 1);
             if page.own.is_some() {
                 label.push_str(" · propria");
@@ -3922,12 +4025,22 @@ impl App {
                             !edited_here && self.redone.is_none()
                         ),
                         tool("Rifai", Message::PageRedo(i), idle),
+                    ],
+                    row![
+                        tool(
+                            "Duplica",
+                            Message::PageDuplicate(i),
+                            idle && self.redone.is_none()
+                        ),
                         Space::new().width(Length::Fill),
                         tool("Elimina", Message::PageDelete(i), idle),
                     ],
                 ]
                 .spacing(2),
             );
+            if drop_at == Some((i, false)) {
+                list = list.push(bar());
+            }
         }
         // Which front-panel button adds a page (or scans a photo), as set
         // in the preferences.
@@ -3943,16 +4056,25 @@ impl App {
                 "scansiona una foto",
             ),
         };
+        // A page dragged out of the strip goes back where it was.
+        let strip = |list| {
+            let area = mouse_area(
+                container(scrollable(list).height(Length::Fill))
+                    .width(156)
+                    .height(Length::Fill)
+                    .style(surface),
+            );
+            match self.drag {
+                Some((from, _)) => area.on_exit(Message::PageHover(from)).into(),
+                None => area.into(),
+            }
+        };
         let Some(button) = buttons
             .iter()
             .position(|a| *a == adds)
             .map(|i| BUTTON_NAMES[i])
         else {
-            return container(scrollable(list.padding([12, 10])).height(Length::Fill))
-                .width(156)
-                .height(Length::Fill)
-                .style(surface)
-                .into();
+            return strip(list.padding([12, 10]));
         };
         list = list.push(
             container(
@@ -3972,11 +4094,7 @@ impl App {
                 ..Default::default()
             }),
         );
-        container(scrollable(list.padding([12, 10])).height(Length::Fill))
-            .width(156)
-            .height(Length::Fill)
-            .style(surface)
-            .into()
+        strip(list.padding([12, 10]))
     }
 
     /// The canvas with its floating controls.

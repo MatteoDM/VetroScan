@@ -314,13 +314,25 @@ ritagliata o ridimensionata.
 
 - **Clic** sulla miniatura: mostra quella pagina nel visore.
 - **Doppio clic**: la apre nell'[editor](#modificare-una-scansione-già-fatta).
-- **↑** / **↓**: la sposta prima o dopo.
+- **Trascina** la miniatura su un'altra: la pagina prende quel posto. Una barra colorata
+  mostra dove andrà; lasciandola fuori dalla colonna resta dov'era.
+- **↑** / **↓**: la sposta di un posto (anche senza mouse).
 - **↻**: la gira di 90° in senso orario.
 - **Modifica**: apre l'editor.
-- **Elimina**: la toglie. **Non c'è conferma e non si annulla.**
+- **Duplica** (o **Ctrl+D** sulla pagina mostrata): aggiunge subito dopo una copia della
+  pagina. La copia usa la stessa scansione, ma si ritaglia, si gira e si regola per conto suo.
+- **Elimina**: la toglie. Se la pagina non è salvata, l'app chiede prima; non si annulla.
 - **Rifai**: la acquisisce di nuovo (vedi sotto).
 
-Spostare, eliminare e rifare non si può durante una scansione.
+Spostare, duplicare, eliminare e rifare non si può durante una scansione.
+
+### Più foto da una scansione sola
+
+Per tenere separate più foto acquisite insieme (o più ritagli della stessa foto):
+**Duplica** la scansione una volta per ogni foto, apri ogni copia con **Modifica** e
+ritagliala sulla sua foto, poi salva in un formato immagine: con più pagine l'app scrive
+**un file per pagina** (`nome-01.jpg`, `nome-02.jpg`, …). In modo **Foto**, con il
+ritaglio automatico, l'app lo fa già da sola per gli originali che riconosce sul vetro.
 
 ### Rifai e «Tieni la nuova»
 
@@ -677,8 +689,17 @@ scansioni funzionano lo stesso, ma alla prossima apertura ritroverai le impostaz
 
 ### Ho cancellato una pagina per sbaglio
 
-Elimina non si annulla: rimetti l'originale sul vetro e acquisiscila di nuovo, poi spostala al
-suo posto con **↑** / **↓**.
+Elimina non si annulla (per questo, se la pagina non è salvata, l'app chiede prima): rimetti
+l'originale sul vetro e acquisiscila di nuovo, poi trascinala al suo posto.
+
+### L'app chiede «Passare a Foto?», «Chiudere senza salvare?»…
+
+Prima di un'azione che butterebbe via scansioni non ancora salvate, l'app chiede: passare da
+Documento a Foto (in Foto resta solo l'ultima scansione), **Nuovo documento**, una nuova
+scansione in Foto (sostituisce la foto precedente), **Elimina** e la chiusura della finestra.
+Si può rispondere **Annulla** (o Esc: non cambia niente), **Salva…** (salva, poi fa l'azione)
+o confermare l'azione. Dopo un salvataggio, anche automatico, l'app non chiede più finché non
+cambia qualcosa.
 
 ### Ripartire da zero
 

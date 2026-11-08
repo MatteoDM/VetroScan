@@ -11,7 +11,7 @@ use crate::worker::{fake, Event};
 use crate::{App, Kind, Message};
 use iced::futures::StreamExt;
 use iced::{Size, Task};
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
 /// The application under test.
@@ -556,6 +556,194 @@ fn the_editor_turns_a_page_and_its_ctrl_z_takes_it_back() {
     }
     ui.send(Message::Edit(EditMsg::Apply));
     assert_eq!(format!("{:?}", ui.app.pages[0].transform), before);
+}
+
+// ------------------------------------------------- duplicate and drag
+
+/// Which scan each page shows (pages scanned apart have their own).
+fn scans(ui: &Ui) -> Vec<*const hp3770_core::session::Image> {
+    ui.app
+        .pages
+        .iter()
+        .map(|p| Arc::as_ptr(&p.raw.full))
+        .collect()
+}
+
+#[test]
+fn duplica_copies_a_page_that_is_then_edited_on_its_own() {
+    use crate::EditMsg;
+    let mut ui = document(2);
+    let before = scans(&ui);
+    ui.click("Duplica");
+    assert_eq!(ui.app.pages.len(), 3);
+    let after = scans(&ui);
+    assert_eq!(
+        after,
+        vec![before[0], before[0], before[1]],
+        "same scan, no copy"
+    );
+    assert_eq!(ui.app.current, Some(1));
+    assert!(ui.app.unsaved);
+    // Turned in the editor, the copy only.
+    ui.send(Message::Edit(EditMsg::Open(1)));
+    ui.send(Message::Edit(EditMsg::Rotate(true)));
+    ui.send(Message::Edit(EditMsg::Apply));
+    assert!(ui.app.pages[0].transform.is_identity());
+    assert!(!ui.app.pages[1].transform.is_identity());
+}
+
+#[test]
+fn several_photos_cut_from_one_scan_are_saved_one_file_each() {
+    use crate::EditMsg;
+    use hp3770_export::ImageFormat;
+    let mut ui = Ui::new();
+    ui.send(Message::Kind(Kind::Photo));
+    ui.send(Message::AutoCrop(false));
+    ui.scan(1);
+    ui.send(Message::PageDuplicate(0));
+    ui.send(Message::PageDuplicate(0));
+    assert_eq!(ui.app.pages.len(), 3);
+    // A different square of the glass for each copy (pixels of the scan).
+    let side = ui.app.pages[0].raw.full.width as f32;
+    for (i, x) in [0.1, 0.4, 0.7].into_iter().enumerate() {
+        ui.send(Message::Edit(EditMsg::Open(i)));
+        ui.send(Message::Edit(EditMsg::Crop(Some(crate::Selection {
+            x: x * side,
+            y: 0.1 * side,
+            width: 0.2 * side,
+            height: 0.2 * side,
+        }))));
+        ui.send(Message::Edit(EditMsg::Apply));
+    }
+    ui.send(Message::Output(crate::Output::Image(ImageFormat::Png)));
+    ui.send(Message::Save);
+    assert_eq!(ui.saved().len(), 3, "{:?} {}", ui.saved(), ui.app.note);
+}
+
+#[test]
+fn ctrl_d_duplicates_the_page_shown() {
+    let mut ui = document(1);
+    ui.send(Message::PageShow(0));
+    let event = iced::keyboard::Event::KeyPressed {
+        key: iced::keyboard::Key::Character("d".into()),
+        modified_key: iced::keyboard::Key::Character("d".into()),
+        physical_key: iced::keyboard::key::Physical::Code(iced::keyboard::key::Code::KeyD),
+        location: iced::keyboard::Location::Standard,
+        modifiers: iced::keyboard::Modifiers::CTRL,
+        text: None,
+        repeat: false,
+    };
+    ui.send(Message::Key(event));
+    assert_eq!(ui.app.pages.len(), 2);
+}
+
+#[test]
+fn a_page_dragged_onto_another_takes_its_place() {
+    let mut ui = document(4);
+    let s = scans(&ui);
+    // The first page down to the third place.
+    ui.send(Message::PagePress(0));
+    ui.send(Message::PageHover(1));
+    ui.send(Message::PageHover(2));
+    assert_eq!(ui.app.drag, Some((0, Some(2))));
+    ui.send(Message::PageDrop);
+    assert_eq!(scans(&ui), vec![s[1], s[2], s[0], s[3]]);
+    assert_eq!(ui.app.current, Some(2));
+    // The last page up to the first place.
+    ui.send(Message::PagePress(3));
+    ui.send(Message::PageHover(0));
+    ui.send(Message::PageDrop);
+    assert_eq!(scans(&ui), vec![s[3], s[1], s[2], s[0]]);
+    assert!(ui.app.drag.is_none());
+}
+
+#[test]
+fn a_click_on_a_page_shows_it_and_moves_nothing() {
+    let mut ui = document(3);
+    ui.send(Message::Save);
+    let s = scans(&ui);
+    ui.send(Message::PagePress(1));
+    ui.send(Message::PageDrop);
+    assert_eq!(scans(&ui), s);
+    assert_eq!(ui.app.current, Some(1));
+    assert!(!ui.app.unsaved, "only looking is not a change");
+}
+
+#[test]
+fn a_page_dragged_out_of_the_strip_stays_where_it_was() {
+    let mut ui = document(3);
+    let s = scans(&ui);
+    ui.send(Message::PagePress(0));
+    ui.send(Message::PageHover(2));
+    // Out of the strip: over its own place again.
+    ui.send(Message::PageHover(0));
+    ui.send(Message::PageDrop);
+    assert_eq!(scans(&ui), s);
+}
+
+#[test]
+fn a_page_is_dragged_with_the_mouse_in_the_real_strip() {
+    use iced::mouse;
+    let mut ui = document(3);
+    let s = scans(&ui);
+    // The thumbnails are 140 high, 10 apart, under the header: the first
+    // around y = 110, the third around y = 110 + 2 × (140 + 70).
+    let events = |at: [f32; 2], what: Option<mouse::Event>| {
+        let mut list = vec![iced::Event::Mouse(mouse::Event::CursorMoved {
+            position: iced::Point::new(at[0], at[1]),
+        })];
+        list.extend(what.map(iced::Event::Mouse));
+        list
+    };
+    let mut messages = Vec::new();
+    let sim = |list: Vec<iced::Event>, ui: &mut Ui, messages: &mut Vec<Message>| {
+        let mut s = iced_test::Simulator::with_size(
+            iced::Settings::default(),
+            Size::new(1360.0, 900.0),
+            ui.app.view(),
+        );
+        // The simulator's cursor is where the last move went.
+        if let Some(iced::Event::Mouse(mouse::Event::CursorMoved { position })) = list.first() {
+            s.point_at(*position);
+        }
+        let _ = s.simulate(list);
+        let new: Vec<Message> = s.into_messages().collect();
+        for m in &new {
+            ui.send(m.clone());
+        }
+        messages.extend(new);
+    };
+    let first = ui.app.pages.len();
+    assert_eq!(first, 3);
+    sim(
+        events(
+            [78.0, 120.0],
+            Some(mouse::Event::ButtonPressed(mouse::Button::Left)),
+        ),
+        &mut ui,
+        &mut messages,
+    );
+    assert_eq!(ui.app.drag.map(|d| d.0), Some(0), "{messages:?}");
+    // Down the strip, page by page, then let go.
+    for y in (140..560).step_by(20) {
+        sim(events([78.0, y as f32], None), &mut ui, &mut messages);
+    }
+    let over = ui.app.drag.and_then(|d| d.1);
+    assert!(
+        over.is_some(),
+        "the drag reached another page: {messages:?}"
+    );
+    sim(
+        events(
+            [78.0, 540.0],
+            Some(mouse::Event::ButtonReleased(mouse::Button::Left)),
+        ),
+        &mut ui,
+        &mut messages,
+    );
+    assert!(ui.app.drag.is_none());
+    assert_ne!(scans(&ui), s, "the page moved: {messages:?}");
+    assert_eq!(scans(&ui)[over.unwrap()], s[0]);
 }
 
 #[test]
