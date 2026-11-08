@@ -1,0 +1,63 @@
+# Maintainer: Matteo Dal Molin <matteodalmo at gmail dot com>
+#
+# HP Scanjet 3770: free driver and desktop app, from the git repository.
+# Installs the app, the hp3770 command, the udev rule that lets the user
+# at the seat open the scanner, the launcher entry and the icon. pacman's
+# udev hook reloads the rules and applies them to a scanner already
+# plugged in: no need to unplug it.
+
+pkgname=hp3770-git
+pkgver=r0
+pkgrel=1
+pkgdesc="Free driver and desktop app for the HP Scanjet 3770 scanner"
+arch=('x86_64' 'aarch64')
+url="https://github.com/MatteoDM/scanner"
+license=('GPL-2.0-or-later')
+depends=('gcc-libs' 'glibc' 'hicolor-icon-theme' 'libxkbcommon' 'vulkan-icd-loader'
+         'wayland' 'xdg-desktop-portal')
+makedepends=('cargo' 'git')
+optdepends=('xdg-desktop-portal-gtk: the "Save" dialog, if no other portal backend is installed'
+            'cups: printing photocopies from the Copy button'
+            'libx11: running under X11'
+            'libxcursor: running under X11'
+            'libxi: running under X11'
+            'libxrandr: running under X11')
+provides=('hp3770')
+conflicts=('hp3770')
+source=("scanner::git+https://github.com/MatteoDM/scanner.git")
+sha256sums=('SKIP')
+options=('!lto')
+
+pkgver() {
+  cd scanner
+  printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+}
+
+prepare() {
+  cd scanner
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/^host: //p')"
+}
+
+build() {
+  cd scanner
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release --bin hp3770-app --bin hp3770
+}
+
+check() {
+  cd scanner
+  export RUSTUP_TOOLCHAIN=stable
+  cargo test --frozen --release --workspace
+}
+
+package() {
+  cd scanner
+  install -Dm755 target/release/hp3770-app "$pkgdir/usr/bin/hp3770-app"
+  install -Dm755 target/release/hp3770 "$pkgdir/usr/bin/hp3770"
+  install -Dm644 packaging/linux/70-hp3770.rules "$pkgdir/usr/lib/udev/rules.d/70-hp3770.rules"
+  install -Dm644 packaging/linux/hp3770-app.desktop "$pkgdir/usr/share/applications/hp3770-app.desktop"
+  install -Dm644 packaging/linux/hp3770-app.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/hp3770-app.svg"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}
