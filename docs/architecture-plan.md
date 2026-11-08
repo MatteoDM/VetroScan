@@ -419,6 +419,23 @@ It needs no new hardware, only slides and negatives to put in the holder.
   about 88-132 x 76-84 mm (the place to calibrate the adapter on, as the white strip for the
   glass); below, the film window, about 97-122 x 94-171 mm, two 35 mm frames one above the
   other, the strip along the carriage's travel.
+  **The first real negatives, the same night**: `hp3770 tma-scan --dpi 1200 --film negative`
+  (adapter's lamp, 30 s, calibration on the slot, the adapter's area at 16 bits, 94 s) gave
+  Matteo's two frames as positives, 2080 x 4507 pixels, natural colours. What it took:
+  - the calibration of the adapter (`calibrate_transparency`): the carriage to the slot
+    (`[CalibTransparent]` `WStripYPos=4130`), the adapter's lamp off for the black shading and
+    on for the white, the parameters of `[CalibTransparent]`; the glass's white reference (245)
+    instead of the section's (about 80): in 16 bits the reference falls at about half the scale,
+    twice the headroom above it;
+  - in `scan_imaging::film`: the base measured in the gaps between frames (`base_between`;
+    the least dense film inside a frame can be light leaking past its edges), the gaps found
+    against the film within 20 mm (the adapter's light is not even along the strip: its
+    middle gets about 1.3 times the light of the slot), a positive of at most 2 decades.
+  Still open: the gains end at their maximum (31) on the slot, so the adapter's light is dim
+  for the sensor's exposure of the glass and the shadows of the positive are noisy: the
+  exposure of the scan modes for the adapter (hp3900 has them per type of scan) is the next
+  step; the light uneven along the strip (a correction along the travel, measured once on the
+  empty holder); slides not tried yet; the contract and the app (below) not started.
 - **Driver**: the adapter's lamp (done: bit 5 of `E946` and bit 6 of `E965`, see above), its
   calibration (no white strip under the lid: what the HP driver does instead comes from the
   captures), the area of the holder; `hp3900` (`ST_TA`, `ST_NEG` in `hp3900_rts8822.c`) is the
