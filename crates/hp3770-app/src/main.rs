@@ -353,7 +353,8 @@ impl Page {
         };
         self.shown = render(&self.raw.proxy, &self.settings, &adjust);
         let rgb = self.shown.to_rgb();
-        self.picture = Picture::from_rgb(self.shown.width, self.shown.height, &rgb);
+        self.picture =
+            Picture::from_rgb(self.shown.width, self.shown.height, &rgb).replacing(&self.picture);
         self.thumb = Picture::from_rgb_max(self.shown.width, self.shown.height, &rgb, 240);
     }
 
@@ -397,6 +398,24 @@ enum Adjust {
     Threshold(u8),
 }
 
+/// What a background render redraws.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Target {
+    Preview,
+    /// The page shown in the result tab (a rescan waiting, or the current
+    /// page).
+    Page,
+}
+
+/// An adjusted image computed off the interface thread.
+#[derive(Debug)]
+struct Rendered {
+    target: Target,
+    shown: Image,
+    picture: Picture,
+    thumb: Option<Picture>,
+}
+
 /// Which image the viewer shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -407,6 +426,7 @@ enum Tab {
 #[derive(Debug, Clone)]
 enum Message {
     Worker(Event),
+    Rendered(Arc<Rendered>),
     SystemTheme(iced::theme::Mode),
     Theme(ThemeChoice),
     Kind(Kind),
@@ -472,6 +492,10 @@ struct App {
     redo_auto: bool,
     redone: Option<(usize, Page)>,
     note: String,
+    /// A render is running off the interface thread.
+    rendering: bool,
+    /// Something changed since it started: render again when it ends.
+    dirty: Option<Target>,
 }
 
 impl App {
@@ -500,6 +524,8 @@ impl App {
                 redo_auto: false,
                 redone: None,
                 note: "Pronto: fai un'anteprima, scegli l'area e scansiona".into(),
+                rendering: false,
+                dirty: None,
             },
             iced::system::theme().map(Message::SystemTheme),
         )
@@ -574,16 +600,60 @@ impl App {
     /// New scans start from the last settings used.
     fn change(&mut self, f: impl Fn(&mut Settings)) {
         if self.editing_page() {
-            let before = self.before;
             if let Some(page) = self.shown_mut() {
                 f(&mut page.settings);
-                page.redraw(before);
             }
             f(self.settings_mut());
+            self.dirty = Some(Target::Page);
         } else {
             f(self.settings_mut());
-            self.redraw_preview();
+            self.dirty = Some(Target::Preview);
         }
+    }
+
+    /// Starts the render of what changed, off the interface thread, unless
+    /// one is running: then the latest values are rendered when it ends
+    /// (a slider dragged fast skips the values in between).
+    fn schedule(&mut self) -> Task<Message> {
+        if self.rendering {
+            return Task::none();
+        }
+        let Some(target) = self.dirty.take() else {
+            return Task::none();
+        };
+        let before = self.before;
+        let job = match target {
+            Target::Preview => self
+                .preview
+                .as_ref()
+                .map(|(raw, ..)| (raw.proxy.clone(), *self.settings())),
+            Target::Page => self.shown().map(|p| (p.raw.proxy.clone(), p.settings)),
+        };
+        let Some((proxy, settings)) = job else {
+            return Task::none();
+        };
+        self.rendering = true;
+        Task::perform(
+            async move {
+                let adjust = if before {
+                    Adjustments::default()
+                } else {
+                    settings.adjust
+                };
+                let shown = render(&proxy, &settings, &adjust);
+                let rgb = shown.to_rgb();
+                let picture = Picture::from_rgb(shown.width, shown.height, &rgb);
+                let thumb = (target == Target::Page)
+                    .then(|| Picture::from_rgb_max(shown.width, shown.height, &rgb, 240));
+                Arc::new(Rendered {
+                    target,
+                    shown,
+                    picture,
+                    thumb,
+                })
+            },
+            Message::Rendered,
+        )
     }
 
     fn redraw_preview(&mut self) {
@@ -595,7 +665,8 @@ impl App {
         };
         if let Some((raw, shown, picture)) = &mut self.preview {
             *shown = render(&raw.proxy, &settings, &adjust);
-            *picture = Picture::from_rgb(shown.width, shown.height, &shown.to_rgb());
+            *picture =
+                Picture::from_rgb(shown.width, shown.height, &shown.to_rgb()).replacing(picture);
         }
     }
 
@@ -722,8 +793,42 @@ impl App {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        let task = self.handle(message);
+        Task::batch([task, self.schedule()])
+    }
+
+    fn handle(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Worker(event) => self.on_worker(event),
+            Message::Rendered(done) => {
+                self.rendering = false;
+                let Ok(Rendered {
+                    target,
+                    shown,
+                    picture,
+                    thumb,
+                }) = Arc::try_unwrap(done)
+                else {
+                    return Task::none();
+                };
+                match target {
+                    Target::Preview => {
+                        if let Some((_, old_shown, old)) = &mut self.preview {
+                            *old = picture.replacing(old);
+                            *old_shown = shown;
+                        }
+                    }
+                    Target::Page => {
+                        if let Some(page) = self.shown_mut() {
+                            page.picture = picture.replacing(&page.picture);
+                            if let Some(thumb) = thumb {
+                                page.thumb = thumb;
+                            }
+                            page.shown = shown;
+                        }
+                    }
+                }
+            }
             Message::SystemTheme(mode) => self.system_dark = mode == iced::theme::Mode::Dark,
             Message::Theme(choice) => self.theme = choice,
             Message::Kind(kind) => {

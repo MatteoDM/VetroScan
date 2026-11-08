@@ -93,9 +93,22 @@ pub struct Picture {
     pub handle: image::Handle,
     /// Size of the full image in pixels.
     pub size: Size,
+    /// The texture this picture replaces, drawn underneath: a new texture
+    /// takes a frame to reach the graphics card, and without it the image
+    /// would flash while a slider moves.
+    pub previous: Option<image::Handle>,
 }
 
 impl Picture {
+    /// This picture in place of `old`, which stays underneath until the new
+    /// texture is drawn.
+    pub fn replacing(mut self, old: &Picture) -> Self {
+        if old.size == self.size {
+            self.previous = Some(old.handle.clone());
+        }
+        self
+    }
+
     /// A picture from 8-bit RGB pixels, shrunk to [`MAX_TEXTURE`] if needed
     /// (by averaging whole blocks of pixels).
     pub fn from_rgb(width: usize, height: usize, rgb: &[u8]) -> Self {
@@ -132,6 +145,7 @@ impl Picture {
         Self {
             handle: image::Handle::from_rgba(w as u32, h as u32, rgba),
             size: Size::new(width as f32, height as f32),
+            previous: None,
         }
     }
 }
@@ -191,7 +205,12 @@ impl<Message> canvas::Program<Message> for ImageLayer<'_> {
         let mut frame = Frame::new(renderer, bounds.size());
         let (rect, _) = self.view.placement(bounds.size(), self.size);
         match self.picture {
-            Some(p) => frame.draw_image(rect, &p.handle),
+            Some(p) => {
+                if let Some(previous) = &p.previous {
+                    frame.draw_image(rect, previous);
+                }
+                frame.draw_image(rect, &p.handle);
+            }
             None => {
                 let palette = theme.extended_palette();
                 frame.fill_rectangle(rect.position(), rect.size(), palette.background.weak.color);
