@@ -26,7 +26,7 @@ jobs:
         # Separate so that a new advisory does not hide a license problem, and the reverse.
         checks: [advisories, "bans licenses sources"]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
