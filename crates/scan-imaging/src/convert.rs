@@ -5,7 +5,7 @@
 //! send each channel at a third of its level (through the white shading
 //! table) and adds the three up (capture 07): the grey level is the mean of
 //! the linear red, green and blue samples. The tone curve
-//! ([`crate::geometry::host_tone`]) is applied after that.
+//! of the scanner is applied after that.
 //!
 //! Black and white (capture 08) is that grey cut at a threshold: comparing
 //! the HP driver's grey (07) and black-and-white (08) images of the same

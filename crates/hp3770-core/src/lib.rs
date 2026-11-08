@@ -18,8 +18,6 @@
 pub mod adjust;
 pub mod arrange;
 pub mod calibration;
-pub mod convert;
-pub mod detect;
 pub mod device;
 pub mod error;
 pub mod geometry;
@@ -35,7 +33,9 @@ pub mod scan_modes;
 pub mod session;
 pub mod setup;
 pub mod status;
-pub mod transform;
 pub mod transport;
 
 pub use error::{Error, Result};
+
+// Moved to `scan-imaging`; re-exported while the rest of the workspace moves.
+pub use scan_imaging::{convert, detect, transform};

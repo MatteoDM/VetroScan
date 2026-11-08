@@ -13,7 +13,7 @@
 //! A white sheet on the white lid is seen only through the faint shadow of
 //! its edges: a document is found when those show, not always.
 
-use crate::session::{Format, Image};
+use crate::{Format, Image};
 
 /// Something found on the glass: a rectangle at an angle, in pixels of
 /// the image searched.

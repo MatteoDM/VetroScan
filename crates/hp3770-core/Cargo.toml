@@ -10,6 +10,7 @@ authors.workspace = true
 publish = false
 
 [dependencies]
+scan-imaging.workspace = true
 
 [lints]
 workspace = true

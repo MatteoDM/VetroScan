@@ -1,0 +1,15 @@
+[package]
+name = "scan-imaging"
+description = "Scanner-independent image processing: images, conversion, transforms, object detection"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true

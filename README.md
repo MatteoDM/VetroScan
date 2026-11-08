@@ -56,6 +56,7 @@ Le novità di ogni versione sono in [CHANGELOG.md](CHANGELOG.md).
 
 | Crate | Cosa contiene |
 | --- | --- |
+| [`scan-imaging`](crates/scan-imaging) | Elaborazione delle immagini uguale per ogni scanner: formati dei pixel, grigio e bianco e nero, nitidezza, ritagli e rotazioni, ricerca delle foto sul vetro |
 | [`hp3770-core`](crates/hp3770-core) | Protocollo USB dell'RTS8822 (richieste vendor, registri, EEPROM, DMA), identità del dispositivo, pulsanti, trait `Transport` indipendente dalla libreria USB |
 | [`hp3770-capture`](crates/hp3770-capture) | Lettore di catture USBPcap e strumento `hp3770-decode`, che trasforma una cattura in una sequenza leggibile di operazioni sul chip |
 | [`hp3770-usb`](crates/hp3770-usb) | Accesso USB: `nusb` (Linux, macOS, Windows con WinUSB) e `usbscan.sys` (Windows con il driver HP installato, nessun cambio di driver) |

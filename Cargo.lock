@@ -1634,6 +1634,9 @@ dependencies = [
 [[package]]
 name = "hp3770-core"
 version = "0.1.2"
+dependencies = [
+ "scan-imaging",
+]
 
 [[package]]
 name = "hp3770-export"
@@ -3633,6 +3636,10 @@ checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
 dependencies = [
  "winapi-util",
 ]
+
+[[package]]
+name = "scan-imaging"
+version = "0.1.2"
 
 [[package]]
 name = "scoped-tls"

@@ -525,7 +525,7 @@ fn par_rows<T: Send>(out: &mut [T], row: usize, f: impl Fn(usize, &mut [T]) + Sy
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::{Format, Image};
+    use crate::{Format, Image};
 
     /// An RGB image whose pixels all differ.
     fn sample(w: usize, h: usize) -> Vec<u8> {
