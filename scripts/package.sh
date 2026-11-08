@@ -88,6 +88,8 @@ package_macos() {
   <key>CFBundleShortVersionString</key><string>${version}</string>
   <key>LSMinimumSystemVersion</key><string>11.0</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>CFBundleDevelopmentRegion</key><string>it</string>
+  <key>CFBundleLocalizations</key><array><string>it</string><string>en</string></array>
 </dict>
 </plist>
 PLIST

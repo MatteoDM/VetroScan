@@ -1,6 +1,6 @@
 # Piano: da «app per l'HP 3770» ad «app per scanner»
 
-Stato: **Fasi 0–4 fatte (v0.1.2; le Fasi 1–4 escono con la v0.2.0, da pubblicare); prossima: Fase 5**
+Stato: **Fasi 0–5 fatte (v0.1.2, v0.2.0 pubblicata; la Fase 5 esce con la v0.3.0); prossima: Fase 6**
 (piano scritto l'8 novembre 2026, dopo la v0.1.1; aggiornato l'8 novembre 2026 con le lingue,
 il nome nuovo e le fasi rimandate). Ogni fase si chiude con un commit, i test verdi e una
 versione; qui si segna cosa è fatto.
@@ -218,6 +218,27 @@ in inglese l'app parte in inglese.
   cataloghi e che non ce ne siano di avanzate; un test cerca stringhe scritte a mano nei widget
   (`text("…")` con lettere) e fallisce se ne trova; gli e2e di oggi passano invariati in
   italiano e un gruppo di e2e gira in inglese (avvio, scansione, salvataggio, Preferenze).
+
+Fatta. Com'è andata:
+
+- Niente Fluent: con circa 440 testi, chiavi inventate avrebbero voluto dire riscrivere ogni
+  testo due volte e cambiare tipi in centinaia di punti. Stile gettext invece: la chiave è
+  il testo italiano, `tr("…")` dà un `&'static str` nella lingua in uso (si sostituisce
+  ovunque senza toccare i tipi) e `trf("… {n} …", &[("n", &n)])` riempie i segnaposto.
+  L'inglese sta in `crates/hp3770-app/i18n/en.json`; l'italiano non ha catalogo. Le frasi
+  con plurali o accordi diversi sono testi distinti («la sostituisce» / «le sostituisce»).
+- `crates/hp3770-app/src/i18n.rs`: lingua per thread nei test (gli e2e inglesi girano
+  accanto agli italiani), `LangChoice` (Automatica, Italiano, English) salvata in
+  `impostazioni.json` (`language`, di base «automatica»), `sys-locale` per la lingua del
+  sistema (nei test sempre italiano). I numeri decimali seguono la lingua.
+- Test del modulo: ogni testo chiesto ha l'inglese con gli stessi segnaposto e nessuno
+  avanza; nessun literal «da persone» salta `tr`/`trf` (marchio, cartella «Scansioni»,
+  comandi di sistema sono segnati `// not translated`). Due strumenti ignorati aiutano
+  ad aggiungere testi: `i18n::survey` (elenco dei literal da guardare) e `i18n::keys`
+  (scrive le chiavi in JSON).
+- Pacchetti: installer Windows e `.desktop` erano già in due lingue; il bundle macOS ora
+  dichiara `CFBundleLocalizations` it/en.
+- La CLI `hp3770` resta in inglese: è uno strumento tecnico e parlava già inglese.
 
 ## Fase 6 · il progetto in inglese → con la v0.3.0
 
