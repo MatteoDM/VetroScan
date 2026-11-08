@@ -36,8 +36,8 @@ use hp3770_core::status::Status;
 use hp3770_core::transform::Transform;
 use hp3770_export::{ImageFormat, PageSize};
 use iced::widget::{
-    button, canvas, checkbox, column, container, pick_list, progress_bar, row, rule, scrollable,
-    slider, text, Space,
+    button, canvas, center, checkbox, column, container, mouse_area, opaque, pick_list,
+    progress_bar, row, rule, scrollable, slider, stack, text, Space,
 };
 use iced::{Alignment, Element, Length, Point, Size, Subscription, Task, Theme};
 use std::borrow::Cow;
@@ -71,6 +71,8 @@ fn main() -> iced::Result {
 fn window_settings() -> iced::window::Settings {
     iced::window::Settings {
         size: Size::new(1360.0, 900.0),
+        // Closing asks first when scans are not saved (Message::CloseRequested).
+        exit_on_close_request: false,
         #[cfg(target_os = "linux")]
         platform_specific: iced::window::settings::PlatformSpecific {
             application_id: "hp3770-app".into(),
@@ -1391,6 +1393,24 @@ enum Message {
     NewDocument,
     /// The editor of a scan already made.
     Edit(EditMsg),
+    /// The answer to the question asked before throwing scans away: go
+    /// on (true) or leave everything as it is (false).
+    Confirm(bool),
+    /// "Salva…" in that question: save, then go on if the save went well.
+    ConfirmSave,
+    /// The window's close button.
+    CloseRequested(iced::window::Id),
+}
+
+/// A question asked before an action that throws away scans not saved:
+/// the action is done again, confirmed, when the answer is yes.
+#[derive(Debug, Clone)]
+struct Confirm {
+    title: String,
+    body: String,
+    /// The label of the button that goes on.
+    yes: &'static str,
+    then: Box<Message>,
 }
 
 /// `area` (pixels at `dpi`) cut to the glass: the margin around an
@@ -1507,6 +1527,14 @@ struct App {
     editor: Option<Editor>,
     /// The part of the editor last used.
     edit_section: Section,
+    /// The pages changed since they were last saved (or none was).
+    unsaved: bool,
+    /// The question shown before throwing scans away, if any.
+    confirm: Option<Confirm>,
+    /// What to do once "Salva…" in that question has saved.
+    after_save: Option<Message>,
+    /// Set while a confirmed action runs: it does not ask again.
+    confirmed: bool,
 }
 
 impl App {
@@ -1582,6 +1610,10 @@ impl App {
                 epoch: 0,
                 editor: None,
                 edit_section: Section::Colour,
+                unsaved: false,
+                confirm: None,
+                after_save: None,
+                confirmed: false,
             },
             iced::system::theme().map(Message::SystemTheme),
         )
@@ -1605,7 +1637,81 @@ impl App {
             Subscription::run(worker::events).map(Message::Worker),
             iced::system::theme_changes().map(Message::SystemTheme),
             iced::keyboard::listen().map(Message::Key),
+            iced::window::close_requests().map(Message::CloseRequested),
         ])
+    }
+
+    /// What the question says is lost: "Le 3 pagine acquisite non sono
+    /// salvate e andranno perse."
+    fn lost_sentence(&self, n: usize) -> String {
+        let what = match self.kind {
+            Kind::Document => ("La pagina acquisita", "pagine"),
+            Kind::Photo => ("La foto acquisita", "foto"),
+        };
+        if n == 1 {
+            format!("{} non è salvata e andrà persa.", what.0)
+        } else {
+            format!(
+                "Le {n} {} acquisite non sono salvate e andranno perse.",
+                what.1
+            )
+        }
+    }
+
+    /// Before an action that throws scans away: shows the question, and
+    /// `then` is done again once confirmed. True when it asked (the
+    /// action stops here); false when it was confirmed already.
+    fn ask(&mut self, then: Message, title: String, body: String, yes: &'static str) -> bool {
+        if self.confirmed {
+            return false;
+        }
+        self.confirm = Some(Confirm {
+            title,
+            body,
+            yes,
+            then: Box::new(then),
+        });
+        true
+    }
+
+    /// Does an action the question was answered yes to.
+    fn run_confirmed(&mut self, then: Message) -> Task<Message> {
+        self.confirmed = true;
+        let task = self.handle(then);
+        self.confirmed = false;
+        task
+    }
+
+    /// Whether these messages change how the pages come out (their look
+    /// follows the shared settings unless they have their own).
+    fn changes_pages(message: &Message) -> bool {
+        if let Message::Edit(m) = message {
+            return !matches!(
+                m,
+                EditMsg::Open(_) | EditMsg::Discard | EditMsg::Section(_) | EditMsg::Unit(_)
+            );
+        }
+        matches!(
+            message,
+            Message::Undo
+                | Message::Redo
+                | Message::CurveSet(_)
+                | Message::Descreen(_)
+                | Message::Adaptive(_)
+                | Message::OwnLook(_)
+                | Message::PresetApply(_)
+                | Message::Adjust(..)
+                | Message::Commit(_)
+                | Message::AutoLevels
+                | Message::AutoThreshold
+                | Message::Picked(_)
+                | Message::ResetGroup(_)
+                | Message::Colour(_)
+                | Message::PageRotate(..)
+                | Message::PageMove(..)
+                | Message::PageDelete(_)
+                | Message::AcceptRedo
+        )
     }
 
     fn settings(&self) -> &Settings {
@@ -2092,6 +2198,27 @@ impl App {
             self.redo_auto = false;
             return;
         }
+        // In Foto a new scan takes the place of the photos there.
+        let n = self.pages.len();
+        if purpose == Purpose::Page
+            && self.kind == Kind::Photo
+            && self.redo.is_none()
+            && self.jobs.is_empty()
+            && n > 0
+            && self.unsaved
+            && self.ask(
+                Message::Scan,
+                "Fare una nuova scansione?".into(),
+                format!(
+                    "{} La nuova scansione {} sostituisce.",
+                    self.lost_sentence(n),
+                    if n == 1 { "la" } else { "le" }
+                ),
+                "Scansiona",
+            )
+        {
+            return;
+        }
         let request = if purpose == Purpose::Preview {
             let glass = Self::glass();
             Request {
@@ -2418,7 +2545,14 @@ impl App {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        let touches_pages = !self.pages.is_empty() && Self::changes_pages(&message);
         let task = self.handle(message);
+        if touches_pages {
+            self.unsaved = true;
+        }
+        if self.pages.is_empty() {
+            self.unsaved = false;
+        }
         let now = self.prefs();
         if now != self.saved {
             if let Err(e) = now.save() {
@@ -2497,6 +2631,30 @@ impl App {
             Message::Kind(kind) => {
                 // Not during a scan: its pages go where the mode says.
                 if self.kind != kind && self.busy.is_none() {
+                    let dropped = self.pages.len().saturating_sub(1);
+                    if kind == Kind::Photo
+                        && dropped > 0
+                        && self.unsaved
+                        && self.ask(
+                            Message::Kind(kind),
+                            "Passare a Foto?".into(),
+                            format!(
+                                "In Foto resta solo l'ultima scansione. {}",
+                                if dropped == 1 {
+                                    "L'altra pagina del documento non è salvata e andrà persa."
+                                        .to_string()
+                                } else {
+                                    format!(
+                                        "Le altre {dropped} pagine del documento non sono \
+                                         salvate e andranno perse."
+                                    )
+                                },
+                            ),
+                            "Passa a Foto",
+                        )
+                    {
+                        return Task::none();
+                    }
                     self.kind = kind;
                     self.redone = None;
                     if kind == Kind::Photo {
@@ -2897,12 +3055,63 @@ impl App {
                 );
             }
             Message::SaveTo(Some(path)) => {
-                self.note = match self.write(&path) {
-                    Ok(what) => format!("Salvato: {what}"),
-                    Err(e) => format!("Salvataggio non riuscito: {e}"),
-                };
+                let then = self.after_save.take();
+                match self.write(&path) {
+                    Ok(what) => {
+                        self.note = format!("Salvato: {what}");
+                        self.unsaved = false;
+                        // "Salva…" in the question: now what was asked.
+                        if let Some(then) = then {
+                            return self.run_confirmed(then);
+                        }
+                    }
+                    Err(e) => self.note = format!("Salvataggio non riuscito: {e}"),
+                }
             }
-            Message::SaveTo(None) => {}
+            Message::SaveTo(None) => self.after_save = None,
+            Message::Confirm(yes) => {
+                if let Some(confirm) = self.confirm.take() {
+                    if yes {
+                        return self.run_confirmed(*confirm.then);
+                    }
+                    self.print_next = false;
+                    self.note = "Nulla è cambiato".into();
+                }
+            }
+            Message::ConfirmSave => {
+                if let Some(confirm) = self.confirm.take() {
+                    self.after_save = Some(*confirm.then);
+                    return self.handle(Message::Save);
+                }
+            }
+            Message::CloseRequested(id) => {
+                let n = self.pages.len();
+                let lost = (n > 0 && self.unsaved).then(|| self.lost_sentence(n));
+                let asked = if self.busy.is_some() {
+                    let body = match &lost {
+                        Some(lost) => format!("La scansione in corso si interrompe. {lost}"),
+                        None => "La scansione in corso si interrompe e va persa.".into(),
+                    };
+                    self.ask(
+                        Message::CloseRequested(id),
+                        "Chiudere durante la scansione?".into(),
+                        body,
+                        "Chiudi",
+                    )
+                } else if let Some(lost) = lost {
+                    self.ask(
+                        Message::CloseRequested(id),
+                        "Chiudere senza salvare?".into(),
+                        lost,
+                        "Chiudi senza salvare",
+                    )
+                } else {
+                    false
+                };
+                if !asked {
+                    return iced::window::close(id);
+                }
+            }
             Message::PageShow(i) if self.editor.is_some() => self.open_editor(i),
             Message::PageShow(i) => {
                 self.current = Some(i);
@@ -2942,6 +3151,16 @@ impl App {
             Message::PageDelete(i) => {
                 if self.busy.is_none() && i < self.pages.len() {
                     let title = self.page_title(i);
+                    if self.unsaved
+                        && self.ask(
+                            Message::PageDelete(i),
+                            format!("Eliminare la {}?", self.page_name(i)),
+                            "Non è salvata e non si può recuperare.".into(),
+                            "Elimina",
+                        )
+                    {
+                        return Task::none();
+                    }
                     self.pages.remove(i);
                     self.redone = None;
                     self.current = (!self.pages.is_empty()).then(|| i.min(self.pages.len() - 1));
@@ -2973,6 +3192,18 @@ impl App {
                 }
             }
             Message::NewDocument => {
+                let n = self.pages.len();
+                if n > 0
+                    && self.unsaved
+                    && self.ask(
+                        Message::NewDocument,
+                        "Iniziare un nuovo documento?".into(),
+                        self.lost_sentence(n),
+                        "Scarta e ricomincia",
+                    )
+                {
+                    return Task::none();
+                }
                 self.pages.clear();
                 self.current = None;
                 self.redone = None;
@@ -2989,6 +3220,14 @@ impl App {
         let K::KeyPressed { key, modifiers, .. } = event else {
             return Task::none();
         };
+        // A question on the screen: Esc leaves everything as it is, Enter
+        // does not go on (it would throw scans away by a slip).
+        if self.confirm.is_some() {
+            return match key.as_ref() {
+                Key::Named(Named::Escape) => self.handle(Message::Confirm(false)),
+                _ => Task::none(),
+            };
+        }
         let editing = self.editor().is_some();
         let message = match (key.as_ref(), modifiers.command(), modifiers.shift()) {
             (Key::Named(Named::Enter), false, _) if editing => Some(EditMsg::Apply.into()),
@@ -3152,6 +3391,7 @@ impl App {
     /// redone.
     fn add_page(&mut self, image: Image, origin: Option<Found>, samples16: Option<Vec<u16>>) {
         self.close_editor(true);
+        self.unsaved = true;
         let (w, h, dpi) = (image.width, image.height, image.dpi);
         let mut page = Page::new(Raw::new(image), *self.settings());
         page.origin = origin;
@@ -3220,7 +3460,11 @@ impl App {
             let folder = self.folder();
             let _ = std::fs::create_dir_all(&folder);
             let path = folder.join(Self::stamped(self.name(), self.photo.output.extension()));
-            self.note = match self.write(&path) {
+            let written = self.write(&path);
+            if written.is_ok() {
+                self.unsaved = false;
+            }
+            self.note = match written {
                 Ok(_) if n > 1 => {
                     notify(
                         &format!("{n} foto salvate"),
@@ -3251,6 +3495,14 @@ impl App {
             self.note = format!("Tasto {} ignorato: scansione in corso", button.name());
             return;
         }
+        if self.confirm.is_some() {
+            self.note = format!(
+                "Tasto {} ignorato: rispondi prima alla domanda",
+                button.name()
+            );
+            notify("Rispondi alla domanda nell'app", "", false);
+            return;
+        }
         let index = match button {
             Button::Scan => 0,
             Button::Copy => 1,
@@ -3264,6 +3516,7 @@ impl App {
             ButtonAction::AddPage | ButtonAction::ScanPhoto => {
                 self.redone = None;
                 self.start(Purpose::Page);
+                self.notify_question();
             }
             ButtonAction::RedoLast => match self.pages.len() {
                 0 => {
@@ -3285,7 +3538,11 @@ impl App {
                 self.redone = None;
                 self.print_next = true;
                 self.start(Purpose::Page);
-                notify("Fotocopia", "Scansione in corso, poi la stampa", false);
+                if self.confirm.is_some() {
+                    self.notify_question();
+                } else {
+                    notify("Fotocopia", "Scansione in corso, poi la stampa", false);
+                }
             }
             ButtonAction::SaveDocument => {
                 if self.pages.is_empty() {
@@ -3306,6 +3563,7 @@ impl App {
                 match self.write(&path) {
                     Ok(what) => {
                         self.note = format!("Salvato: {what}");
+                        self.unsaved = false;
                         notify("Documento salvato", &path.display().to_string(), false);
                         open_folder(&folder);
                     }
@@ -3317,6 +3575,14 @@ impl App {
             }
             ButtonAction::OpenFolder => open_folder(&self.folder()),
             ButtonAction::Nothing => {}
+        }
+    }
+
+    /// A front-panel button asked something the app first asks about: the
+    /// person is at the scanner, the question is on the screen.
+    fn notify_question(&self) {
+        if let Some(confirm) = &self.confirm {
+            notify(&confirm.title, "Rispondi nell'app", false);
         }
     }
 
@@ -3350,7 +3616,67 @@ impl App {
             body = body.push(self.strip());
         }
         body = body.push(self.stage()).push(self.inspector());
-        column![self.top_bar(), body, self.status_bar()].into()
+        let page = column![self.top_bar(), body, self.status_bar()];
+        match &self.confirm {
+            Some(confirm) => stack![page, self.question(confirm)].into(),
+            None => page.into(),
+        }
+    }
+
+    /// The question before throwing scans away, over the darkened window:
+    /// a click outside it is "Annulla".
+    fn question<'a>(&self, confirm: &'a Confirm) -> Element<'a, Message> {
+        let card = container(
+            column![
+                text(&confirm.title).size(17),
+                text(&confirm.body).size(13),
+                row![
+                    Space::new().width(Length::Fill),
+                    button(text("Annulla").size(13))
+                        .padding([6, 14])
+                        .style(button::secondary)
+                        .on_press(Message::Confirm(false)),
+                    button(text("Salva…").size(13))
+                        .padding([6, 14])
+                        .style(button::primary)
+                        .on_press(Message::ConfirmSave),
+                    button(text(confirm.yes).size(13))
+                        .padding([6, 14])
+                        .style(button::danger)
+                        .on_press(Message::Confirm(true)),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+            ]
+            .spacing(14),
+        )
+        .padding(22)
+        .max_width(460)
+        .style(|theme: &Theme| {
+            let palette = theme.extended_palette();
+            container::Style {
+                background: Some(palette.background.base.color.into()),
+                text_color: Some(palette.background.base.text),
+                border: iced::Border {
+                    radius: 10.0.into(),
+                    width: 1.0,
+                    color: palette.background.strong.color,
+                },
+                shadow: iced::Shadow {
+                    color: iced::Color::from_rgba(0.0, 0.0, 0.0, 0.3),
+                    offset: iced::Vector::new(0.0, 4.0),
+                    blur_radius: 16.0,
+                },
+                ..Default::default()
+            }
+        });
+        opaque(
+            mouse_area(center(opaque(card)).style(|_: &Theme| container::Style {
+                background: Some(iced::Color::from_rgba(0.0, 0.0, 0.0, 0.45).into()),
+                ..Default::default()
+            }))
+            .on_press(Message::Confirm(false)),
+        )
     }
 
     fn idle(&self) -> bool {
