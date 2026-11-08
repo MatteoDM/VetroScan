@@ -628,6 +628,105 @@ fn landscape_crops_on_upright_sheets_and_one_page_turned_its_own_way() {
     assert!(boxes[1].0 > boxes[1].1, "page 2 sideways: {boxes:?}");
 }
 
+// ------------------------------------------------- size of the PDF
+
+/// The bytes of the PDF saved last.
+fn pdf_bytes(ui: &Ui) -> u64 {
+    let mut pdfs: Vec<_> = ui
+        .saved()
+        .into_iter()
+        .filter(|n| n.ends_with(".pdf"))
+        .map(|n| std::fs::metadata(ui.app.folder().join(n)).unwrap())
+        .collect();
+    pdfs.sort_by_key(|m| m.modified().unwrap());
+    pdfs.last().expect("a PDF").len()
+}
+
+/// The estimate shown now, in bytes (it must be up to date).
+fn estimate(ui: &Ui) -> hp3770_export::Planned {
+    let e = ui.app.pdf_estimate.as_ref().expect("an estimate");
+    assert_eq!(e.key, ui.app.estimate_key(), "up to date");
+    e.result.clone().expect("estimated")
+}
+
+/// A document of three pages, PDF, the output panel open.
+fn pdf_document() -> Ui {
+    let mut ui = document(3);
+    ui.send(Message::Output(crate::Output::Pdf));
+    ui.send(Message::Pane(crate::Pane::Output));
+    ui
+}
+
+#[test]
+fn the_size_of_the_pdf_is_estimated_before_saving() {
+    let mut ui = pdf_document();
+    let planned = estimate(&ui);
+    assert!(planned.fits);
+    assert!(ui.shows(&format!(
+        "Dimensione stimata: circa {}",
+        crate::human_size(planned.bytes)
+    )));
+    ui.send(Message::Save);
+    let real = pdf_bytes(&ui) as f64;
+    let guess = planned.bytes as f64;
+    assert!(
+        (guess / real - 1.0).abs() < 0.4,
+        "estimated {guess}, written {real}"
+    );
+    assert!(ui.app.note.contains("PDF di"), "{}", ui.app.note);
+}
+
+#[test]
+fn a_lower_quality_makes_a_smaller_pdf() {
+    let mut ui = pdf_document();
+    ui.send(Message::Save);
+    let full = pdf_bytes(&ui);
+    let at_full = estimate(&ui).bytes;
+    ui.send(Message::PdfQuality(50));
+    assert!(estimate(&ui).bytes < at_full);
+    ui.send(Message::Save);
+    assert!(pdf_bytes(&ui) < full);
+}
+
+#[test]
+fn a_limit_is_kept_by_lightening_pages() {
+    let mut ui = pdf_document();
+    let free = estimate(&ui).bytes;
+    // A third of it, in megabytes as typed.
+    let mb = free as f64 / 3.0 / 1024.0 / 1024.0;
+    let typed = format!("{mb:.3}").replace('.', ",");
+    ui.send(Message::PdfLimitText(typed));
+    let limit = u64::from(ui.app.settings().pdf_limit_kb.expect("a limit")) * 1024;
+    let planned = estimate(&ui);
+    assert!(planned.fits && planned.bytes <= limit, "{planned:?}");
+    ui.send(Message::Save);
+    let written = pdf_bytes(&ui);
+    assert!(written <= limit, "{written} over {limit}: {}", ui.app.note);
+    assert!(ui.app.note.contains("alleggerit"), "{}", ui.app.note);
+}
+
+#[test]
+fn a_limit_too_small_says_so_and_still_saves() {
+    let mut ui = pdf_document();
+    ui.send(Message::PdfLimitText("0,001".into()));
+    let planned = estimate(&ui);
+    assert!(!planned.fits);
+    ui.send(Message::Save);
+    assert!(ui.app.note.contains("oltre il limite"), "{}", ui.app.note);
+}
+
+#[test]
+fn a_limit_that_is_not_a_number_is_pointed_out() {
+    let mut ui = pdf_document();
+    ui.send(Message::PdfLimitText("5".into()));
+    assert_eq!(ui.app.settings().pdf_limit_kb, Some(5 * 1024));
+    ui.send(Message::PdfLimitText("cinque".into()));
+    assert!(ui.shows("Scrivi un numero di megabyte, per esempio 5 o 2,5"));
+    assert_eq!(ui.app.settings().pdf_limit_kb, Some(5 * 1024), "kept");
+    ui.send(Message::PdfLimitText(String::new()));
+    assert_eq!(ui.app.settings().pdf_limit_kb, None);
+}
+
 #[test]
 fn the_sheet_chosen_is_remembered() {
     use crate::{Margin, PdfFit, PdfSize};
@@ -637,6 +736,8 @@ fn the_sheet_chosen_is_remembered() {
         ui.send(Message::PdfSize(PdfSize::A5));
         ui.send(Message::PdfFit(PdfFit::Fill));
         ui.send(Message::PdfMargin(Margin(15)));
+        ui.send(Message::PdfQuality(70));
+        ui.send(Message::PdfLimitText("2,5".into()));
         // Kept for the next start: the test's folder stays until the end.
         std::mem::forget(ui);
     }
@@ -644,6 +745,8 @@ fn the_sheet_chosen_is_remembered() {
     assert_eq!(app.document.pdf_size, PdfSize::A5);
     assert_eq!(app.document.pdf_fit, PdfFit::Fill);
     assert_eq!(app.document.pdf_margin, 15);
+    assert_eq!(app.document.pdf_quality, 70);
+    assert_eq!(app.document.pdf_limit_kb, Some(2560));
     testing::clean_up();
 }
 

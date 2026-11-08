@@ -9,8 +9,9 @@
 //! the scan is, with the scan at its real size, fitted to the sheet or
 //! filling it, inside a margin.
 
+use crate::compress::{encode, prepare, Encoding};
 use crate::Result;
-use hp3770_core::session::{Format, Image};
+use hp3770_core::session::Image;
 use std::io::Write;
 
 /// Size of the pages.
@@ -158,43 +159,8 @@ impl Layout {
     }
 }
 
-/// An image as embedded in the PDF: its dictionary entries and data.
-fn image_object(image: &Image, jpeg_quality: u8) -> Result<(String, Vec<u8>)> {
-    use image::ImageEncoder;
-    let (w, h) = (image.width, image.height);
-    match image.format {
-        Format::Rgb | Format::Grey => {
-            let (space, color) = if image.format == Format::Rgb {
-                ("/DeviceRGB", image::ExtendedColorType::Rgb8)
-            } else {
-                ("/DeviceGray", image::ExtendedColorType::L8)
-            };
-            let mut jpeg = Vec::new();
-            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, jpeg_quality)
-                .write_image(&image.data, u32::try_from(w)?, u32::try_from(h)?, color)?;
-            Ok((
-                format!(
-                    "/Width {w} /Height {h} /ColorSpace {space} /BitsPerComponent 8 /Filter /DCTDecode"
-                ),
-                jpeg,
-            ))
-        }
-        Format::Lineart => {
-            // 1 bit, lines padded to a byte, 1 = white: PDF's own layout for
-            // DeviceGray at 1 bit per component.
-            let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
-            z.write_all(&image.data)?;
-            Ok((
-                format!(
-                    "/Width {w} /Height {h} /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /FlateDecode"
-                ),
-                z.finish()?,
-            ))
-        }
-    }
-}
-
-/// Writes `pages` as a PDF document to `out`.
+/// Writes `pages` as a PDF document to `out`, all on `layout`'s sheet,
+/// pictures stored as JPEG of `jpeg_quality` (black and white: lossless).
 pub fn write<W: Write>(
     out: &mut W,
     pages: &[Image],
@@ -202,17 +168,33 @@ pub fn write<W: Write>(
     jpeg_quality: u8,
 ) -> Result<()> {
     let layout = layout.into();
-    let pages: Vec<(&Image, Layout)> = pages.iter().map(|p| (p, layout)).collect();
-    write_pages(out, &pages, jpeg_quality)
+    let encoding = Encoding {
+        quality: jpeg_quality,
+        ..Encoding::default()
+    };
+    let pages: Vec<PdfPage> = pages
+        .iter()
+        .map(|image| PdfPage {
+            image,
+            layout,
+            encoding,
+        })
+        .collect();
+    write_pages(out, &pages)
 }
 
-/// Writes `pages` as a PDF document to `out`, each laid out on its own
-/// sheet (a page turned the other way, say).
-pub fn write_pages<W: Write>(
-    out: &mut W,
-    pages: &[(&Image, Layout)],
-    jpeg_quality: u8,
-) -> Result<()> {
+/// A page of a PDF: the finished scan, its sheet and how its picture is
+/// stored.
+#[derive(Debug, Clone, Copy)]
+pub struct PdfPage<'a> {
+    pub image: &'a Image,
+    pub layout: Layout,
+    pub encoding: Encoding,
+}
+
+/// Writes `pages` as a PDF document to `out`, each on its own sheet and
+/// with its own encoding.
+pub fn write_pages<W: Write>(out: &mut W, pages: &[PdfPage]) -> Result<()> {
     if pages.is_empty() {
         return Err("no pages".into());
     }
@@ -242,7 +224,8 @@ pub fn write_pages<W: Write>(
         )
         .as_bytes(),
     );
-    for (i, &(image, layout)) in pages.iter().enumerate() {
+    for (i, page) in pages.iter().enumerate() {
+        let (image, layout) = (page.image, page.layout);
         let id = page_id(i);
         let dpi = f64::from(image.dpi.max(1));
         let (iw, ih) = (image.width as f64 / dpi, image.height as f64 / dpi);
@@ -276,7 +259,8 @@ pub fn write_pages<W: Write>(
             )
             .as_bytes(),
         );
-        let (dict, data) = image_object(image, jpeg_quality)?;
+        // On the sheet at the size of the scan; the picture maybe smaller.
+        let (dict, data) = encode(&prepare(image, &page.encoding), page.encoding.quality)?;
         let mut body = format!(
             "<< /Type /XObject /Subtype /Image {dict} /Length {} >>\nstream\n",
             data.len()
@@ -304,6 +288,7 @@ pub fn write_pages<W: Write>(
 mod tests {
     use super::*;
     use crate::tests::sample;
+    use hp3770_core::session::Format;
 
     #[test]
     fn document_structure() {
@@ -417,7 +402,12 @@ mod tests {
         };
         let image = sample(Format::Grey);
         let mut out = Vec::new();
-        write_pages(&mut out, &[(&image, upright), (&image, sideways)], 85).unwrap();
+        let page = |layout| PdfPage {
+            image: &image,
+            layout,
+            encoding: Encoding::default(),
+        };
+        write_pages(&mut out, &[page(upright), page(sideways)]).unwrap();
         let text = String::from_utf8_lossy(&out);
         assert!(text.contains("/MediaBox [0 0 595.28 841.89]"), "{text}");
         assert!(text.contains("/MediaBox [0 0 841.89 595.28]"), "{text}");

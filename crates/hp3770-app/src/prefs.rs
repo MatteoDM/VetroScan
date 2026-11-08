@@ -83,6 +83,10 @@ pub struct StoredMode {
     /// Margin of a scan fitted to the sheet, millimetres (absent: the
     /// default).
     pub pdf_margin: Option<u8>,
+    /// Quality of the PDF's pictures, 30 to 100% (absent: 100).
+    pub pdf_quality: Option<u8>,
+    /// Largest PDF in kilobytes (absent: no limit).
+    pub pdf_limit_kb: Option<u32>,
     pub auto_save: bool,
     /// Find the originals on the glass and scan each on its own (absent:
     /// the default of the way of working).
@@ -104,6 +108,8 @@ impl Default for StoredMode {
             pdf_sheet: "auto".into(),
             pdf_fit: "reale".into(),
             pdf_margin: None,
+            pdf_quality: None,
+            pdf_limit_kb: None,
             auto_save: false,
             auto_crop: None,
             depth: None,

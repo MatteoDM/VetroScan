@@ -429,6 +429,90 @@ impl std::fmt::Display for PageSheet {
     }
 }
 
+/// Lowest quality of the PDF's pictures offered, percent.
+const PDF_QUALITY_MIN: u8 = 30;
+
+/// What the estimate of a PDF was made for: the pages as they were
+/// (their revision), the way of working, the quality and the limit.
+type EstimateKey = (u64, Kind, u8, Option<u32>);
+
+/// The estimate of a PDF, made off the interface thread.
+#[derive(Debug)]
+struct Estimated {
+    key: EstimateKey,
+    /// The pages measured (kept while the pages do not change).
+    samples: Arc<Vec<hp3770_export::Sample>>,
+    result: Result<hp3770_export::Planned, String>,
+}
+
+/// A size in bytes as people read it: "850 KB", "4,7 MB".
+fn human_size(bytes: u64) -> String {
+    let kb = bytes as f64 / 1024.0;
+    if kb < 1000.0 {
+        format!("{} KB", kb.round().max(1.0))
+    } else {
+        let mb = kb / 1024.0;
+        let text = if mb < 10.0 {
+            format!("{mb:.1}")
+        } else {
+            format!("{mb:.0}")
+        };
+        format!("{} MB", text.replace('.', ","))
+    }
+}
+
+/// The encoding of a quality percentage.
+fn e_base(percent: u8) -> hp3770_export::Encoding {
+    hp3770_export::Encoding::from_percent(percent)
+}
+
+/// What the limit cost: "3 pagine su 10 alleggerite, fino a 200 dpi e
+/// JPEG 65" (none when no page was).
+fn lightened(
+    encodings: &[hp3770_export::Encoding],
+    base: hp3770_export::Encoding,
+) -> Option<String> {
+    let changed: Vec<&hp3770_export::Encoding> = encodings
+        .iter()
+        .filter(|e| e.quality != base.quality || e.max_dpi != base.max_dpi)
+        .collect();
+    if changed.is_empty() {
+        return None;
+    }
+    let quality = changed
+        .iter()
+        .map(|e| e.quality)
+        .min()
+        .unwrap_or(base.quality);
+    let dpi = changed.iter().filter_map(|e| e.max_dpi).min();
+    let n = changed.len();
+    let of = if n == encodings.len() {
+        if n == 1 {
+            "la pagina alleggerita".to_string()
+        } else {
+            format!("tutte le {n} pagine alleggerite")
+        }
+    } else if n == 1 {
+        format!("1 pagina su {} alleggerita", encodings.len())
+    } else {
+        format!("{n} pagine su {} alleggerite", encodings.len())
+    };
+    Some(match dpi {
+        Some(dpi) => format!("{of}, fino a {dpi} dpi e JPEG {quality}"),
+        None => format!("{of}, fino a JPEG {quality}"),
+    })
+}
+
+/// Megabytes typed ("5", "2,5", "0.8") in kilobytes; none for nothing.
+fn parse_megabytes(text: &str) -> Option<Option<u32>> {
+    let text = text.trim().trim_end_matches(['M', 'B', 'm', 'b']).trim();
+    if text.is_empty() {
+        return Some(None);
+    }
+    let mb: f64 = text.replace(',', ".").parse().ok()?;
+    (mb > 0.0 && mb <= 10_000.0).then(|| Some((mb * 1024.0).round().max(1.0) as u32))
+}
+
 /// Margins offered for a scan fitted to the sheet, millimetres.
 const PDF_MARGINS: [u8; 5] = [0, 5, 10, 15, 20];
 
@@ -477,6 +561,11 @@ struct Settings {
     pdf_fit: PdfFit,
     /// Margin of a scan fitted to the sheet (or filling it), millimetres.
     pdf_margin: u8,
+    /// Quality of the PDF's pictures, 30 to 100% (100: as scanned).
+    pdf_quality: u8,
+    /// Largest PDF, kilobytes (none: no limit): pages are lightened one
+    /// by one until it fits.
+    pdf_limit_kb: Option<u32>,
     auto_save: bool,
     /// Find the originals on the glass (photos, cards, receipts) and scan
     /// each one straightened, as its own image.
@@ -497,6 +586,8 @@ impl Settings {
             pdf_sheet: Sheet::Auto,
             pdf_fit: PdfFit::Actual,
             pdf_margin: 10,
+            pdf_quality: 100,
+            pdf_limit_kb: None,
             auto_save: false,
             auto_crop: false,
             depth: 8,
@@ -572,6 +663,8 @@ impl Settings {
             pdf_sheet: self.pdf_sheet.key().into(),
             pdf_fit: self.pdf_fit.key().into(),
             pdf_margin: Some(self.pdf_margin),
+            pdf_quality: Some(self.pdf_quality),
+            pdf_limit_kb: self.pdf_limit_kb,
             auto_save: self.auto_save,
             auto_crop: Some(self.auto_crop),
             depth: Some(self.depth),
@@ -690,6 +783,11 @@ impl Settings {
                 .pdf_margin
                 .filter(|mm| PDF_MARGINS.contains(mm))
                 .unwrap_or(base.pdf_margin),
+            pdf_quality: m
+                .pdf_quality
+                .filter(|q| (PDF_QUALITY_MIN..=100).contains(q))
+                .unwrap_or(base.pdf_quality),
+            pdf_limit_kb: m.pdf_limit_kb.filter(|&kb| kb > 0),
             auto_save: m.auto_save,
             auto_crop: m.auto_crop.unwrap_or(base.auto_crop),
             depth,
@@ -1268,6 +1366,28 @@ impl Page {
         }
     }
 
+    /// A small copy of the finished page (its geometry and look drawn on
+    /// the small copy of the scan) and the real page's size: what the
+    /// estimate of a PDF measures.
+    fn pdf_sample(&self, shared: &Settings) -> hp3770_export::Sample {
+        let settings = self.effective(shared);
+        let full = &self.raw.full;
+        // The crop and turns, at the small copy's size.
+        let t = Transform {
+            scale: None,
+            dpi: None,
+            ..self.transform
+        };
+        let small = if t.is_identity() {
+            render(&self.raw.proxy, &settings, &settings.adjust)
+        } else {
+            render(&edited(&self.raw.proxy, &t), &settings, &settings.adjust)
+        };
+        let (w, h) = self.transform.output_size(full.width, full.height);
+        let dpi = self.transform.output_dpi(full.width, full.height, full.dpi);
+        hp3770_export::Sample::of(&small, w, h, dpi)
+    }
+
     /// A quarter turn, part of the page's geometry edits.
     fn rotate(&mut self, clockwise: bool, shared: &Settings) {
         self.transform.rotate(clockwise);
@@ -1554,6 +1674,11 @@ enum Message {
     PdfFit(PdfFit),
     PdfMargin(Margin),
     PdfSheet(Sheet),
+    PdfQuality(u8),
+    /// The largest PDF being typed, in megabytes.
+    PdfLimitText(String),
+    /// The estimate of the PDF is ready.
+    Estimated(Arc<Estimated>),
     /// The sheet of the page shown: as the document's, or its own way.
     PageSheet(PageSheet),
     AutoSave(bool),
@@ -1745,6 +1870,15 @@ struct App {
     /// A page of the strip held down: where it was, and the page it is
     /// over now (where it goes if let go).
     drag: Option<(usize, Option<usize>)>,
+    /// Changes each time the pages, or how they look, change: the estimate
+    /// of the PDF follows it.
+    pdf_rev: u64,
+    /// The last estimate of the PDF (what it was for, the pages measured).
+    pdf_estimate: Option<Arc<Estimated>>,
+    /// An estimate is being made.
+    estimating: bool,
+    /// The largest PDF as typed (none: shown from the settings).
+    limit_draft: Option<String>,
 }
 
 impl App {
@@ -1825,6 +1959,10 @@ impl App {
                 after_save: None,
                 confirmed: false,
                 drag: None,
+                pdf_rev: 0,
+                pdf_estimate: None,
+                estimating: false,
+                limit_draft: None,
             },
             iced::system::theme().map(Message::SystemTheme),
         )
@@ -1858,6 +1996,53 @@ impl App {
                 _ => None,
             }),
         ])
+    }
+
+    /// What the estimate of the PDF is for now.
+    fn estimate_key(&self) -> EstimateKey {
+        let s = self.settings();
+        (self.pdf_rev, self.kind, s.pdf_quality, s.pdf_limit_kb)
+    }
+
+    /// Starts the estimate of the PDF when the output is a PDF and the
+    /// last one is out of date (one at a time; the pages are measured
+    /// again only when they changed).
+    fn schedule_estimate(&mut self) -> Task<Message> {
+        let s = *self.settings();
+        if s.output != Output::Pdf || self.pages.is_empty() || self.estimating {
+            return Task::none();
+        }
+        let key = self.estimate_key();
+        if self.pdf_estimate.as_ref().is_some_and(|e| e.key == key) {
+            return Task::none();
+        }
+        let measured = self
+            .pdf_estimate
+            .as_ref()
+            .filter(|e| (e.key.0, e.key.1) == (key.0, key.1))
+            .map(|e| e.samples.clone());
+        let pages = if measured.is_none() {
+            self.pages.clone()
+        } else {
+            Vec::new()
+        };
+        self.estimating = true;
+        let base = hp3770_export::Encoding::from_percent(s.pdf_quality);
+        let limit = s.pdf_limit_kb.map(|kb| u64::from(kb) * 1024);
+        Task::perform(
+            async move {
+                let samples = measured
+                    .unwrap_or_else(|| Arc::new(pages.iter().map(|p| p.pdf_sample(&s)).collect()));
+                let result =
+                    hp3770_export::compress::plan(&samples, base, limit).map_err(|e| e.to_string());
+                Arc::new(Estimated {
+                    key,
+                    samples,
+                    result,
+                })
+            },
+            Message::Estimated,
+        )
     }
 
     /// What the question says is lost: "Le 3 pagine acquisite non sono
@@ -2024,6 +2209,7 @@ impl App {
     /// own look) no longer holds.
     fn pages_changed(&mut self) {
         self.epoch = self.epoch.wrapping_add(1);
+        self.pdf_rev += 1;
         if !self.stale.is_empty() {
             self.restale();
         }
@@ -2660,14 +2846,9 @@ impl App {
         let folder = path.parent().unwrap_or(std::path::Path::new("."));
         let format = image_format(path, settings.output);
         match writer(settings.output, path, n) {
-            // Each page on its sheet: turned its own way if it has one.
             Writer::Pdf => {
-                let laid: Vec<(&Image, hp3770_export::Layout)> = pages
-                    .iter()
-                    .zip(&self.pages)
-                    .map(|(image, page)| (image, settings.layout(page.sheet)))
-                    .collect();
-                hp3770_export::save_pdf_pages(path, &laid, 88)
+                let summary = self.write_pdf(path, &pages)?;
+                return Ok(format!("{} · {summary}", path.display()));
             }
             Writer::Tiff => hp3770_export::save_tiff(path, &pages),
             Writer::Zip => hp3770_export::save_zip(path, &name, &pages, ImageFormat::Png),
@@ -2686,6 +2867,84 @@ impl App {
             Writer::Folder => format!("{n} file in {}", folder.display()),
             _ => format!("{n} {noun} in {}", path.display()),
         })
+    }
+
+    /// Writes the finished `pages` as a PDF: each on its sheet, its
+    /// pictures at the quality chosen and, with a limit, lightened page by
+    /// page until the file fits (measured on the file written, and done
+    /// again tighter if the estimate fell short). Says how large it is and
+    /// what was lightened.
+    fn write_pdf(&self, path: &std::path::Path, pages: &[Image]) -> Result<String, String> {
+        use hp3770_export::{compress, Encoding, PdfPage, Sample};
+        let settings = self.settings();
+        let base = Encoding::from_percent(settings.pdf_quality);
+        let limit = settings.pdf_limit_kb.map(|kb| u64::from(kb) * 1024);
+        let samples: Vec<Sample> = match limit {
+            Some(_) => pages.iter().map(Sample::new).collect(),
+            None => Vec::new(),
+        };
+        let mut budget = limit;
+        let mut planned = None;
+        for _ in 0..4 {
+            let encodings = match budget {
+                Some(b) => {
+                    let p = compress::plan(&samples, base, Some(b)).map_err(|e| e.to_string())?;
+                    let encodings = p.encodings.clone();
+                    planned = Some(p);
+                    encodings
+                }
+                None => vec![base; pages.len()],
+            };
+            let laid: Vec<PdfPage> = pages
+                .iter()
+                .zip(&self.pages)
+                .zip(&encodings)
+                .map(|((image, page), &encoding)| PdfPage {
+                    image,
+                    layout: settings.layout(page.sheet),
+                    encoding,
+                })
+                .collect();
+            hp3770_export::save_pdf_pages(path, &laid).map_err(|e| e.to_string())?;
+            let written = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
+            match (limit, budget) {
+                // Over the limit by the estimate's error: plan again for
+                // less, by as much as it fell short.
+                (Some(l), Some(b)) if written > l && planned.as_ref().is_some_and(|p| p.fits) => {
+                    budget = Some((b as f64 * l as f64 / written as f64 * 0.97) as u64);
+                }
+                _ => return Ok(self.pdf_summary(written, limit, &encodings, base)),
+            }
+        }
+        let written = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
+        let encodings = planned.map_or_else(Vec::new, |p| p.encodings);
+        Ok(self.pdf_summary(written, limit, &encodings, base))
+    }
+
+    /// "PDF di 4,7 MB (limite 5 MB) · 3 pagine alleggerite, fino a 200 dpi
+    /// e JPEG 65".
+    fn pdf_summary(
+        &self,
+        bytes: u64,
+        limit: Option<u64>,
+        encodings: &[hp3770_export::Encoding],
+        base: hp3770_export::Encoding,
+    ) -> String {
+        let mut out = format!("PDF di {}", human_size(bytes));
+        if let Some(l) = limit {
+            if bytes <= l {
+                out.push_str(&format!(" (limite {})", human_size(l)));
+            } else {
+                out.push_str(&format!(
+                    ", oltre il limite di {}: le pagine sono già alleggerite al massimo",
+                    human_size(l)
+                ));
+            }
+        }
+        if let Some(lightened) = lightened(encodings, base) {
+            out.push_str(&format!(" · {lightened}"));
+        }
+        out
     }
 
     /// Writes every page (one file each) finished at 16 bits per channel:
@@ -2813,10 +3072,12 @@ impl App {
         let task = self.handle(message);
         if touches_pages {
             self.unsaved = true;
+            self.pdf_rev += 1;
         }
         if self.pages.is_empty() {
             self.unsaved = false;
         }
+        let task = Task::batch([task, self.schedule_estimate()]);
         let now = self.prefs();
         if now != self.saved {
             if let Err(e) = now.save() {
@@ -2896,6 +3157,8 @@ impl App {
             Message::Kind(kind) => {
                 // Not during a scan: its pages go where the mode says.
                 if self.kind != kind && self.busy.is_none() {
+                    // The limit typed belongs to the other way of working.
+                    self.limit_draft = None;
                     let dropped = self.pages.len().saturating_sub(1);
                     if kind == Kind::Photo
                         && dropped > 0
@@ -3037,6 +3300,19 @@ impl App {
             Message::PdfFit(fit) => self.settings_mut().pdf_fit = fit,
             Message::PdfMargin(Margin(mm)) => self.settings_mut().pdf_margin = mm,
             Message::PdfSheet(sheet) => self.settings_mut().pdf_sheet = sheet,
+            Message::PdfQuality(q) => {
+                self.settings_mut().pdf_quality = q.clamp(PDF_QUALITY_MIN, 100);
+            }
+            Message::PdfLimitText(text) => {
+                if let Some(kb) = parse_megabytes(&text) {
+                    self.settings_mut().pdf_limit_kb = kb;
+                }
+                self.limit_draft = Some(text);
+            }
+            Message::Estimated(done) => {
+                self.estimating = false;
+                self.pdf_estimate = Some(done);
+            }
             Message::PageSheet(PageSheet(sheet)) => {
                 if let Some(page) = self.current.and_then(|i| self.pages.get_mut(i)) {
                     page.sheet = sheet;
@@ -3717,6 +3993,7 @@ impl App {
     fn add_page(&mut self, image: Image, origin: Option<Found>, samples16: Option<Vec<u16>>) {
         self.close_editor(true);
         self.unsaved = true;
+        self.pdf_rev += 1;
         let (w, h, dpi) = (image.width, image.height, image.dpi);
         let mut page = Page::new(Raw::new(image), *self.settings());
         page.origin = origin;
@@ -4309,6 +4586,101 @@ impl App {
             }),
         );
         strip(list.padding([12, 10]))
+    }
+
+    /// The size of the PDF: the quality of its pictures, a largest size,
+    /// and how large it will be.
+    fn pdf_compression(&self) -> Element<'_, Message> {
+        let s = self.settings();
+        let e = hp3770_export::Encoding::from_percent(s.pdf_quality);
+        let what = match (s.pdf_quality, e.max_dpi) {
+            (100, _) => "come la scansione, JPEG 95".to_string(),
+            (_, None) => format!("JPEG {}, pagine senza colore in grigio", e.quality),
+            (_, Some(dpi)) => format!("JPEG {}, al massimo {dpi} dpi", e.quality),
+        };
+        let quality = column![
+            labelled(
+                "Qualità",
+                row![
+                    slider(
+                        f32::from(PDF_QUALITY_MIN)..=100.0,
+                        f32::from(s.pdf_quality),
+                        |v| Message::PdfQuality(((v / 5.0).round() * 5.0) as u8),
+                    )
+                    .step(5.0_f32),
+                    text(format!("{}%", s.pdf_quality)).size(13).width(42),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center)
+                .into(),
+            ),
+            text(what).size(11),
+        ]
+        .spacing(4);
+        let typed = self.limit_draft.clone().unwrap_or_else(|| {
+            s.pdf_limit_kb
+                .map(|kb| {
+                    let mb = f64::from(kb) / 1024.0;
+                    format!("{mb:.2}")
+                        .trim_end_matches('0')
+                        .trim_end_matches('.')
+                        .replace('.', ",")
+                })
+                .unwrap_or_default()
+        });
+        let invalid = parse_megabytes(&typed).is_none();
+        let limit = labelled(
+            "Al massimo",
+            row![
+                iced::widget::text_input("nessun limite", &typed)
+                    .on_input(Message::PdfLimitText)
+                    .size(13)
+                    .width(Length::Fill),
+                text("MB").size(13),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center)
+            .into(),
+        );
+        let key = self.estimate_key();
+        let current = self.pdf_estimate.as_ref().filter(|e| e.key == key);
+        let estimate = match (current, &self.pdf_estimate) {
+            (Some(e), _) => match &e.result {
+                Ok(p) => match s.pdf_limit_kb {
+                    None => format!("Dimensione stimata: circa {}", human_size(p.bytes)),
+                    Some(kb) if p.fits => {
+                        let limit = human_size(u64::from(kb) * 1024);
+                        match lightened(&p.encodings, e_base(s.pdf_quality)) {
+                            Some(l) => format!("Circa {}, nel limite di {limit}: {l}", human_size(p.bytes)),
+                            None => format!(
+                                "Circa {}, già nel limite di {limit}: nessuna pagina da alleggerire",
+                                human_size(p.bytes)
+                            ),
+                        }
+                    }
+                    Some(kb) => format!(
+                        "Anche alleggerendo ogni pagina resta circa {}, oltre {}: prova \
+                         Grigio o Bianco e nero, o una risoluzione di scansione più bassa",
+                        human_size(p.bytes),
+                        human_size(u64::from(kb) * 1024)
+                    ),
+                },
+                Err(err) => format!("Stima non riuscita: {err}"),
+            },
+            (None, Some(old)) => match &old.result {
+                Ok(p) => format!("Circa {} · aggiornamento…", human_size(p.bytes)),
+                Err(_) => "Calcolo della dimensione…".into(),
+            },
+            (None, None) if self.pages.is_empty() => {
+                "La dimensione si vede dopo la prima scansione".into()
+            }
+            (None, None) => "Calcolo della dimensione…".into(),
+        };
+        let mut out = column![heading("Dimensione del PDF"), quality, limit].spacing(8);
+        if invalid {
+            out = out.push(text("Scrivi un numero di megabyte, per esempio 5 o 2,5").size(11));
+        }
+        out.push(text(estimate).size(12)).into()
     }
 
     /// The canvas with its floating controls.
@@ -5376,6 +5748,9 @@ impl App {
                     .size(11),
                 );
             }
+        }
+        if self.settings().output == Output::Pdf {
+            pane = pane.push(self.pdf_compression());
         }
         pane = pane
             .push(heading("Cartella"))

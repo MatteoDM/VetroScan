@@ -475,6 +475,26 @@ proprio la forma del foglio, ritaglia prima nell'[editor](#modificare-una-scansi
 con la proporzione *A4 / A3 / A5* o *Foto 10 × 15*: con **Adatta al foglio** il ritaglio
 riempie allora tutto il foglio, margine a parte.
 
+#### La dimensione del PDF
+
+Sotto, **Dimensione del PDF** dice quanto sarà grande il file (*Dimensione stimata: circa
+…*), aggiornata a ogni cambiamento:
+
+- **Qualità** (dal 30 al 100%): al **100%** le pagine restano come scansionate (JPEG 95).
+  Più in basso calano la qualità JPEG e, sotto il 90%, la risoluzione massima (300 dpi, poi
+  200, poi 150); le pagine a colori che di colore non ne hanno (una lettera in nero) vanno in
+  grigio, un terzo dei dati. Le pagine in bianco e nero restano sempre nitide e senza perdita.
+- **Al massimo … MB**: il limite del file (per esempio 5 per un allegato di posta, o 2,5).
+  L'app alleggerisce **una pagina alla volta**, sempre quella che fa risparmiare di più, finché
+  il PDF ci sta: le pagine già leggere (il testo) restano come sono, cede prima la foto grande.
+  Ogni pagina scende per gradi, prima la qualità e poi la risoluzione, mai sotto i 100 dpi e
+  JPEG 45. Prima di salvare la stima dice quante pagine saranno alleggerite e fino a dove;
+  dopo, il messaggio in basso dice la dimensione vera. Se nemmeno così ci sta, il PDF si salva
+  lo stesso, al minimo, e l'app lo dice: conviene allora scansionare in Grigio o Bianco e nero,
+  o a una risoluzione più bassa.
+
+Qualità e limite si ricordano, separati per Documento e Foto.
+
 ### Foto
 
 | Formato | Quando |
