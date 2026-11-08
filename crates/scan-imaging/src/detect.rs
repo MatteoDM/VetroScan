@@ -255,9 +255,14 @@ pub fn objects(image: &Image) -> Vec<Found> {
         })
         .map(|f| refine(image, channels, &lid, far, block as f32, f))
         .collect();
-    // Reading order: rows of objects side by side, that is overlapping for
-    // at least half the height of the lower one (a postcard askew reaches a
-    // little into the row under it without being part of it).
+    reading_order(&mut found);
+    found
+}
+
+/// Sorts in reading order: rows of objects side by side, that is
+/// overlapping for at least half the height of the lower one (a postcard
+/// askew reaches a little into the row under it without being part of it).
+pub(crate) fn reading_order(found: &mut [Found]) {
     found.sort_by(|a, b| {
         let (ta, tb) = (a.bounds(), b.bounds());
         let overlap = (ta[1] + ta[3]).min(tb[1] + tb[3]) - ta[1].max(tb[1]);
@@ -268,7 +273,6 @@ pub fn objects(image: &Image) -> Vec<Found> {
             ta[1].total_cmp(&tb[1])
         }
     });
-    found
 }
 
 /// Each side of `f` moved to where the image really changes from the lid,
@@ -338,7 +342,7 @@ fn refine(image: &Image, channels: usize, lid: &[f32; 3], far: f32, block: f32, 
     }
 }
 
-fn dilate(mask: &[bool], w: usize, h: usize, r: usize) -> Vec<bool> {
+pub(crate) fn dilate(mask: &[bool], w: usize, h: usize, r: usize) -> Vec<bool> {
     // Square structuring element, done along rows then columns.
     let mut rows = vec![false; mask.len()];
     for y in 0..h {
@@ -357,13 +361,13 @@ fn dilate(mask: &[bool], w: usize, h: usize, r: usize) -> Vec<bool> {
     out
 }
 
-fn erode(mask: &[bool], w: usize, h: usize, r: usize) -> Vec<bool> {
+pub(crate) fn erode(mask: &[bool], w: usize, h: usize, r: usize) -> Vec<bool> {
     let inverted: Vec<bool> = mask.iter().map(|&v| !v).collect();
     dilate(&inverted, w, h, r).into_iter().map(|v| !v).collect()
 }
 
 /// Sets every block not reachable from the border through empty blocks.
-fn fill_holes(mask: &mut [bool], w: usize, h: usize) {
+pub(crate) fn fill_holes(mask: &mut [bool], w: usize, h: usize) {
     let mut outside = vec![false; mask.len()];
     let mut stack: Vec<usize> = Vec::new();
     for x in 0..w {
@@ -399,7 +403,7 @@ fn fill_holes(mask: &mut [bool], w: usize, h: usize) {
 }
 
 /// The outline (blocks next to an empty one) of each connected group.
-fn components(mask: &[bool], w: usize, h: usize) -> Vec<Vec<[f32; 2]>> {
+pub(crate) fn components(mask: &[bool], w: usize, h: usize) -> Vec<Vec<[f32; 2]>> {
     let mut seen = vec![false; mask.len()];
     let mut out = Vec::new();
     for start in 0..mask.len() {
@@ -441,7 +445,7 @@ fn components(mask: &[bool], w: usize, h: usize) -> Vec<Vec<[f32; 2]>> {
 
 /// The smallest rectangle, at any angle, around the points: the convex
 /// hull, then every turn from -45° to 45° in steps of 0.1°.
-fn fit(points: &[[f32; 2]]) -> Option<Found> {
+pub(crate) fn fit(points: &[[f32; 2]]) -> Option<Found> {
     let hull = hull(points);
     if hull.len() < 3 {
         return None;

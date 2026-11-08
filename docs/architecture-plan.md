@@ -401,7 +401,17 @@ It needs no new hardware, only slides and negatives to put in the holder.
   negatives done properly, on the linear 16-bit samples: the film base measured on the
   unexposed edge, the orange mask removed channel by channel, the inversion in density, then
   levels and grey balance per channel; for slides, the full dynamic range of the 16 bits. The
-  frames found by themselves in the holder (`detect`), each one a page.
+  frames found by themselves in the holder (`detect`), each one a page. Done on 8 November
+  2026, on made-up samples: `scan_imaging::film`. `Negative::measure` takes the base (given,
+  `base_in` on a rectangle, or `base_auto`: the least dense film) and per channel the density
+  of the highlights, with one black for the three channels; `Negative::positive` gives linear
+  16-bit light over the scene's range (gamma of the film 0.6), for the usual rendering with
+  `film::TONE`. `Slide` stretches to the 16 bits with one black and one white. The holder,
+  the lamp beside the film and the bare base are left out of the levels; the measures are
+  taken once (preview) and applied as they are (full scan). `film::frames` finds the slides
+  (an empty slot is left out) and the 35 mm frames of each strip (gaps searched every 38 mm,
+  each frame anchored to the edge of the gap on its side; with no gap seen, frames centred).
+  Still to check on real films, against the HP driver's images.
 - **App**: the **Film** button becomes active (Slide, Negative) only with `transparency` and
   the adapter plugged in; e2e with a made-up scanner that has the adapter, one with it
   unplugged and one without it (capabilities rule).
