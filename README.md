@@ -85,6 +85,9 @@ mentre il registro risponde a chiunque lo legga.
 
 ## Linux
 
+Guida passo per passo per un computer nuovo con Omarchy, anche per chi non ha mai
+usato il terminale: [docs/installazione-linux.md](docs/installazione-linux.md).
+
 Il driver parla allo scanner direttamente via USB (`nusb`), senza SANE né moduli del
 kernel. Serve solo che l'utente possa aprire il dispositivo: la regola udev in
 [`packaging/linux`](packaging/linux) lo concede a chi è collegato alla sessione.
