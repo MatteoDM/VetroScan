@@ -55,16 +55,15 @@ impl Button {
     /// the chip shows a held button as 0.
     ///
     /// Measured on the hardware (2026-11-07, `hp3770 buttons --raw`): idle
-    /// `E968 = BF`, Copy `BE`, and `BB` and `BD` for the outer buttons. The
-    /// first test gave them the wrong way round; pressing them one by one
-    /// in the application (2026-11-08) showed the left one (Scan, scanner
-    /// icon) is `BB` and the right one (Instant Share) `BD`. The order
+    /// `E968 = BF`; pressed one by one in the application (2026-11-08):
+    /// left (Scan, scanner icon) `BB`, centre (Copy) `BD`, right (Instant
+    /// Share) `BE`. The first test had named them wrongly. The order
     /// differs from the interrupt codes.
     pub fn mask(self) -> u8 {
         match self {
             Self::Scan => 0x04,
-            Self::Copy => 0x01,
-            Self::InstantShare => 0x02,
+            Self::Copy => 0x02,
+            Self::InstantShare => 0x01,
         }
     }
 
@@ -94,8 +93,8 @@ mod tests {
         // E968 values read while each button was held.
         for (e968, button) in [
             (0xbb, Button::Scan),
-            (0xbe, Button::Copy),
-            (0xbd, Button::InstantShare),
+            (0xbd, Button::Copy),
+            (0xbe, Button::InstantShare),
         ] {
             assert_eq!(Button::from_mask(!e968 & 0x3f), Some(button));
         }

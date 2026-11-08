@@ -53,6 +53,19 @@ Un byte su `0x83`: `0x00` Scan (sinistro), `0x02` Copy (centrale),
 `0x03` HP Instant Share (destro). Dopo l'evento il driver HP rilegge lo stato dei
 registri, compreso il blocco da `0xE800`.
 
+Senza driver HP i tasti si leggono dal registro `0xE968` (a riposo `0xBF`, un tasto
+premuto porta a 0 il suo bit): Scan (sinistro) bit `0x04` (`0xBB`), Copy (centrale)
+bit `0x02` (`0xBD`), Instant Share (destro) bit `0x01` (`0xBE`). Il bit 7 vale sempre
+1: una lettura `0x00` (capita quando WIA apre la sua app e reimposta il chip) va
+scartata.
+
+Windows (WIA) vede anche lui le pressioni e apre l'app «Nuova digitalizzazione». Il
+gestore di ogni evento sta in
+`HKLM\SYSTEM\CurrentControlSet\Control\Class\{6BDD1FC6-810F-11D0-BEC7-08002BE2092F}\NNNN\Events\3770_SCAN`
+(e `3770_COPY`, `3770_SHARE`), valore `DefaultHandler`:
+`{E0372B7D-E115-4525-BC55-B629E68C745A}` è «nessuna azione», la scelta della scheda
+Eventi; l'app lo imposta dalle Preferenze.
+
 ## Dati immagine
 
 - Lo scanner manda sempre RGB a 8 bit per canale: grigio e bianco/nero
