@@ -370,7 +370,7 @@ In order of return for cost:
 
 Each backend only implements `trait Scanner`: app, imaging and export do not change.
 
-## Phase 10 · slides and negatives with the HP 3770's adapter · planned
+## Phase 10 · slides and negatives with the HP 3770's adapter · negatives done
 
 Added on 8 November 2026. Until then the documents said the HP 3770 has no adapter for
 films: it is wrong. The 3770 has one built into the lid (a light panel with a holder for
@@ -485,6 +485,42 @@ It needs no new hardware, only slides and negatives to put in the holder.
 - **App**: the **Film** button becomes active (Slide, Negative) only with `transparency` and
   the adapter plugged in; e2e with a made-up scanner that has the adapter, one with it
   unplugged and one without it (capabilities rule).
+  **Done for negatives on 9 November 2026**, slides left for later (none at hand):
+  - contract: `ScanRequest::source` (`Source::Glass`, `Slide`, `Negative`), the area of a
+    film within the adapter's area; `Capabilities::transparency` an `Option<Adapter>` (its
+    area, the films it takes), `offers`, `bed_inches`, `bed_pixels`; `check` refuses a source
+    the scanner does not take. No frames of the holder in the contract: the app finds them on
+    the preview (`film::frames`), whatever the holder;
+  - driver: the 3770 offers `Source::Negative` with the adapter's area of its profile,
+    `DeviceStatus::adapter` is `tma_attached`, a film's area is moved to where the adapter
+    lights the glass (the same window as `tma-scan`) and asks for the adapter's lamp, its
+    calibration and the negatives' modes; with the cable unplugged the scan is refused;
+  - imaging: `film::measure_strip` (frames, base between them, levels inside them) and
+    `film::inside`, shared with `tma-scan` and `develop`; the samples stay the film's
+    transmission in the contract, the app makes the positive (any backend benefits);
+  - app: **Film** is Foto with `Source::Negative` (its own settings, 1200 dpi and 16 bits,
+    saved as `film` in the preferences), so the preview, the frames as originals, the cut and
+    the pages are Foto's; the preview is developed (`Negative` measured on it, kept for the
+    full scans: the same picture), the frames found on the transmission, the pages drawn
+    with `film::TONE`. The button shows with an adapter that takes negatives; with its cable
+    unplugged a press asks the scanner again and says so. The e2e
+    `films_need_the_adapter_and_its_cable`, `a_strip_of_negatives_becomes_a_picture_per_frame`
+    with `FakeScanner::with_adapter` (a strip of two frames, orange base);
+  - **the first try from the app ground the motor** (9 November 2026): the preview was at
+    200 dpi, and the negatives' modes run the motor at constant speed from a standstill where
+    the glass's modes at 300 and 200 dpi start it with a ramp (`SETTING_10`, `SETTING_11`);
+    the negatives' line, only twice the glass's, asked a step rate the motor cannot start at.
+    At 600 and 1200 dpi the glass's modes are at constant speed too, and the negatives' slower:
+    the scans of 8 November were all at 1200. So `scan_modes::NEGATIVE_RESOLUTIONS` (600, 1200)
+    is checked by `session::scan` before anything moves (the test
+    `negatives_at_low_resolutions_are_refused_before_anything_moves`), the contract has
+    `Adapter::resolutions` and `Capabilities::resolutions_for`, and the app scans films and
+    their preview at those only (the preview at 600 dpi, brought to 200). 2400 dpi left out:
+    never tried. Lower resolutions would need the HP configuration's longer lines (three to six
+    times) or a ramp of our own;
+  - still to try on the real scanner from the app at 600 dpi.
+  The driver of HP cannot scan with the adapter on Windows 11 (above): the comparison with its
+  images in **Done when** cannot be made; the reference are our own scans.
 - **Done when:** the adapter's start-up and calibration match the captures; a slide and a
   negative come out comparable to the HP driver's (or better for negatives); smoke tests on
   the real scanner with a slide in the holder.
@@ -562,5 +598,5 @@ to the sheet" it is always centred. Nothing moves with the arrows: `App::on_key`
 | 7 · new name + final check (done) | 0.3.0 | medium: updates and preferences | yes |
 | 8 · other HP (postponed) | to be decided | high | no: testers needed |
 | 9 · other brands (postponed) | to be decided | medium | eSCL yes, with a network scanner |
-| 10 · slides and negatives on the 3770 (planned) | to be decided | medium: captures needed | yes: the 3770's own adapter |
+| 10 · slides and negatives on the 3770 (negatives done, slides open) | to be decided | medium | yes: the 3770's own adapter |
 | 11 · precise moves from the keyboard (done) | to be decided | low | yes |

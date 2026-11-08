@@ -17,6 +17,22 @@ GitHub; here they are in English.
 
 ## [Unreleased]
 
+### Added
+- **Negatives with the HP 3770's adapter**, in the lid: the **Film** mode, next to Document
+  and Photo, scans a strip of 35 mm negatives in the holder and gives them as positives,
+  natural colours, each frame found its own image (as the photos in Photo). The preview covers
+  the adapter's area only and already shows the positives. By default 1200 dpi (about 2
+  megapixels a frame), 16 bits, JPEG; films only at 600 and 1200 dpi, the preview too. With
+  the adapter's cable unplugged the Film button says so. Slides are not supported yet. Every scan with the adapter waits about 30 s for its light
+  to warm up: a strip at 1200 dpi takes about two minutes.
+- `hp3770 tma-scan` (experimental) scans the adapter's area, with `--film negative` (or
+  `slide`) also its positive; `hp3770 develop` makes the positive again from a saved 16-bit
+  scan, without the scanner; `hp3770 lamp on|off --tma` switches the adapter's light.
+
+### Changed
+- The scanner contract: a scan says where it comes from, the glass or a film in the adapter,
+  and a scanner its adapter's area and the films it takes.
+
 ## [0.4.0] - 2026-11-08
 
 ### Added

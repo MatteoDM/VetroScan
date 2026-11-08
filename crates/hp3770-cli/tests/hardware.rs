@@ -154,6 +154,7 @@ fn the_registry_opens_the_scanner_like_the_app() {
     let side = pixels(MM, 300);
     let request = ScanRequest {
         dpi: 300,
+        source: scanner_api::Source::Glass,
         area: Area {
             x: pixels(70.0, 300),
             y: pixels(150.0, 300),

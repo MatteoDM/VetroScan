@@ -106,10 +106,25 @@ does not inherit by mistake the colours of the session before. A look to reuse i
 | Saved as | a single PDF or TIFF, or one image per page | one image per photo, also RAW |
 | By default | 300 dpi, colour, 8 bits, PDF, automatic crop off | 600 dpi, colour, 16 bits, JPEG, automatic crop on |
 
-With a scanner that has an adapter for slides and negatives a third button, **Film**,
-appears: it is grey, because films are not supported yet. The HP 3770 has one, in its lid
-(the light panel with the holder for two slides or a strip of negatives), but VetroScan
-cannot use it yet: for now the Film button does not appear with it.
+With a scanner that has an adapter for films a third button appears, **Film**. The HP 3770
+has one in its lid: the light panel, with the holder for two slides or a strip of negatives.
+VetroScan scans **negatives** with it (slides not yet):
+
+1. put the strip in the holder and the holder on the glass, as the HP manual shows, and plug
+   the adapter's cable in at the back of the scanner;
+2. choose **Film** (with the cable unplugged a message says so);
+3. **Preview**: it covers only the adapter's area and shows the negatives already turned into
+   positives, with their natural colours; each frame found is marked and becomes its own
+   image, as the photos in Photo;
+4. **Scan**: one image for each frame.
+
+Film keeps its own settings: by default 1200 dpi, colour, 16 bits, JPEG; the resolution is
+600 or 1200 dpi only (lower ones would make the motor stall), and the preview too is made at
+600 dpi. Every scan with the
+adapter first switches its light on and waits about 30 seconds for it to warm up, then
+calibrates on the empty slot at the top of the holder: a strip at 1200 dpi takes about two
+minutes. 1200 dpi gives a 35 mm frame about 2 megapixels, fine for the screen and 10 × 15
+prints; the scanner has no infrared, so no automatic dust removal: blow on the film first.
 
 **Take care:**
 

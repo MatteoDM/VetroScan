@@ -5,7 +5,10 @@
 //! What the application gets is what it used to ask [`session::scan`] for:
 //! the chip's linear colour samples (no tone curve, no sharpening), at 8
 //! bits and also at 16 when asked, with the carriage brought near the area
-//! at high speed.
+//! at high speed. Films go through the adapter in the lid (phase 10 of
+//! docs/architecture-plan.md): its lamp, its calibration on the slot
+//! without film, the negatives' scan modes; their samples are the film's
+//! transmission, turned into the picture by the application.
 
 use crate::device::Button;
 use crate::profile::Profile;
@@ -16,8 +19,8 @@ use crate::{geometry, init, scan};
 use scan_imaging::adjust::Adjustments;
 use scan_imaging::Mode;
 use scanner_api::{
-    ButtonInfo, Capabilities, ColourMode, DeviceStatus, Error, LampInfo, LampState, Progress,
-    ScanRequest, ScanResult, Scanner, SuggestedAction,
+    Adapter, ButtonInfo, Capabilities, ColourMode, DeviceStatus, Error, LampInfo, LampState,
+    Progress, ScanRequest, ScanResult, Scanner, Source, SuggestedAction,
 };
 
 /// Name of this backend in the [`scanner_api::Registry`].
@@ -33,10 +36,13 @@ pub fn capabilities(profile: &Profile) -> Capabilities {
         resolutions: d.resolutions.to_vec(),
         modes: vec![ColourMode::Colour, ColourMode::Grey, ColourMode::Lineart],
         depths: vec![8, 16],
-        // The 3770 has an adapter for slides and negatives in its lid (the
-        // "TMA"), but this driver does not drive it yet: phase 10 of
-        // docs/architecture-plan.md.
-        transparency: false,
+        // The 3770's adapter in its lid (the "TMA"). Negatives only for now:
+        // slides are not tried yet (phase 10 of docs/architecture-plan.md).
+        transparency: profile.transparency.as_ref().map(|t| Adapter {
+            area_inches: (f64::from(t.area[2]) / 254.0, f64::from(t.area[3]) / 254.0),
+            sources: vec![Source::Negative],
+            resolutions: crate::scan_modes::NEGATIVE_RESOLUTIONS.to_vec(),
+        }),
         buttons: d.buttons.iter().map(|&b| button_info(b)).collect(),
         lamp: Some(LampInfo {
             warm_up: scan::LAMP_WARMUP,
@@ -58,8 +64,9 @@ fn button_info(button: Button) -> ButtonInfo {
     }
 }
 
-/// The scanner's state for the application.
-pub fn device_status(s: &Status) -> DeviceStatus {
+/// The scanner's state for the application; `adapter`: whether the model
+/// has a film adapter.
+pub fn device_status(s: &Status, adapter: bool) -> DeviceStatus {
     DeviceStatus {
         // Not initialised yet is ready too: a scan starts by initialising.
         ready: !s.executing,
@@ -68,7 +75,7 @@ pub fn device_status(s: &Status) -> DeviceStatus {
             Lamp::Flatbed => LampState::On,
             Lamp::Transparency => LampState::Transparency,
         }),
-        adapter: None,
+        adapter: adapter.then_some(s.tma_attached),
         details: vec![
             ("USB".into(), if s.usb2 { "2.0" } else { "1.1" }.into()),
             ("Chip".into(), format!("RTS8822, chipset {}", s.chipset_id)),
@@ -109,9 +116,25 @@ pub fn api_error(e: crate::Error) -> Error {
 }
 
 /// The request [`session::scan`] gets for a scan of the contract: linear
-/// colour, nothing done on the host.
-pub fn session_request(request: &ScanRequest, fast_travel: bool) -> Request {
+/// colour, nothing done on the host. A film's area, given within the
+/// adapter's, becomes one of the glass with `profile`'s adapter.
+pub fn session_request(request: &ScanRequest, fast_travel: bool, profile: &Profile) -> Request {
     let a = request.area;
+    let film = request.source.is_film();
+    // Where the adapter's area starts on the glass, in pixels of the scan.
+    let (x0, y0) = match (&profile.transparency, film) {
+        (Some(t), true) => {
+            let origin = geometry::Area::from_mm(
+                request.dpi,
+                f64::from(t.area[0]) / 10.0,
+                f64::from(t.area[1]) / 10.0,
+                0.0,
+                0.0,
+            );
+            (origin.x, origin.y)
+        }
+        _ => (0, 0),
+    };
     Request {
         linear: true,
         adjust: Adjustments {
@@ -120,11 +143,13 @@ pub fn session_request(request: &ScanRequest, fast_travel: bool) -> Request {
         },
         depth: request.depth,
         fast_travel,
+        transparency: film,
+        negative: request.source == Source::Negative,
         ..Request::new(
             request.dpi,
             geometry::Area {
-                x: a.x,
-                y: a.y,
+                x: x0 + a.x,
+                y: y0 + a.y,
                 width: a.width,
                 height: a.height,
             },
@@ -243,9 +268,10 @@ impl<T: Transport + Send> Scanner for Rts8822<T> {
     }
 
     fn status(&mut self) -> scanner_api::Result<DeviceStatus> {
+        let adapter = self.caps.transparency.is_some();
         self.chip
             .status()
-            .map(|s| device_status(&s))
+            .map(|s| device_status(&s, adapter))
             .map_err(api_error)
     }
 
@@ -255,7 +281,12 @@ impl<T: Transport + Send> Scanner for Rts8822<T> {
         progress: &mut dyn FnMut(Progress) -> bool,
     ) -> scanner_api::Result<ScanResult> {
         scanner_api::check(&self.caps, request)?;
-        let session = session_request(request, self.fast_travel);
+        if request.source.is_film() && !self.chip.status().map_err(api_error)?.tma_attached {
+            return Err(Error::Other(
+                "the film adapter's cable is not plugged in at the back of the scanner".into(),
+            ));
+        }
+        let session = session_request(request, self.fast_travel, self.profile);
         let (image, report) = session::scan(&mut self.chip, self.profile, &session, &mut |s| {
             progress(progress_of(s))
         })
@@ -299,6 +330,12 @@ mod tests {
         let labels: Vec<_> = c.buttons.iter().map(|b| b.label.as_str()).collect();
         assert_eq!(labels, ["Scan", "Copy", "Instant Share"]);
         assert_eq!(c.tone, HP3770.tone());
+        // The adapter for negatives, its area the light measured in the lid.
+        let adapter = c.transparency.as_ref().expect("an adapter");
+        assert_eq!(adapter.sources, [Source::Negative]);
+        assert!(c.offers(Source::Negative) && !c.offers(Source::Slide));
+        assert_eq!(c.bed_pixels(Source::Negative, 200), Some((346, 751)));
+        assert_eq!(c.resolutions_for(Source::Negative), [600, 1200]);
         // The glass in pixels is what the driver accepts, to the pixel.
         for dpi in geometry::RESOLUTIONS {
             let (w, h) = c.glass_pixels(dpi);
@@ -317,6 +354,7 @@ mod tests {
         let r = session_request(
             &ScanRequest {
                 dpi: 600,
+                source: Source::Glass,
                 area: scanner_api::Area {
                     x: 1,
                     y: 2,
@@ -326,14 +364,47 @@ mod tests {
                 depth: 16,
             },
             true,
+            &HP3770,
         );
         assert!(r.linear && r.fast_travel);
+        assert!(!r.transparency && !r.negative);
         assert_eq!(r.mode, Mode::Colour);
         assert_eq!(r.depth, 16);
         assert_eq!(r.adjust.sharpen, 0.0);
         assert_eq!(
             (r.area.x, r.area.y, r.area.width, r.area.height),
             (1, 2, 3, 4)
+        );
+    }
+
+    /// A negative's area is given within the adapter's: on the glass it is
+    /// where the adapter's light falls (87.6 x 76.2 mm in), as `tma-scan`
+    /// asks for it.
+    #[test]
+    fn a_negative_is_scanned_where_the_adapter_lights_the_glass() {
+        let (w, h) = capabilities(&HP3770)
+            .bed_pixels(Source::Negative, 1200)
+            .unwrap();
+        let r = session_request(
+            &ScanRequest {
+                dpi: 1200,
+                source: Source::Negative,
+                area: scanner_api::Area {
+                    x: 0,
+                    y: 0,
+                    width: w,
+                    height: h,
+                },
+                depth: 16,
+            },
+            true,
+            &HP3770,
+        );
+        assert!(r.transparency && r.negative);
+        let cli = geometry::Area::from_mm(1200, 87.6, 76.2, 44.0, 95.4);
+        assert_eq!(
+            (r.area.x, r.area.y, r.area.width, r.area.height),
+            (cli.x, cli.y, cli.width, cli.height)
         );
     }
 
@@ -347,6 +418,7 @@ mod tests {
         let request = session_request(
             &ScanRequest {
                 dpi: 300,
+                source: Source::Glass,
                 area: scanner_api::Area {
                     x: 0,
                     y: 0,
@@ -356,6 +428,7 @@ mod tests {
                 depth: 8,
             },
             true,
+            &HP3770,
         );
         let out = session::process(rgb.clone(), 64, 4, &request, &HP3770);
         assert_eq!(out.data, rgb);

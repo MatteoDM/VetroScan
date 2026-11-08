@@ -567,6 +567,14 @@ pub const NEGATIVE_EXPOSURES: [Option<[Exposure; 3]>; 5] = [
     exposures([(5087, 12719), (10175, 7631), (0, 17807)]),
 ];
 
+/// The resolutions negatives may be scanned at: those where the glass's
+/// own mode runs the motor at constant speed too, more slowly than the
+/// negatives' longer line. At 300 and 200 dpi the glass's modes start the
+/// motor with a ramp (`SETTING_10`, `SETTING_11`) and the negatives' modes
+/// have none: on 9 November 2026 a preview at 200 dpi with the adapter
+/// made the motor grind and stall. Not 2400 dpi either: never tried.
+pub const NEGATIVE_RESOLUTIONS: [u16; 2] = [600, 1200];
+
 /// The scan mode for negatives at a horizontal resolution.
 pub fn negative_mode(resolution: u16) -> Option<&'static ScanMode> {
     NEGATIVE_MODES.iter().find(|m| m.resolution == resolution)

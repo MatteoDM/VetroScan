@@ -7,10 +7,13 @@
 //! (A4 glass, up to 2400 dpi, three buttons, a lamp), and
 //! [`FakeScanner::a3`], a different one (A3 glass, up to 1200 dpi, two
 //! buttons, no lamp), so tests can see the application adapt.
+//! [`FakeScanner::with_adapter`] is the first with an adapter for negatives
+//! too, a strip of two frames in its holder ([`film`]).
 
 use crate::{
-    check, Backend, ButtonInfo, Capabilities, ColourMode, DeviceInfo, DeviceStatus, Error,
-    LampInfo, LampState, Progress, Result, ScanRequest, ScanResult, Scanner, SuggestedAction, Tone,
+    check, Adapter, Backend, ButtonInfo, Capabilities, ColourMode, DeviceInfo, DeviceStatus, Error,
+    LampInfo, LampState, Progress, Result, ScanRequest, ScanResult, Scanner, Source,
+    SuggestedAction, Tone,
 };
 use scan_imaging::{Format, Image};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -47,8 +50,45 @@ pub fn glass(x: f64, y: f64) -> [u8; 3] {
     LID
 }
 
-/// The linear RGB samples of an area of the glass.
-pub fn samples(request: &ScanRequest) -> Vec<u8> {
+/// The adapter's area of [`FakeScanner::with_adapter`], inches: the HP
+/// 3770's (44.0 x 95.4 mm).
+pub const ADAPTER_INCHES: (f64, f64) = (1.732, 3.756);
+
+/// The frames of the strip in the adapter's holder: left, top, width,
+/// height (inches from the adapter's top left corner), two 35 mm frames one
+/// above the other (24 x 36 mm, 38 mm apart).
+pub const FRAMES: [[f64; 4]; 2] = [[0.394, 0.55, 0.945, 1.417], [0.394, 2.046, 0.945, 1.417]];
+
+/// The film base's transmission (orange, as colour negatives).
+pub const BASE: [f64; 3] = [0.70, 0.42, 0.22];
+
+/// The transmission of the adapter's area at a point (inches from its top
+/// left corner), full scale 1: the lamp through no film in the slot at the
+/// top, the strip of film (its base, and in the frames a scene denser
+/// across), the dark holder everywhere else.
+pub fn film(x: f64, y: f64) -> [f64; 3] {
+    if y < 0.33 {
+        return [1.0; 3];
+    }
+    if !(0.2..1.53).contains(&x) || !(0.4..3.66).contains(&y) {
+        return [0.002; 3];
+    }
+    for [left, top, width, height] in FRAMES {
+        let (u, v) = ((x - left) / width, (y - top) / height);
+        if (0.0..1.0).contains(&u) && (0.0..1.0).contains(&v) {
+            // Density above the base, as a scene's light leaves it.
+            let stripe = if (v * 6.0) as i32 % 2 == 0 { 1.0 } else { 0.7 };
+            let density = (0.15 + 1.0 * u) * stripe;
+            let layer = [1.0, 0.9, 0.8];
+            return [0, 1, 2].map(|c| BASE[c] * 10f64.powf(-density * layer[c]));
+        }
+    }
+    BASE
+}
+
+/// The linear RGB samples of an area of the glass, or of the adapter's area
+/// for a film, at 16 bits.
+pub fn samples16(request: &ScanRequest) -> Vec<u16> {
     let a = request.area;
     let (width, height) = (a.width as usize, a.height as usize);
     let dpi = f64::from(request.dpi);
@@ -57,10 +97,19 @@ pub fn samples(request: &ScanRequest) -> Vec<u8> {
         let gy = (f64::from(a.y) + row as f64 + 0.5) / dpi;
         for col in 0..width {
             let gx = (f64::from(a.x) + col as f64 + 0.5) / dpi;
-            rgb.extend_from_slice(&glass(gx, gy));
+            if request.source.is_film() {
+                rgb.extend(film(gx, gy).map(|t| (t * 65535.0).round() as u16));
+            } else {
+                rgb.extend(glass(gx, gy).map(|v| u16::from(v) * 257));
+            }
         }
     }
     rgb
+}
+
+/// The linear RGB samples of an area, 8 bits ([`samples16`]).
+pub fn samples(request: &ScanRequest) -> Vec<u8> {
+    samples16(request).iter().map(|&v| (v >> 8) as u8).collect()
 }
 
 /// What a test (or the user, through the application) does to the made-up
@@ -70,6 +119,7 @@ pub struct Controls {
     held: Arc<AtomicU32>,
     lamp_on: Arc<AtomicBool>,
     unplugged: Arc<AtomicBool>,
+    adapter_out: Arc<AtomicBool>,
 }
 
 impl Controls {
@@ -86,6 +136,12 @@ impl Controls {
     /// Unplugs (or plugs back) the scanner.
     pub fn unplug(&self, unplugged: bool) {
         self.unplugged.store(unplugged, Ordering::SeqCst);
+    }
+
+    /// Unplugs (or plugs back) the film adapter's cable, for a scanner
+    /// with one.
+    pub fn unplug_adapter(&self, unplugged: bool) {
+        self.adapter_out.store(unplugged, Ordering::SeqCst);
     }
 
     /// Whether the lamp is on.
@@ -115,7 +171,7 @@ impl FakeScanner {
             resolutions: vec![200, 300, 600, 1200, 2400],
             modes: vec![ColourMode::Colour, ColourMode::Grey, ColourMode::Lineart],
             depths: vec![8, 16],
-            transparency: false,
+            transparency: None,
             buttons: vec![
                 button("scan", "Scan", SuggestedAction::Scan),
                 button("copy", "Copy", SuggestedAction::Copy),
@@ -142,7 +198,7 @@ impl FakeScanner {
             resolutions: vec![150, 300, 600, 1200],
             modes: vec![ColourMode::Colour, ColourMode::Grey],
             depths: vec![8],
-            transparency: false,
+            transparency: None,
             buttons: vec![
                 button("start", "Start", SuggestedAction::Scan),
                 button("send", "Send", SuggestedAction::Share),
@@ -154,6 +210,19 @@ impl FakeScanner {
                 gamma: 2.2,
             },
         })
+    }
+
+    /// [`Self::flatbed`] with an adapter for negatives ([`ADAPTER_INCHES`],
+    /// a strip in its holder: [`film`]), plugged in.
+    pub fn with_adapter() -> Self {
+        let mut s = Self::flatbed();
+        s.caps.model = "Flatbed A4 film".into();
+        s.caps.transparency = Some(Adapter {
+            area_inches: ADAPTER_INCHES,
+            sources: vec![Source::Negative],
+            resolutions: vec![600, 1200],
+        });
+        s
     }
 
     /// A made-up scanner that can do what `caps` says.
@@ -216,7 +285,11 @@ impl Scanner for FakeScanner {
         Ok(DeviceStatus {
             ready: true,
             lamp,
-            adapter: self.caps.transparency.then_some(false),
+            adapter: self
+                .caps
+                .transparency
+                .as_ref()
+                .map(|_| !self.controls.adapter_out.load(Ordering::SeqCst)),
             details: vec![("Link".into(), "in memory".into())],
         })
     }
@@ -228,6 +301,9 @@ impl Scanner for FakeScanner {
     ) -> Result<ScanResult> {
         self.plugged()?;
         check(&self.caps, request)?;
+        if request.source.is_film() && self.controls.adapter_out.load(Ordering::SeqCst) {
+            return Err(Error::Other("the film adapter is not plugged in".into()));
+        }
         let stages = [
             Progress::Starting,
             Progress::Calibrating,
@@ -243,9 +319,9 @@ impl Scanner for FakeScanner {
         if self.caps.lamp.is_some() {
             self.controls.lamp_on.store(true, Ordering::SeqCst);
         }
-        let rgb = samples(request);
-        let samples16 =
-            (request.depth == 16).then(|| rgb.iter().map(|&v| u16::from(v) * 257).collect());
+        let deep = samples16(request);
+        let rgb = deep.iter().map(|&v| (v >> 8) as u8).collect();
+        let samples16 = (request.depth == 16).then_some(deep);
         Ok(ScanResult {
             image: Image {
                 width: request.area.width as usize,
@@ -328,6 +404,7 @@ mod tests {
     fn request(dpi: u16, depth: u8) -> ScanRequest {
         ScanRequest {
             dpi,
+            source: Source::Glass,
             area: Area {
                 x: 0,
                 y: 0,
@@ -413,6 +490,58 @@ mod tests {
         // Only the bits of its two buttons.
         a3.controls().hold(5, true);
         assert_eq!(a3.poll_buttons().unwrap(), 0);
+    }
+
+    #[test]
+    fn the_adapter_scans_its_own_area_and_says_when_it_is_unplugged() {
+        let mut s = FakeScanner::with_adapter();
+        let go = &mut |_| true;
+        assert_eq!(s.status().unwrap().adapter, Some(true));
+        assert_eq!(FakeScanner::flatbed().status().unwrap().adapter, None);
+        let (w, h) = s.caps.bed_pixels(Source::Negative, 600).unwrap();
+        assert_eq!((w, h), (1039, 2254));
+        // Films only at the adapter's own resolutions.
+        let low = ScanRequest {
+            source: Source::Negative,
+            area: Area {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 100,
+            },
+            ..request(200, 16)
+        };
+        assert!(matches!(s.scan(&low, go), Err(Error::InvalidRequest(_))));
+        let film = ScanRequest {
+            source: Source::Negative,
+            area: Area {
+                x: 0,
+                y: 0,
+                width: w,
+                height: h,
+            },
+            ..request(600, 16)
+        };
+        let r = s.scan(&film, go).unwrap();
+        let deep = r.samples16.unwrap();
+        let at = |x: usize, y: usize| deep[(y * w as usize + x) * 3..][..3].to_vec();
+        assert_eq!(at(510, 60), [65535; 3], "the slot: the lamp");
+        assert!(at(15, 1200).iter().all(|&v| v < 200), "the holder");
+        let base = BASE.map(|t| (t * 65535.0).round() as u16);
+        assert_eq!(at(510, 285), base, "the base, above the first frame");
+        // Wider than the adapter's area: refused, though it is within the
+        // glass.
+        let mut wide = film;
+        wide.area.width = w + 1;
+        assert!(matches!(s.scan(&wide, go), Err(Error::InvalidRequest(_))));
+        // Without an adapter, or with it unplugged, no film.
+        assert!(matches!(
+            FakeScanner::flatbed().scan(&film, go),
+            Err(Error::InvalidRequest(_))
+        ));
+        s.controls().unplug_adapter(true);
+        assert_eq!(s.status().unwrap().adapter, Some(false));
+        assert!(matches!(s.scan(&film, go), Err(Error::Other(_))));
     }
 
     #[test]

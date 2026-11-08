@@ -416,6 +416,59 @@ pub fn positive(film: Film, samples: &[u16], base: Option<[f32; 3]>) -> Option<V
     }
 }
 
+/// The film inside `frames` of `samples` (linear RGB, `image_width` pixels
+/// wide), each frame a tenth smaller, away from the holder's edges: what a
+/// film's levels are measured on. All of `samples` with no frames.
+pub fn inside(samples: &[u16], image_width: usize, frames: &[Found]) -> Vec<u16> {
+    if frames.is_empty() || image_width == 0 {
+        return samples.to_vec();
+    }
+    let inner: Vec<Found> = frames
+        .iter()
+        .map(|f| Found {
+            width: f.width * 0.9,
+            height: f.height * 0.9,
+            ..*f
+        })
+        .collect();
+    let mut v = Vec::new();
+    for (i, p) in samples.chunks_exact(3).enumerate() {
+        let (x, y) = (i % image_width, i / image_width);
+        let (cx, cy) = (x as f32 + 0.5, y as f32 + 0.5);
+        if inner.iter().any(|f| f.contains(cx, cy)) {
+            v.extend_from_slice(p);
+        }
+    }
+    v
+}
+
+/// A strip of negatives scanned in the adapter's holder (16-bit linear RGB
+/// `samples`, `width` x `height` pixels at `dpi`): its frames
+/// ([`frames`]) and its measures, the base in the gaps between the frames
+/// ([`base_between`]), the levels inside them ([`inside`]). `None` with too
+/// little film.
+pub fn measure_strip(
+    samples: &[u16],
+    width: usize,
+    height: usize,
+    dpi: u16,
+) -> Option<(Negative, Vec<Found>)> {
+    if samples.len() != width * height * 3 {
+        return None;
+    }
+    let image = Image {
+        width,
+        height,
+        dpi,
+        format: Format::Rgb,
+        data: samples.iter().map(|&v| (v >> 8) as u8).collect(),
+    };
+    let found = frames(&image, Film::Negative);
+    let base = base_between(samples, width, &found);
+    let negative = Negative::measure(&inside(samples, width, &found), base)?;
+    Some((negative, found))
+}
+
 /// The pictures in a preview of the holder (linear RGB, as the scanner
 /// gives it), in reading order: each slide, or each frame of the strips of
 /// 35 mm negatives. A slot left empty, or the leader of a strip never
@@ -1018,6 +1071,28 @@ mod tests {
             paint(&mut image, f, picture);
         }
         (image, expected)
+    }
+
+    /// A strip as the adapter scans it, at 16 bits: its frames found, its
+    /// base the orange between them, a positive of every frame.
+    #[test]
+    fn a_strip_measured_as_it_comes_from_the_adapter() {
+        let (image, expected) = strip(0.0, 3, 0.0);
+        let samples: Vec<u16> = image.data.iter().map(|&v| u16::from(v) * 257).collect();
+        let (n, found) =
+            measure_strip(&samples, image.width, image.height, image.dpi).expect("film");
+        assert_eq!(found.len(), expected.len());
+        let orange = [0.62, 0.38, 0.21].map(|t: f32| (t * 255.0).floor() / 255.0);
+        for (b, o) in n.base.iter().zip(orange) {
+            assert!((b - o).abs() < 0.01, "{:?}", n.base);
+        }
+        // The levels from inside the frames only: the holder and the base
+        // are not in them.
+        let film = inside(&samples, image.width, &found);
+        assert!(!film.is_empty() && film.len() < samples.len() / 4);
+        assert!(film.chunks_exact(3).all(|p| p[0] > 600));
+        assert_eq!(inside(&samples, image.width, &[]), samples);
+        assert!(measure_strip(&samples, image.width + 1, image.height, 150).is_none());
     }
 
     #[test]

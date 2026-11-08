@@ -79,8 +79,8 @@ pub struct Capabilities {
     pub modes: Vec<ColourMode>,
     /// The bits per sample it gives: 8, and 16 if it can.
     pub depths: Vec<u8>,
-    /// Whether it has an adapter for slides and negatives.
-    pub transparency: bool,
+    /// Its adapter for slides and negatives, if it has one.
+    pub transparency: Option<Adapter>,
     /// The front-panel buttons, in the order of the bits of
     /// [`Scanner::poll_buttons`].
     pub buttons: Vec<ButtonInfo>,
@@ -102,7 +102,7 @@ impl Capabilities {
             resolutions: vec![300],
             modes: vec![ColourMode::Colour],
             depths: vec![8],
-            transparency: false,
+            transparency: None,
             buttons: Vec::new(),
             lamp: None,
             tone: Tone {
@@ -127,11 +127,85 @@ impl Capabilities {
 
     /// The glass in pixels at `dpi`, width and height.
     pub fn glass_pixels(&self, dpi: u16) -> (u32, u32) {
-        let (w, h) = self.glass_inches;
-        (
-            (w * f64::from(dpi)).round() as u32,
-            (h * f64::from(dpi)).round() as u32,
-        )
+        pixels(self.glass_inches, dpi)
+    }
+
+    /// Whether it scans from `source`: the glass always, films with an
+    /// adapter that takes them.
+    pub fn offers(&self, source: Source) -> bool {
+        source == Source::Glass
+            || self
+                .transparency
+                .as_ref()
+                .is_some_and(|a| a.sources.contains(&source))
+    }
+
+    /// What a scan from `source` covers, width and height, inches: the
+    /// glass, or the adapter's area. `None` for a source it does not offer.
+    pub fn bed_inches(&self, source: Source) -> Option<(f64, f64)> {
+        if !self.offers(source) {
+            return None;
+        }
+        match (source, &self.transparency) {
+            (Source::Glass, _) => Some(self.glass_inches),
+            (_, Some(a)) => Some(a.area_inches),
+            (_, None) => None,
+        }
+    }
+
+    /// The resolutions it scans from `source` at: films have their own
+    /// ([`Adapter::resolutions`]).
+    pub fn resolutions_for(&self, source: Source) -> &[u16] {
+        match (&self.transparency, source.is_film()) {
+            (Some(a), true) => &a.resolutions,
+            _ => &self.resolutions,
+        }
+    }
+
+    /// [`Self::bed_inches`] in pixels at `dpi`.
+    pub fn bed_pixels(&self, source: Source, dpi: u16) -> Option<(u32, u32)> {
+        self.bed_inches(source).map(|size| pixels(size, dpi))
+    }
+}
+
+fn pixels((w, h): (f64, f64), dpi: u16) -> (u32, u32) {
+    (
+        (w * f64::from(dpi)).round() as u32,
+        (h * f64::from(dpi)).round() as u32,
+    )
+}
+
+/// An adapter for films: a lamp that shines through them, in a holder on
+/// the glass (the HP 3770's is in its lid).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Adapter {
+    /// The area its light covers, width and height, inches: a scan with
+    /// it is of an area within this one, from its top left corner.
+    pub area_inches: (f64, f64),
+    /// The films it takes ([`Source::Slide`], [`Source::Negative`]).
+    pub sources: Vec<Source>,
+    /// The resolutions it scans films at, dpi, smallest first: some of
+    /// [`Capabilities::resolutions`] (the HP 3770's motor stalls with
+    /// films at the lowest ones).
+    pub resolutions: Vec<u16>,
+}
+
+/// Where a scan comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Source {
+    /// Light reflected by what lies on the glass.
+    #[default]
+    Glass,
+    /// Slides in the adapter: positives in transmitted light.
+    Slide,
+    /// Negatives in the adapter, colour or black and white.
+    Negative,
+}
+
+impl Source {
+    /// A film, through the adapter.
+    pub fn is_film(self) -> bool {
+        self != Self::Glass
     }
 }
 
@@ -199,8 +273,8 @@ pub enum LampState {
     Transparency,
 }
 
-/// An area of the glass, in pixels at the resolution of the scan, from its
-/// top left corner.
+/// An area of the glass (or of the adapter's area, for a film), in pixels
+/// at the resolution of the scan, from its top left corner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Area {
     pub x: u32,
@@ -210,11 +284,19 @@ pub struct Area {
 }
 
 /// A scan to make: always linear colour samples.
+///
+/// From a film they are its transmission (full scale: the adapter's lamp
+/// through no film), as the scanner measures it: a negative stays a
+/// negative, the application turns it into the picture
+/// ([`scan_imaging::film`]), better with the 16-bit samples.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScanRequest {
     /// Resolution, one of [`Capabilities::resolutions`].
     pub dpi: u16,
-    /// The area, within the glass.
+    /// Where from: the glass, or a film in the adapter.
+    pub source: Source,
+    /// The area, within the glass, or within the adapter's area for a film
+    /// ([`Capabilities::bed_inches`]).
     pub area: Area,
     /// Bits per sample, one of [`Capabilities::depths`]: with 16 the
     /// samples also come in [`ScanResult::samples16`].
@@ -285,10 +367,11 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// Checks a request against what the scanner can do, as every backend
 /// should before it moves anything.
 pub fn check(caps: &Capabilities, request: &ScanRequest) -> Result<()> {
-    if !caps.resolutions.contains(&request.dpi) {
+    let resolutions = caps.resolutions_for(request.source);
+    if !resolutions.contains(&request.dpi) {
         return Err(Error::InvalidRequest(format!(
             "{} dpi is not one of {:?}",
-            request.dpi, caps.resolutions
+            request.dpi, resolutions
         )));
     }
     if !caps.depths.contains(&request.depth) {
@@ -297,7 +380,12 @@ pub fn check(caps: &Capabilities, request: &ScanRequest) -> Result<()> {
             request.depth, caps.depths
         )));
     }
-    let (w, h) = caps.glass_pixels(request.dpi);
+    let Some((w, h)) = caps.bed_pixels(request.source, request.dpi) else {
+        return Err(Error::InvalidRequest(format!(
+            "this scanner does not scan from {:?}",
+            request.source
+        )));
+    };
     let a = request.area;
     if a.width == 0
         || a.height == 0
@@ -305,7 +393,12 @@ pub fn check(caps: &Capabilities, request: &ScanRequest) -> Result<()> {
         || u64::from(a.y) + u64::from(a.height) > u64::from(h)
     {
         return Err(Error::InvalidRequest(format!(
-            "area {a:?} is not within the glass ({w} x {h} at {} dpi)",
+            "area {a:?} is not within the {} ({w} x {h} at {} dpi)",
+            if request.source.is_film() {
+                "adapter's area"
+            } else {
+                "glass"
+            },
             request.dpi
         )));
     }

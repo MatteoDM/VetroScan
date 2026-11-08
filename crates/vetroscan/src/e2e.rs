@@ -1326,6 +1326,88 @@ fn the_flatbed_offers_its_lamp_its_buttons_and_16_bits() {
     assert!(!ui.shows("Pellicola"));
 }
 
+/// The made-up flatbed with its film adapter, and the handle on its cable.
+fn with_adapter() -> (Ui, scanner_api::fake::Controls) {
+    let scanner = FakeScanner::with_adapter();
+    let controls = scanner.controls();
+    (Ui::with_scanners(vec![scanner]), controls)
+}
+
+#[test]
+fn films_need_the_adapter_and_its_cable() {
+    let (mut ui, controls) = with_adapter();
+    assert!(ui.shows("Pellicola"));
+    // Its cable unplugged (and the state read since): a press says so and
+    // changes nothing.
+    controls.unplug_adapter(true);
+    ui.send(Message::RefreshStatus);
+    ui.settle();
+    ui.click("Pellicola");
+    assert!(!ui.app.filming());
+    assert!(ui.app.note.contains("non è collegato"), "{}", ui.app.note);
+    assert_eq!(ui.app.request().source, scanner_api::Source::Glass);
+    // Plugged in: the next press finds it and switches.
+    controls.unplug_adapter(false);
+    ui.click("Pellicola");
+    assert!(ui.app.filming());
+    assert_eq!(ui.app.kind, Kind::Photo);
+    let request = ui.app.request();
+    assert_eq!(request.source, scanner_api::Source::Negative);
+    assert_eq!(request.depth, 16, "a negative needs the 16-bit samples");
+    // Settings of their own: 1200 dpi, not the photos' 600.
+    assert_eq!(ui.app.settings().dpi, 1200);
+    ui.click("Foto");
+    assert!(!ui.app.filming());
+    assert_eq!(ui.app.request().source, scanner_api::Source::Glass);
+    assert_eq!(
+        ui.app.settings().dpi,
+        200,
+        "the photos' own, set by the tests"
+    );
+}
+
+#[test]
+fn a_strip_of_negatives_becomes_a_picture_per_frame() {
+    let (mut ui, _) = with_adapter();
+    ui.click("Pellicola");
+    ui.send(Message::Dpi(200));
+    // The preview: the adapter's area, the negatives turned into their
+    // picture, the two frames found.
+    ui.send(Message::Preview);
+    ui.settle();
+    let (raw, ..) = ui.app.preview.as_ref().expect("a preview");
+    assert_eq!((raw.full.width, raw.full.height), (346, 751));
+    assert_eq!(raw.tone, scan_imaging::film::TONE);
+    assert!(ui.app.negative.is_some(), "{}", ui.app.note);
+    assert_eq!(ui.app.found.len(), 2, "{:?}", ui.app.found);
+    assert!(ui.app.note.contains("2 fotogrammi"), "{}", ui.app.note);
+    // One scan, one picture for each frame, standing up as on the strip.
+    ui.click("Scansiona 2 foto");
+    assert_eq!(ui.app.pages.len(), 2);
+    for page in &ui.app.pages {
+        let full = &page.raw.full;
+        assert_eq!(page.raw.tone, scan_imaging::film::TONE);
+        assert!(page.raw16.is_some());
+        assert!(full.height > full.width, "{} x {}", full.width, full.height);
+        // The made-up scene is denser to the right: brighter there in the
+        // picture, darker to the left.
+        let grey = |x: usize| -> u32 {
+            let i = (full.height / 2 * full.width + x) * 3;
+            full.data[i..i + 3].iter().map(|&v| u32::from(v)).sum()
+        };
+        assert!(
+            grey(full.width * 4 / 5) > grey(full.width / 5) + 60,
+            "{} then {}",
+            grey(full.width / 5),
+            grey(full.width * 4 / 5)
+        );
+    }
+    // Back to the glass: the adapter's preview does not fit it.
+    ui.click("Foto");
+    assert!(ui.app.preview.is_none() && ui.app.found.is_empty());
+    assert!(ui.app.negative.is_none());
+}
+
 #[test]
 fn a_scanner_without_a_lamp_and_16_bits_shows_neither() {
     let mut ui = Ui::with_scanners(vec![FakeScanner::a3()]);

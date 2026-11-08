@@ -435,6 +435,7 @@ fn scan(
     let caps = scanner.capabilities().clone();
     let request = ScanRequest {
         dpi,
+        source: scanner_api::Source::Glass,
         area: scanner_api::Area {
             x: area.x,
             y: area.y,
@@ -668,29 +669,11 @@ fn develop(
     // The base in the gaps between frames; the levels inside the frames,
     // a twentieth in from each side (away from the holder's edges).
     let base = film::base_between(&samples, image.width, &frames);
-    let inner: Vec<_> = frames
-        .iter()
-        .map(|f| scan_imaging::detect::Found {
-            width: f.width * 0.9,
-            height: f.height * 0.9,
-            ..*f
-        })
-        .collect();
     let film_part: Vec<u16> = if frames.is_empty() {
         let skip = (rows.end.min(image.height) * image.width * 3).min(samples.len());
         samples[skip..].to_vec()
     } else {
-        let mut v = Vec::new();
-        for y in 0..image.height {
-            for x in 0..image.width {
-                let (cx, cy) = (x as f32 + 0.5, y as f32 + 0.5);
-                if inner.iter().any(|f| f.contains(cx, cy)) {
-                    let i = (y * image.width + x) * 3;
-                    v.extend_from_slice(&samples[i..i + 3]);
-                }
-            }
-        }
-        v
+        film::inside(&samples, image.width, &frames)
     };
     let film_part = &film_part[..];
     let picture = match film {

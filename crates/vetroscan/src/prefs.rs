@@ -160,6 +160,8 @@ pub struct Prefs {
     pub buttons: BTreeMap<String, StoredButtons>,
     pub document: StoredMode,
     pub photo: StoredMode,
+    /// Films in the adapter (Foto, "Pellicola").
+    pub film: StoredMode,
     /// Minutes without scanning before the app switches the lamp off (0:
     /// as soon as a scan is over).
     pub lamp_off_minutes: u8,
@@ -190,6 +192,11 @@ impl Default for Prefs {
             document: StoredMode::default(),
             photo: StoredMode {
                 dpi: 600,
+                output: "jpeg".into(),
+                ..StoredMode::default()
+            },
+            film: StoredMode {
+                dpi: 1200,
                 output: "jpeg".into(),
                 ..StoredMode::default()
             },

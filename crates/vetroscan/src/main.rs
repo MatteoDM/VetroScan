@@ -42,10 +42,11 @@ use iced::{Alignment, Element, Length, Point, Size, Subscription, Task, Theme};
 use scan_imaging::adjust::{self, Adjustments};
 use scan_imaging::convert;
 use scan_imaging::detect::{self, Found};
+use scan_imaging::film::{self, Film, Negative};
 use scan_imaging::transform::Transform;
 use scan_imaging::{Format, Image, Mode};
 use scanner_api::{
-    Area, Capabilities, DeviceInfo, DeviceStatus, LampState, Progress, ScanRequest,
+    Area, Capabilities, DeviceInfo, DeviceStatus, LampState, Progress, ScanRequest, Source,
     SuggestedAction, Tone,
 };
 use std::borrow::Cow;
@@ -684,6 +685,16 @@ impl Settings {
         }
     }
 
+    /// Films in the adapter: a 35 mm frame is small, 1200 dpi gives it
+    /// about 2 megapixels; the 16-bit samples for turning a negative into
+    /// its picture; each frame found its own image.
+    fn film() -> Self {
+        Self {
+            dpi: 1200,
+            ..Self::photo()
+        }
+    }
+
     fn mode(&self) -> Mode {
         match self.colour {
             Colour::Rgb => Mode::Colour,
@@ -771,10 +782,19 @@ impl Settings {
     /// Settings from the stored form; what does not make sense for `kind`
     /// falls back to the defaults.
     fn from_stored(kind: Kind, m: &prefs::StoredMode) -> Self {
-        let base = match kind {
-            Kind::Document => Settings::document(),
-            Kind::Photo => Settings::photo(),
-        };
+        Self::from_stored_on(
+            kind,
+            match kind {
+                Kind::Document => Settings::document(),
+                Kind::Photo => Settings::photo(),
+            },
+            m,
+        )
+    }
+
+    /// Settings from the stored form for `kind`, `base` for what does not
+    /// make sense.
+    fn from_stored_on(kind: Kind, base: Settings, m: &prefs::StoredMode) -> Self {
         let colour = match m.colour.as_str() {
             "grigio" => Colour::Grey,
             "bn" => Colour::Lineart,
@@ -1761,6 +1781,8 @@ enum Message {
     /// The language of the interface.
     Language(i18n::LangChoice),
     Kind(Kind),
+    /// Foto with films in the adapter ("Pellicola").
+    Film,
     Tab(Tab),
     Pane(Pane),
     Undo,
@@ -1949,11 +1971,11 @@ fn area_mm(dpi: u16, left: f64, top: f64, width: f64, height: f64) -> Area {
     }
 }
 
-/// `area` (pixels at `dpi`) cut to the glass: the margin around an
-/// original near the edge, or the rounding of position and size apart,
-/// would ask the scanner for a pixel beyond it, and it refuses the scan.
-fn within_glass(area: Area, dpi: u16, caps: &Capabilities) -> Area {
-    let (max_w, max_h) = caps.glass_pixels(dpi);
+/// `area` cut to a bed of `(max_w, max_h)` pixels at its resolution (the
+/// glass, or the film adapter's area): the margin around an original near
+/// the edge, or the rounding of position and size apart, would ask the
+/// scanner for a pixel beyond it, and it refuses the scan.
+fn within(area: Area, (max_w, max_h): (u32, u32)) -> Area {
     let x = area.x.min(max_w.saturating_sub(1));
     let y = area.y.min(max_h.saturating_sub(1));
     Area {
@@ -2003,6 +2025,19 @@ struct App {
     kind: Kind,
     document: Settings,
     photo: Settings,
+    /// In Foto, films in the adapter instead of the glass ("Pellicola").
+    film: bool,
+    /// The settings for films, apart from the photos' ones.
+    film_settings: Settings,
+    /// The preview of films as the scanner gave it (their transmission,
+    /// pixels of the preview), where the frames are found.
+    film_preview: Option<Image>,
+    /// How the negatives of the preview become their picture: the full
+    /// scans take the same measures, for the same picture.
+    negative: Option<Negative>,
+    /// "Pellicola" was chosen with the adapter not plugged in, as last
+    /// heard: switch when the scanner's state says it is.
+    film_wanted: bool,
     tab: Tab,
     pane: Pane,
     start_mode: StartMode,
@@ -2141,6 +2176,16 @@ impl App {
                 // at every opening: a look to keep is a preset.
                 document: Settings::from_stored(Kind::Document, &stored.document).fresh_look(),
                 photo: Settings::from_stored(Kind::Photo, &stored.photo).fresh_look(),
+                film: false,
+                film_settings: Settings::from_stored_on(
+                    Kind::Photo,
+                    Settings::film(),
+                    &stored.film,
+                )
+                .fresh_look(),
+                film_preview: None,
+                negative: None,
+                film_wanted: false,
                 tab: Tab::Preview,
                 pane: Pane::Scan,
                 start_mode,
@@ -2364,6 +2409,9 @@ impl App {
     }
 
     fn settings(&self) -> &Settings {
+        if self.filming() {
+            return &self.film_settings;
+        }
         match self.kind {
             Kind::Document => &self.document,
             Kind::Photo => &self.photo,
@@ -2371,10 +2419,143 @@ impl App {
     }
 
     fn settings_mut(&mut self) -> &mut Settings {
+        if self.filming() {
+            return &mut self.film_settings;
+        }
         match self.kind {
             Kind::Document => &mut self.document,
             Kind::Photo => &mut self.photo,
         }
+    }
+
+    /// Whether the scans are of negatives in the adapter: Foto with
+    /// "Pellicola" chosen, on a scanner that takes them.
+    fn filming(&self) -> bool {
+        self.kind == Kind::Photo && self.film && self.caps.offers(Source::Negative)
+    }
+
+    /// Where the scans come from.
+    fn source(&self) -> Source {
+        if self.filming() {
+            Source::Negative
+        } else {
+            Source::Glass
+        }
+    }
+
+    /// Whether the scanner says its film adapter is plugged in.
+    fn adapter_plugged(&self) -> bool {
+        matches!(&self.status, Some(Ok(s)) if s.adapter == Some(true))
+    }
+
+    /// The samples of a scan as the app keeps them, with the tone curve
+    /// they are drawn with: the scanner's, or for films the positives'.
+    fn raw(&self, image: Image) -> Raw {
+        let mut raw = Raw::new(image, &self.caps);
+        if self.filming() {
+            raw.tone = film::TONE;
+        }
+        raw
+    }
+
+    /// A scan of negatives turned into its picture, with `measured` (the
+    /// preview's) or measures of its own: the picture at 8 bits and at 16,
+    /// and the measures. Without film to measure, the scan as it is.
+    fn develop(
+        image: Image,
+        samples16: Option<Vec<u16>>,
+        measured: Option<Negative>,
+    ) -> (Image, Option<Vec<u16>>, Option<Negative>) {
+        let (w, h) = (image.width, image.height);
+        let deep: Cow<[u16]> = match &samples16 {
+            Some(s) if s.len() == w * h * 3 => Cow::Borrowed(s),
+            _ => Cow::Owned(image.data.iter().map(|&v| u16::from(v) * 257).collect()),
+        };
+        let negative =
+            measured.or_else(|| film::measure_strip(&deep, w, h, image.dpi).map(|(n, _)| n));
+        let Some(n) = negative else {
+            return (image, samples16, None);
+        };
+        let positive = n.positive(&deep);
+        let picture = Image {
+            data: positive.iter().map(|&v| (v >> 8) as u8).collect(),
+            ..image
+        };
+        (picture, Some(positive), Some(n))
+    }
+
+    /// Switches to `kind`, with films in the adapter or not (only Foto has
+    /// them).
+    fn set_mode(&mut self, kind: Kind, film: bool) -> Task<Message> {
+        let film = film && kind == Kind::Photo;
+        // Not during a scan: its pages go where the mode says.
+        if (self.kind == kind && self.film == film) || self.busy.is_some() {
+            return Task::none();
+        }
+        // The limit typed belongs to the other way of working.
+        self.limit_draft = None;
+        let dropped = self.pages.len().saturating_sub(1);
+        let again = if film {
+            Message::Film
+        } else {
+            Message::Kind(kind)
+        };
+        if kind == Kind::Photo
+            && self.kind == Kind::Document
+            && dropped > 0
+            && self.unsaved
+            && self.ask(
+                again,
+                tr("Passare a Foto?").into(),
+                trf(
+                    "In Foto resta solo l'ultima scansione. {lost}",
+                    &[(
+                        "lost",
+                        &if dropped == 1 {
+                            tr("L'altra pagina del documento non è salvata e andrà persa.")
+                                .to_string()
+                        } else {
+                            trf(
+                                "Le altre {dropped} pagine del documento non sono \
+                                 salvate e andranno perse.",
+                                &[("dropped", &dropped)],
+                            )
+                        },
+                    )],
+                ),
+                tr("Passa a Foto"),
+            )
+        {
+            return Task::none();
+        }
+        let from_document = self.kind == Kind::Document;
+        self.kind = kind;
+        if self.film != film {
+            self.film = film;
+            // The glass and the adapter's area: the preview, the area
+            // chosen and the originals found belong to the other.
+            self.preview = None;
+            self.selection = None;
+            self.found.clear();
+            self.film_preview = None;
+            self.negative = None;
+        }
+        self.redone = None;
+        if kind == Kind::Photo && from_document {
+            // A photo at a time: keep the last scan only.
+            let last = self.pages.pop();
+            self.pages.clear();
+            self.pages.extend(last);
+            self.current = (!self.pages.is_empty()).then_some(0);
+        }
+        self.pages_changed();
+        // Ctrl+Z restores the settings of the mode it was in.
+        self.undo.clear();
+        self.redo_stack.clear();
+        self.last_edit = None;
+        // The pages that follow the shared look take this mode's one.
+        self.shared_changed();
+        Task::none()
     }
 
     /// The page the result tab shows: a rescan waiting for a choice, else
@@ -2699,10 +2880,18 @@ impl App {
         }
     }
 
-    /// Size of the glass in preview pixels.
+    /// Size of the glass in preview pixels (of the adapter's area, for
+    /// films).
     fn glass(&self) -> Size {
-        let (w, h) = self.caps.glass_pixels(PREVIEW_DPI);
+        let (w, h) = self.bed_pixels(PREVIEW_DPI);
         Size::new(w as f32, h as f32)
+    }
+
+    /// The glass, or the adapter's area for films, in pixels at `dpi`.
+    fn bed_pixels(&self, dpi: u16) -> (u32, u32) {
+        self.caps
+            .bed_pixels(self.source(), dpi)
+            .unwrap_or_else(|| self.caps.glass_pixels(dpi))
     }
 
     /// The area to scan in millimetres: the selection, or an A4 page.
@@ -2725,13 +2914,16 @@ impl App {
     /// The resolution chosen, or the nearest the scanner in use offers
     /// (the choice stays saved for a scanner that has it).
     fn dpi(&self) -> u16 {
-        nearest(&self.caps.resolutions, self.settings().dpi)
+        nearest(
+            self.caps.resolutions_for(self.source()),
+            self.settings().dpi,
+        )
     }
 
     /// The resolution of the preview: the scanner's nearest to
     /// [`PREVIEW_DPI`] (the preview is brought to that afterwards).
     fn preview_dpi(&self) -> u16 {
-        nearest(&self.caps.resolutions, PREVIEW_DPI)
+        nearest(self.caps.resolutions_for(self.source()), PREVIEW_DPI)
     }
 
     /// Whether the scanner in use gives 16-bit samples.
@@ -2755,13 +2947,20 @@ impl App {
         // A RAW file always gets the 16-bit samples, when there are some.
         let s = self.settings();
         let raw = matches!(s.output, Output::Raw(_));
-        let depth = if self.depth() == 16 || (raw && self.offers_16bit()) {
+        // A negative becomes its picture from the 16-bit samples.
+        let film = self.filming();
+        let depth = if self.depth() == 16 || ((raw || film) && self.offers_16bit()) {
             16
         } else {
             8
         };
-        let area = within_glass(area_mm(dpi, x, y, w, h), dpi, &self.caps);
-        ScanRequest { dpi, area, depth }
+        let area = within(area_mm(dpi, x, y, w, h), self.bed_pixels(dpi));
+        ScanRequest {
+            dpi,
+            source: self.source(),
+            area,
+            depth,
+        }
     }
 
     /// The passes for the originals found, when the automatic crop applies
@@ -2877,7 +3076,7 @@ impl App {
         }
         let request = if purpose == Purpose::Preview {
             let dpi = self.preview_dpi();
-            let (width, height) = self.caps.glass_pixels(dpi);
+            let (width, height) = self.bed_pixels(dpi);
             ScanRequest {
                 area: Area {
                     x: 0,
@@ -3030,6 +3229,7 @@ impl App {
             buttons: self.button_actions.clone(),
             document: self.document.to_stored(),
             photo: self.photo.to_stored(),
+            film: self.film_settings.to_stored(),
             lamp_off_minutes: self.lamp_off,
             language: self.language.key().into(),
         }
@@ -3452,6 +3652,7 @@ impl App {
             && matches!(
                 message,
                 Message::Kind(_)
+                    | Message::Film
                     | Message::Tab(Tab::Preview)
                     | Message::PageMove(..)
                     | Message::PageDelete(_)
@@ -3521,56 +3722,13 @@ impl App {
                     self.note = tr("Lingua cambiata").into();
                 }
             }
-            Message::Kind(kind) => {
-                // Not during a scan: its pages go where the mode says.
-                if self.kind != kind && self.busy.is_none() {
-                    // The limit typed belongs to the other way of working.
-                    self.limit_draft = None;
-                    let dropped = self.pages.len().saturating_sub(1);
-                    if kind == Kind::Photo
-                        && dropped > 0
-                        && self.unsaved
-                        && self.ask(
-                            Message::Kind(kind),
-                            tr("Passare a Foto?").into(),
-                            trf(
-                                "In Foto resta solo l'ultima scansione. {lost}",
-                                &[(
-                                    "lost",
-                                    &if dropped == 1 {
-                                    tr("L'altra pagina del documento non è salvata e andrà persa.")
-                                        .to_string()
-                                } else {
-                                    trf(
-                                        "Le altre {dropped} pagine del documento non sono \
-                                         salvate e andranno perse.",
-                                        &[("dropped", &dropped)],
-                                    )
-                                },
-                                )],
-                            ),
-                            tr("Passa a Foto"),
-                        )
-                    {
-                        return Task::none();
-                    }
-                    self.kind = kind;
-                    self.redone = None;
-                    if kind == Kind::Photo {
-                        // A photo at a time: keep the last scan only.
-                        let last = self.pages.pop();
-                        self.pages.clear();
-                        self.pages.extend(last);
-                        self.current = (!self.pages.is_empty()).then_some(0);
-                    }
-                    self.pages_changed();
-                    // Ctrl+Z restores the settings of the mode it was in.
-                    self.undo.clear();
-                    self.redo_stack.clear();
-                    self.last_edit = None;
-                    // The pages that follow the shared look take this
-                    // mode's one.
-                    self.shared_changed();
+            Message::Kind(kind) => return self.set_mode(kind, false),
+            Message::Film if self.adapter_plugged() => return self.set_mode(Kind::Photo, true),
+            Message::Film => {
+                // Plugged in since the state was read? Ask the scanner.
+                if let Some(w) = self.worker.as_ref().filter(|_| self.busy.is_none()) {
+                    w.send(Command::Status);
+                    self.film_wanted = true;
                 }
             }
             Message::Tab(tab) => self.tab = tab,
@@ -3648,6 +3806,7 @@ impl App {
                 let d = prefs::Prefs::default();
                 self.document = Settings::document();
                 self.photo = Settings::photo();
+                self.film_settings = Settings::film();
                 self.start_mode = StartMode::Last;
                 self.custom_folder = None;
                 self.document_name = d.document_name;
@@ -3761,7 +3920,10 @@ impl App {
             Message::AutoSave(on) => self.settings_mut().auto_save = on,
             Message::AutoCrop(on) => self.settings_mut().auto_crop = on,
             Message::Detect => {
-                if let Some((raw, _, _)) = &self.preview {
+                if let Some(transmission) = &self.film_preview {
+                    self.found = film::frames(transmission, Film::Negative);
+                    self.note = Self::frames_note(self.found.len());
+                } else if let Some((raw, _, _)) = &self.preview {
                     self.found = detect::objects(&raw.full);
                     self.note = Self::found_note(self.found.len());
                 }
@@ -4482,6 +4644,15 @@ impl App {
             Event::Status(status) => {
                 self.access_denied = status.is_err() && access::denied();
                 self.status = Some(status);
+                if std::mem::take(&mut self.film_wanted) {
+                    if self.adapter_plugged() {
+                        let _ = self.set_mode(Kind::Photo, true);
+                    } else {
+                        self.note = tr("L'adattatore per pellicole non è collegato: collega \
+                                        il suo cavo sul retro dello scanner")
+                        .into();
+                    }
+                }
             }
             Event::Progress(stage) => {
                 if let Some((_, s)) = &mut self.busy {
@@ -4535,27 +4706,71 @@ impl App {
         }
     }
 
+    /// The note on the preview of films: the frames found, or no film.
+    fn frames_note(n: usize) -> String {
+        match n {
+            0 => tr(
+                "Anteprima pronta: nessun fotogramma riconosciuto, trascina per scegliere \
+                     l'area",
+            )
+            .into(),
+            1 => tr("Anteprima pronta: un fotogramma riconosciuto, diventa un'immagine").into(),
+            n => trf(
+                "Anteprima pronta: {n} fotogrammi riconosciuti, ognuno diventa un'immagine",
+                &[("n", &n)],
+            ),
+        }
+    }
+
     fn on_scan(&mut self, purpose: Purpose, image: Image, samples16: Option<Vec<u16>>) {
         match purpose {
             Purpose::Preview => {
                 self.close_editor(true);
+                // Negatives: their picture shown, their frames found on the
+                // film as the scanner saw it.
+                let film = self.filming();
+                let transmission = film.then(|| at_dpi(image.clone(), PREVIEW_DPI));
+                let image = if film {
+                    let (picture, _, negative) = Self::develop(image, samples16, None);
+                    self.negative = negative;
+                    picture
+                } else {
+                    image
+                };
                 // The preview is worked in pixels of PREVIEW_DPI.
-                let raw = Raw::new(at_dpi(image, PREVIEW_DPI), &self.caps);
+                let raw = self.raw(at_dpi(image, PREVIEW_DPI));
                 let settings = *self.settings();
                 let shown = render(&raw.proxy, &settings, &settings.adjust, &raw.tone);
                 let picture = Picture::from_rgb(shown.width, shown.height, &shown.to_rgb());
-                self.found = detect::objects(&raw.full);
+                self.found = match &transmission {
+                    Some(t) => film::frames(t, Film::Negative),
+                    None => detect::objects(&raw.full),
+                };
+                self.film_preview = transmission;
                 self.preview = Some((raw, shown, picture));
                 self.preview_view = View::default();
                 self.tab = Tab::Preview;
-                self.note = if self.settings().auto_crop {
-                    Self::found_note(self.found.len())
+                let n = if self.settings().auto_crop {
+                    self.found.len()
                 } else {
-                    Self::found_note(0)
+                    0
+                };
+                self.note = match (film, self.negative) {
+                    (true, None) => {
+                        tr("Anteprima pronta: nessuna pellicola riconosciuta nel supporto").into()
+                    }
+                    (true, Some(_)) => Self::frames_note(n),
+                    (false, _) => Self::found_note(n),
                 };
             }
             Purpose::Page => {
                 let job = self.job.take();
+                let (image, samples16) = if self.filming() {
+                    let (picture, deep, _) = Self::develop(image, samples16, self.negative);
+                    (picture, deep)
+                } else {
+                    (image, samples16)
+                };
                 for (image, origin, samples) in Self::cut(image, samples16, job.as_ref()) {
                     self.add_page(image, origin, samples);
                 }
@@ -4577,7 +4792,7 @@ impl App {
         self.unsaved = true;
         self.pdf_rev += 1;
         let (w, h, dpi) = (image.width, image.height, image.dpi);
-        let mut page = Page::new(Raw::new(image, &self.caps), *self.settings());
+        let mut page = Page::new(self.raw(image), *self.settings());
         // "Solo questa pagina" from the start: every page keeps the look it
         // was scanned with, and changing one does not change the others.
         if self.kind == Kind::Document {
@@ -4661,13 +4876,13 @@ impl App {
         if std::mem::take(&mut self.print_next) {
             self.print_shown();
         }
-        if self.photo.auto_save && n > 0 {
+        if self.settings().auto_save && n > 0 {
             let folder = self.folder();
             let _ = std::fs::create_dir_all(&folder);
             let path = folder.join(Self::free_name(
                 &folder,
                 self.name(),
-                self.photo.output.extension(),
+                self.settings().output.extension(),
             ));
             let written = self.write(&path);
             if written.is_ok() {
@@ -4902,8 +5117,8 @@ impl App {
 
     /// Mode switch, scanner state, preview and the main action.
     fn top_bar(&self) -> Element<'_, Message> {
-        let segment = |label: &'static str, kind: Option<Kind>| {
-            let on = kind == Some(self.kind);
+        let segment = |label: &'static str, message: Option<Message>, on: bool| {
+            let off = message.is_none();
             button(text(label).size(13))
                 .padding([6, 14])
                 .style(move |theme: &Theme, status| {
@@ -4918,21 +5133,34 @@ impl App {
                             offset: iced::Vector::new(0.0, 1.0),
                             blur_radius: 3.0,
                         };
-                    } else if kind.is_none() {
+                    } else if off {
                         style.text_color = palette.background.strong.color;
                     }
                     style
                 })
-                .on_press_maybe(kind.filter(|_| self.busy.is_none()).map(Message::Kind))
+                .on_press_maybe(message.filter(|_| self.busy.is_none()))
         };
         let mut segments = row![
-            segment(tr("Documento"), Some(Kind::Document)),
-            segment(tr("Foto"), Some(Kind::Photo)),
+            segment(
+                tr("Documento"),
+                Some(Message::Kind(Kind::Document)),
+                self.kind == Kind::Document
+            ),
+            segment(
+                tr("Foto"),
+                Some(Message::Kind(Kind::Photo)),
+                self.kind == Kind::Photo && !self.filming()
+            ),
         ]
         .spacing(2);
-        // Film only for a scanner with an adapter for it (not there yet).
-        if self.caps.transparency {
-            segments = segments.push(segment(tr("Pellicola"), None));
+        // Films only for a scanner with an adapter for them (with its cable
+        // unplugged a press says so).
+        if self.caps.offers(Source::Negative) {
+            segments = segments.push(segment(
+                tr("Pellicola"),
+                Some(Message::Film),
+                self.filming(),
+            ));
         }
         let modes = container(segments)
             .padding(3)
@@ -5713,7 +5941,7 @@ impl App {
             labelled(
                 tr("Risoluzione"),
                 pick_list(
-                    self.caps.resolutions.clone(),
+                    self.caps.resolutions_for(self.source()).to_vec(),
                     Some(self.dpi()),
                     Message::Dpi
                 )
@@ -7012,13 +7240,16 @@ mod tests {
             let (max_w, max_h) = caps.glass_pixels(dpi);
             // An original at the bottom right corner, with the margin of
             // "Rifai" around it (1 mm past both edges).
-            let area = within_glass(area_mm(dpi, 150.0, 240.0, 66.9, 58.2), dpi, &caps);
+            let area = within(
+                area_mm(dpi, 150.0, 240.0, 66.9, 58.2),
+                caps.glass_pixels(dpi),
+            );
             assert!(area.x + area.width <= max_w, "{dpi} dpi: {area:?}");
             assert!(area.y + area.height <= max_h, "{dpi} dpi: {area:?}");
             assert!(area.width > 0 && area.height > 0);
             // An area inside is left alone.
             let inside = area_mm(dpi, 10.0, 10.0, 100.0, 100.0);
-            assert_eq!(within_glass(inside, dpi, &caps), inside);
+            assert_eq!(within(inside, caps.glass_pixels(dpi)), inside);
         }
     }
 

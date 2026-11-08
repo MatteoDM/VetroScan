@@ -151,6 +151,15 @@ pub fn scan<T: Transport>(
 ) -> Result<(Image, Report)> {
     let (mut params, hw) = geometry::scan_window(request.dpi, request.area)?;
     params.negative = request.transparency && request.negative;
+    // Before anything moves: at the other resolutions the negatives' modes
+    // make the motor stall (scan_modes::NEGATIVE_RESOLUTIONS).
+    if params.negative && !crate::scan_modes::NEGATIVE_RESOLUTIONS.contains(&request.dpi) {
+        return Err(Error::InvalidArgument(format!(
+            "negatives are scanned at {:?} dpi only, not {}",
+            crate::scan_modes::NEGATIVE_RESOLUTIONS,
+            request.dpi
+        )));
+    }
     match request.depth {
         8 => {}
         16 => params.depth = 16,
@@ -312,6 +321,52 @@ mod tests {
     use super::*;
     use crate::profile::HP3770;
     use scan_imaging::Format;
+
+    /// A scanner that must not be reached: every request fails the test.
+    struct Untouched;
+
+    impl Transport for Untouched {
+        fn control_in(&mut self, _: crate::protocol::SetupPacket) -> Result<Vec<u8>> {
+            panic!("the scanner was asked something")
+        }
+        fn control_out(&mut self, _: crate::protocol::SetupPacket, _: &[u8]) -> Result<()> {
+            panic!("the scanner was told something")
+        }
+        fn bulk_in(&mut self, _: &mut [u8]) -> Result<usize> {
+            panic!("the scanner was read")
+        }
+        fn bulk_out(&mut self, _: &[u8]) -> Result<()> {
+            panic!("the scanner was written")
+        }
+        fn interrupt_in(&mut self, _: std::time::Duration) -> Result<Option<u8>> {
+            panic!("the buttons were read")
+        }
+    }
+
+    /// At 200 and 300 dpi the negatives' modes made the motor grind: such
+    /// a scan is refused before the scanner is touched.
+    #[test]
+    fn negatives_at_low_resolutions_are_refused_before_anything_moves() {
+        for dpi in [200, 300, 2400] {
+            let request = Request {
+                transparency: true,
+                negative: true,
+                ..Request::new(
+                    dpi,
+                    Area {
+                        x: 0,
+                        y: 0,
+                        width: 8,
+                        height: 2,
+                    },
+                    Mode::Colour,
+                )
+            };
+            let mut chip = Chip::new(Untouched);
+            let r = scan(&mut chip, &HP3770, &request, &mut |_| true);
+            assert!(matches!(r, Err(Error::InvalidArgument(_))), "{dpi} dpi");
+        }
+    }
 
     fn request(mode: Mode) -> Request {
         Request {
