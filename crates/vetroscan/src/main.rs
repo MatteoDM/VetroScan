@@ -23,6 +23,7 @@ mod e2e;
 mod editor;
 mod histogram;
 mod i18n;
+mod keys;
 mod prefs;
 mod sheet;
 mod testing;
@@ -1735,6 +1736,15 @@ enum Pane {
     Prefs,
 }
 
+/// A field of millimetres.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MmField {
+    /// The area to scan: left, top, width, height on the glass.
+    Area(usize),
+    /// The page on its sheet: from the left edge, from the top edge.
+    Offset(usize),
+}
+
 /// Which image the viewer shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -1756,8 +1766,18 @@ enum Message {
     Undo,
     Redo,
     CurveChannel(CurveChannel),
-    /// New points of the curve of the channel shown.
-    CurveSet(Vec<[f32; 2]>),
+    /// New points of the curve of the channel shown, and the point chosen
+    /// after (moved by the arrows).
+    CurveSet(Vec<[f32; 2]>, Option<usize>),
+    /// A point of the curve chosen, or none.
+    CurvePoint(Option<usize>),
+    /// A millimetre field typed: the area to scan, or where the page is on
+    /// its sheet.
+    MmInput(MmField, String),
+    /// Enter in a millimetre field: the number typed is done.
+    MmSubmit,
+    /// The position of the page shown on its sheet given to every page.
+    PageFocusToAll,
     Descreen(Screen),
     Adaptive(bool),
     /// "Solo questa pagina" on or off for the page shown.
@@ -2027,6 +2047,10 @@ struct App {
     curve_channel: CurveChannel,
     /// When the curve was last dragged (one step of Ctrl+Z per drag).
     curve_drag: Option<std::time::Instant>,
+    /// The point of the curve clicked last: the arrows move it.
+    curve_selected: Option<usize>,
+    /// A millimetre field being typed, and what is in it.
+    mm_draft: Option<(MmField, String)>,
     /// Named setups (at most three), and the name being typed.
     presets: Vec<prefs::Preset>,
     preset_name: String,
@@ -2148,6 +2172,8 @@ impl App {
                 draft: None,
                 curve_channel: CurveChannel::All,
                 curve_drag: None,
+                curve_selected: None,
+                mm_draft: None,
                 presets: prefs::load_presets(),
                 preset_name: String::new(),
                 undo: Vec::new(),
@@ -2311,7 +2337,7 @@ impl App {
             message,
             Message::Undo
                 | Message::Redo
-                | Message::CurveSet(_)
+                | Message::CurveSet(..)
                 | Message::Descreen(_)
                 | Message::Adaptive(_)
                 | Message::OwnLook(_)
@@ -2331,6 +2357,8 @@ impl App {
                 | Message::PdfOwnLayout(_)
                 | Message::PdfApplyToAll
                 | Message::PageFocus(_)
+                | Message::PageFocusToAll
+                | Message::MmInput(MmField::Offset(_), _)
                 | Message::AcceptRedo
         )
     }
@@ -3702,8 +3730,11 @@ impl App {
                     s.pdf_sheet = l.sheet;
                     s.pdf_fit = l.fit;
                     s.pdf_margin = l.margin;
+                    // The position on the sheet too.
+                    let focus = self.pages[self.current.unwrap_or(0)].focus;
                     for page in &mut self.pages {
                         page.layout = None;
+                        page.focus = focus;
                     }
                     self.note = tr("Impaginazione applicata a tutte le pagine").into();
                 }
@@ -3713,6 +3744,20 @@ impl App {
                     page.focus = focus.map(|f| f.clamp(0.0, 1.0));
                 }
             }
+            Message::PageFocusToAll => {
+                if let Some(focus) = self
+                    .current
+                    .and_then(|i| self.pages.get(i))
+                    .map(|p| p.focus)
+                {
+                    for page in &mut self.pages {
+                        page.focus = focus;
+                    }
+                    self.note = tr("Posizione sul foglio data a tutte le pagine").into();
+                }
+            }
+            Message::MmInput(field, typed) => self.mm_input(field, typed),
+            Message::MmSubmit => self.mm_draft = None,
             Message::AutoSave(on) => self.settings_mut().auto_save = on,
             Message::AutoCrop(on) => self.settings_mut().auto_crop = on,
             Message::Detect => {
@@ -3846,9 +3891,14 @@ impl App {
                     self.note = tr("Regolazioni applicate a tutte le pagine").into();
                 }
             }
-            Message::CurveChannel(c) => self.curve_channel = c,
-            Message::CurveSet(points) => {
-                let c = self.curve_channel.index();
+            Message::CurveChannel(c) => {
+                self.curve_channel = c;
+                self.curve_selected = None;
+            }
+            Message::CurvePoint(point) => self.curve_selected = point,
+            Message::CurveSet(points, point) => {
+                self.curve_selected = point;
+                let c = self.curve_index();
                 // A drag is one step of Ctrl+Z.
                 let now = std::time::Instant::now();
                 if self
@@ -4282,6 +4332,59 @@ impl App {
                 _ => Task::none(),
             };
         }
+        // Arrows and Home move what is active ([`keys`]).
+        if let Some(m) = keys::read(&key, modifiers) {
+            let message = self.on_move(m);
+            return self.keyed(message);
+        }
+        let curve = self.curve_selected.is_some() && self.curve_shown();
+        let straightening = self
+            .editor()
+            .is_some_and(|e| e.section == editor::Section::Frame);
+        match key.as_ref() {
+            // The point of the curve: the next one (Shift: the one before),
+            // away, or no longer chosen.
+            Key::Named(Named::Tab) if curve => {
+                let message = self.curve_key(Some(!modifiers.shift()));
+                return self.keyed(message);
+            }
+            Key::Named(Named::Delete | Named::Backspace) if curve => {
+                let message = self.curve_key(None);
+                return self.keyed(message);
+            }
+            Key::Named(Named::Escape) if curve => {
+                return self.update(Message::CurvePoint(None));
+            }
+            // The strip of pages: the page before or after; with Alt, the
+            // page shown moves there.
+            Key::Named(named @ (Named::PageUp | Named::PageDown)) => {
+                let forward = named == Named::PageDown;
+                let Some(i) = self.current.filter(|&i| i < self.pages.len()) else {
+                    return Task::none();
+                };
+                let message = if modifiers.alt() {
+                    Some(Message::PageMove(i, forward))
+                } else if forward {
+                    (i + 1 < self.pages.len()).then_some(Message::PageShow(i + 1))
+                } else {
+                    i.checked_sub(1).map(Message::PageShow)
+                };
+                return self.keyed(message);
+            }
+            // Straightening: [ and ] turn by 0.1°, with Shift by 1° (on
+            // some keyboards Shift makes them { and }; on others they need
+            // AltGr, which comes as Ctrl + Alt).
+            Key::Character(c @ ("[" | "]" | "{" | "}")) if straightening => {
+                let degrees = if modifiers.shift() || c == "{" || c == "}" {
+                    1.0
+                } else {
+                    0.1
+                };
+                let sign = if c == "[" || c == "{" { -1.0 } else { 1.0 };
+                return self.update(EditMsg::AngleBy(sign * degrees).into());
+            }
+            _ => {}
+        }
         let editing = self.editor().is_some();
         let message = match (key.as_ref(), modifiers.command(), modifiers.shift()) {
             (Key::Named(Named::Enter), false, _) if editing => Some(EditMsg::Apply.into()),
@@ -4322,7 +4425,16 @@ impl App {
         match message {
             // Actions that need the scanner or a page check it themselves.
             Some(Message::Preview | Message::Scan) if !self.idle() => Task::none(),
-            Some(m) => self.handle(m),
+            message => self.keyed(message),
+        }
+    }
+
+    /// Does what a key asked for as if it came by itself (so that a page
+    /// changed from the keyboard is unsaved, as one changed with the
+    /// mouse).
+    fn keyed(&mut self, message: Option<Message>) -> Task<Message> {
+        match message {
+            Some(m) => self.update(m),
             None => Task::none(),
         }
     }
@@ -5724,21 +5836,24 @@ impl App {
             pane = pane
                 .push(
                     text(if self.selection.is_none() {
-                        tr("Tutto il formato A4. Trascina sull'anteprima per scegliere un'area.")
-                            .to_string()
-                    } else {
-                        trf(
-                            "Da {x}, {y} mm · {w} × {h} mm",
-                            &[
-                                ("x", &format!("{x:.0}")),
-                                ("y", &format!("{y:.0}")),
-                                ("w", &format!("{wmm:.0}")),
-                                ("h", &format!("{hmm:.0}")),
-                            ],
+                        tr(
+                            "Tutto il formato A4. Trascina sull'anteprima per scegliere un'area, \
+                            o scrivila qui sotto.",
                         )
+                    } else {
+                        tr("Frecce: sposta l'area di 1 mm (Maiusc 10 mm, Alt 0,1 mm); \
+                            Ctrl + frecce: la misura; Home: al centro del vetro.")
                     })
-                    .size(12),
+                    .size(11),
                 )
+                .push(self.mm_pair(
+                    (tr("Da sinistra"), MmField::Area(0), x, true),
+                    (tr("Dall'alto"), MmField::Area(1), y, true),
+                ))
+                .push(self.mm_pair(
+                    (tr("Larghezza"), MmField::Area(2), wmm, true),
+                    (tr("Altezza"), MmField::Area(3), hmm, true),
+                ))
                 .push(
                     text(trf(
                         "{w} × {h} pixel · in memoria {mb} MB",
@@ -5996,7 +6111,7 @@ impl App {
             button(text(label).size(11))
                 .padding([3, 8])
                 .style(button::secondary)
-                .on_press(Message::CurveSet(c.points().to_vec()))
+                .on_press(Message::CurveSet(c.points().to_vec(), None))
         };
         let curve_histogram = if self.editing_page() {
             self.shown().map(|p| &p.shown)
@@ -6015,7 +6130,9 @@ impl App {
                     curve: s.adjust.curve[channel],
                     colour: curve_colour,
                     histogram: curve_histogram,
+                    selected: self.curve_selected,
                     on_change: Message::CurveSet,
+                    on_pick: Message::CurvePoint,
                 })
                 .width(Length::Fill)
                 .height(220),
@@ -6469,6 +6586,45 @@ impl App {
                         .spacing(8),
                     );
                 }
+                if let Some(page) = self.current.and_then(|i| self.pages.get(i)) {
+                    let (w, h) = page.inches();
+                    let placed = s.layout(page.layout, page.focus).place(w, h);
+                    let [left, top] = placed.offset_mm();
+                    let [rx, ry] = placed.room();
+                    pane = pane
+                        .push(heading(tr("Posizione sul foglio")))
+                        .push(self.mm_pair(
+                            (tr("Da sinistra"), MmField::Offset(0), left, rx.abs() > 0.5),
+                            (tr("Dall'alto"), MmField::Offset(1), top, ry.abs() > 0.5),
+                        ));
+                    let mut buttons = row![button(text(tr("Centra")).size(12))
+                        .padding([3, 8])
+                        .style(button::secondary)
+                        .on_press_maybe(
+                            (page.focus != [0.5, 0.5]).then_some(Message::PageFocus([0.5, 0.5]))
+                        )]
+                    .spacing(8);
+                    if self.pages.len() > 1 {
+                        buttons = buttons.push(
+                            button(text(tr("Uguale per tutte le pagine")).size(12))
+                                .padding([3, 8])
+                                .style(button::text)
+                                .on_press_maybe(
+                                    self.pages
+                                        .iter()
+                                        .any(|p| p.focus != page.focus)
+                                        .then_some(Message::PageFocusToAll),
+                                ),
+                        );
+                    }
+                    pane = pane.push(buttons).push(
+                        text(tr(
+                            "Trascina la pagina sul foglio o spostala con le frecce (Maiusc \
+                             10 mm, Alt 0,1 mm); Home la centra.",
+                        ))
+                        .size(11),
+                    );
+                }
                 pane = pane.push(
                     text(match l.fit {
                         PdfFit::Actual => {
@@ -6589,6 +6745,40 @@ impl App {
         .width(Length::Fill)
         .style(surface)
         .into()
+    }
+
+    /// Two fields of millimetres side by side, each a label, the field
+    /// (being typed, or the value) and "mm"; a field not `enabled` cannot
+    /// be typed in.
+    fn mm_pair<'a>(
+        &self,
+        a: (&'a str, MmField, f64, bool),
+        b: (&'a str, MmField, f64, bool),
+    ) -> Element<'a, Message> {
+        let field = |(label, field, value, enabled): (&'a str, MmField, f64, bool)| {
+            let shown = match &self.mm_draft {
+                Some((f, typed)) if *f == field => typed.clone(),
+                _ => i18n::decimal(keys::format_mm(value)),
+            };
+            column![
+                text(label).size(12),
+                row![
+                    iced::widget::text_input("", &shown)
+                        .on_input_maybe(enabled.then_some(move |t| Message::MmInput(field, t)))
+                        .on_submit(Message::MmSubmit)
+                        .size(12)
+                        .padding([2, 6])
+                        .width(Length::Fill)
+                        .align_x(iced::alignment::Horizontal::Right),
+                    text("mm").size(12),
+                ]
+                .spacing(4)
+                .align_y(Alignment::Center),
+            ]
+            .spacing(2)
+            .width(Length::Fill)
+        };
+        row![field(a), field(b)].spacing(12).into()
     }
 
     /// A labelled slider with an editable number: double click on the

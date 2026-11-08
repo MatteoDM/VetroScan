@@ -343,7 +343,7 @@ impl App {
         })
     }
 
-    fn edited_page(&self) -> Option<&Page> {
+    pub fn edited_page(&self) -> Option<&Page> {
         self.editor().and_then(|e| self.pages.get(e.index))
     }
 

@@ -17,6 +17,24 @@ GitHub; here they are in English.
 
 ## [Unreleased]
 
+### Added
+- **Moving precisely from the keyboard**, the same keys wherever something moves with the
+  mouse: the arrows move by 1 mm, **Shift** + arrows by 10 mm, **Alt** + arrows by 0.1 mm (or a
+  pixel), **Ctrl** + arrows change the size, **Home** goes back to the middle. They move the
+  area to scan on the preview, the crop in the editor, the page on its PDF sheet, the point of
+  the curve clicked last (**Tab** the next one, **Delete** away) and a zoomed image. **[** and
+  **]** straighten by 0.1° in the editor (**Shift**: 1°); **Page Up** / **Page Down** show the
+  page before or after, with **Alt** they move it there.
+- **The page anywhere on its PDF sheet**: dragged or with the arrows inside the margin, also at
+  actual size and fitted to the sheet; under *Position on the sheet* the distance from the
+  left and top edges in millimetres, also typed, **Centre** and **The same for every page**.
+  Centred pages come out as before.
+- **The area to scan typed in millimetres**: from the left, from the top, width and height.
+
+### Fixed
+- The documents said that the HP 3770 has no adapter for slides and negatives (also the
+  notes of 0.3.0): it has one, in its lid. VetroScan does not use it yet.
+
 ## [0.3.1] - 2026-11-08
 
 ### Added

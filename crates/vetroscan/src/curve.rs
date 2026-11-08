@@ -3,7 +3,9 @@
 //! point (up to 16), drag to move it, drag it out of the box or click it
 //! twice to remove it; the end points are the black and white points and
 //! can be moved too. The histogram is drawn behind, with a 4 × 4 grid, and
-//! the input and output of the point being moved are shown.
+//! the input and output of the point being moved are shown. The point
+//! clicked last stays chosen: the arrows move it, Tab goes to the next one,
+//! Delete takes it away ([`crate::keys`]).
 
 use iced::mouse;
 use iced::widget::canvas::{self, Action, Event, Frame, Geometry, Path, Stroke};
@@ -19,8 +21,12 @@ pub struct Editor<Message> {
     pub colour: Color,
     /// Counts of each level of the image, drawn behind.
     pub histogram: Option<[u32; 256]>,
-    /// Message with the new points of the curve.
-    pub on_change: fn(Vec<[f32; 2]>) -> Message,
+    /// The point chosen (clicked last), if any.
+    pub selected: Option<usize>,
+    /// Message with the new points of the curve and the point chosen after.
+    pub on_change: fn(Vec<[f32; 2]>, Option<usize>) -> Message,
+    /// Message with the point clicked, when the curve does not change.
+    pub on_pick: fn(Option<usize>) -> Message,
 }
 
 /// The point being dragged, and the last click (for the double click).
@@ -33,7 +39,7 @@ pub struct State {
 /// How close (on screen) a click must be to take a point.
 const GRAB: f32 = 9.0;
 /// Least distance between two points' inputs.
-const GAP: f32 = 0.01;
+pub const GAP: f32 = 0.01;
 
 fn to_screen(b: Size, p: [f32; 2]) -> Point {
     Point::new(p[0] * b.width, (1.0 - p[1]) * b.height)
@@ -80,10 +86,10 @@ impl<Message> canvas::Program<Message> for Editor<Message> {
                         let mut v = points.to_vec();
                         v.remove(i);
                         state.dragging = None;
-                        return Some(Action::publish((self.on_change)(v)).and_capture());
+                        return Some(Action::publish((self.on_change)(v, None)).and_capture());
                     }
                     state.dragging = Some(i);
-                    return Some(Action::capture());
+                    return Some(Action::publish((self.on_pick)(Some(i))).and_capture());
                 }
                 if n >= Curve::MAX {
                     return Some(Action::capture());
@@ -102,7 +108,7 @@ impl<Message> canvas::Program<Message> for Editor<Message> {
                 let index = v.iter().position(|p| p[0] == x && p[1] == y);
                 state.dragging = index;
                 state.last_click = index.map(|i| (i, Instant::now()));
-                Some(Action::publish((self.on_change)(v)).and_capture())
+                Some(Action::publish((self.on_change)(v, index)).and_capture())
             }
             Event::Mouse(mouse::Event::CursorMoved { position }) => {
                 let i = state.dragging?;
@@ -116,13 +122,13 @@ impl<Message> canvas::Program<Message> for Editor<Message> {
                 if outside && i > 0 && i + 1 < n {
                     v.remove(i);
                     state.dragging = None;
-                    return Some(Action::publish((self.on_change)(v)).and_capture());
+                    return Some(Action::publish((self.on_change)(v, None)).and_capture());
                 }
                 let [x, y] = from_screen(size, local);
                 let low = if i == 0 { 0.0 } else { v[i - 1][0] + GAP };
                 let high = if i + 1 == n { 1.0 } else { v[i + 1][0] - GAP };
                 v[i] = [x.clamp(low, high.max(low)), y];
-                Some(Action::publish((self.on_change)(v)).and_capture())
+                Some(Action::publish((self.on_change)(v, Some(i))).and_capture())
             }
             Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
                 state.dragging.take().map(|_| Action::capture())
@@ -197,7 +203,7 @@ impl<Message> canvas::Program<Message> for Editor<Message> {
         );
         for (i, p) in self.curve.points().iter().enumerate() {
             let at = to_screen(size, *p);
-            let active = state.dragging == Some(i);
+            let active = state.dragging.or(self.selected) == Some(i);
             frame.fill(
                 &Path::circle(at, if active { 6.0 } else { 4.5 }),
                 if active { self.colour } else { Color::WHITE },
@@ -207,8 +213,13 @@ impl<Message> canvas::Program<Message> for Editor<Message> {
                 Stroke::default().with_width(2.0).with_color(self.colour),
             );
         }
-        // Input and output of the point being moved, as levels 0-255.
-        if let Some(p) = state.dragging.and_then(|i| self.curve.points().get(i)) {
+        // Input and output of the point being moved or chosen, as levels
+        // 0-255.
+        if let Some(p) = state
+            .dragging
+            .or(self.selected)
+            .and_then(|i| self.curve.points().get(i))
+        {
             frame.fill_text(canvas::Text {
                 content: crate::i18n::trf(
                     "Ingresso {input} → Uscita {output}",

@@ -3,7 +3,8 @@
 //! as the PDF will have it ([`vetroscan_export::Layout::place`]), the margin
 //! dashed, and in red the edge of what ends up on paper. What falls
 //! outside (a page filling the sheet with other proportions) shows dimmed
-//! beyond the red edge, and dragging the page chooses which part is kept.
+//! beyond the red edge. Dragging the page moves it on the sheet inside the
+//! margin, or chooses which part is kept of one that overflows.
 //!
 //! The marks are a second canvas stacked on the first: the renderer draws
 //! the images of a layer after its lines, so in one canvas the page would
@@ -113,8 +114,7 @@ impl<Message> Sheet<'_, Message> {
     }
 
     fn draggable(&self) -> bool {
-        let (ox, oy) = self.overflow();
-        ox > 0.5 || oy > 0.5
+        self.placed.room().iter().any(|r| r.abs() > 0.5)
     }
 }
 
@@ -147,18 +147,20 @@ impl<Message> canvas::Program<Message> for Sheet<'_, Message> {
             Event::Mouse(mouse::Event::CursorMoved { .. }) => {
                 let ((start, focus), p) = (drag.0?, at?);
                 let (s, _) = self.scale(size);
-                let (ox, oy) = self.overflow();
-                // Dragging the page right shows more of its left part.
-                let along = |moved: f32, over: f64, from: f32| {
-                    if over > 0.5 {
-                        (from - moved / s / over as f32).clamp(0.0, 1.0)
+                let [rx, ry] = self.placed.room();
+                // The page follows the pointer: inside the margin, or, when
+                // it overflows (the room is negative), dragged right it
+                // shows more of its left part.
+                let along = |moved: f32, room: f64, from: f32| {
+                    if room.abs() > 0.5 {
+                        (from + moved / s / room as f32).clamp(0.0, 1.0)
                     } else {
                         from
                     }
                 };
                 let new = [
-                    along(p.x - start.x, ox, focus[0]),
-                    along(p.y - start.y, oy, focus[1]),
+                    along(p.x - start.x, rx, focus[0]),
+                    along(p.y - start.y, ry, focus[1]),
                 ];
                 Some(Action::publish((self.on_focus)(new)).and_capture())
             }
@@ -251,9 +253,15 @@ impl<Message> canvas::Program<Message> for Sheet<'_, Message> {
                 .with_color(Color::from_rgb(0.92, 0.15, 0.15)),
         );
         // What it is, under the sheet.
-        let hint = if self.draggable() {
+        let (ox, oy) = self.overflow();
+        let hint = if ox > 0.5 || oy > 0.5 {
             crate::i18n::trf(
                 "{caption} · trascina la pagina per scegliere cosa tenere",
+                &[("caption", &self.caption)],
+            )
+        } else if self.draggable() {
+            crate::i18n::trf(
+                "{caption} · trascina la pagina o usa le frecce per spostarla",
                 &[("caption", &self.caption)],
             )
         } else {

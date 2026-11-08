@@ -1612,3 +1612,402 @@ fn the_folder_of_the_scans_opens_from_the_window_and_with_ctrl_o() {
     ui.send(Message::Key(ctrl_o));
     assert_eq!(crate::testing::take_effects(), [opened]);
 }
+
+// ------------------------------------------------- moving from the keyboard
+
+/// Presses `key` with `modifiers`, as the keyboard subscription would
+/// deliver it (only what no text field took).
+fn press(ui: &mut Ui, key: iced::keyboard::Key, modifiers: iced::keyboard::Modifiers) {
+    use iced::keyboard::key::{NativeCode, Physical};
+    ui.send(Message::Key(iced::keyboard::Event::KeyPressed {
+        key: key.clone(),
+        modified_key: key,
+        physical_key: Physical::Unidentified(NativeCode::Unidentified),
+        location: iced::keyboard::Location::Standard,
+        modifiers,
+        text: None,
+        repeat: false,
+    }));
+}
+
+fn arrow(ui: &mut Ui, named: iced::keyboard::key::Named, modifiers: iced::keyboard::Modifiers) {
+    press(ui, iced::keyboard::Key::Named(named), modifiers);
+}
+
+/// Arrows pressed one right after the other, as a person does: what they
+/// start (the page drawn again) runs after the last, so that a busy machine
+/// does not space them out beyond the moment that makes them one step of
+/// Ctrl+Z.
+fn arrows(ui: &mut Ui, keys: &[(iced::keyboard::key::Named, iced::keyboard::Modifiers)]) {
+    use iced::keyboard::key::{NativeCode, Physical};
+    let tasks: Vec<_> = keys
+        .iter()
+        .map(|&(named, modifiers)| {
+            let key = iced::keyboard::Key::Named(named);
+            ui.app
+                .update(Message::Key(iced::keyboard::Event::KeyPressed {
+                    key: key.clone(),
+                    modified_key: key,
+                    physical_key: Physical::Unidentified(NativeCode::Unidentified),
+                    location: iced::keyboard::Location::Standard,
+                    modifiers,
+                    text: None,
+                    repeat: false,
+                }))
+        })
+        .collect();
+    for task in tasks {
+        ui.run(task);
+    }
+}
+
+const NONE: iced::keyboard::Modifiers = iced::keyboard::Modifiers::empty();
+const SHIFT: iced::keyboard::Modifiers = iced::keyboard::Modifiers::SHIFT;
+const ALT: iced::keyboard::Modifiers = iced::keyboard::Modifiers::ALT;
+const CTRL: iced::keyboard::Modifiers = iced::keyboard::Modifiers::COMMAND;
+
+fn near(a: f32, b: f32) -> bool {
+    (a - b).abs() < 0.01
+}
+
+#[test]
+fn the_area_to_scan_moves_and_grows_from_the_keyboard() {
+    use crate::viewer::Selection;
+    use iced::keyboard::key::Named;
+    let mut ui = Ui::new();
+    ui.click("Anteprima");
+    let start = Selection {
+        x: 200.0,
+        y: 200.0,
+        width: 400.0,
+        height: 400.0,
+    };
+    ui.send(Message::Select(Some(start)));
+    // The preview is at 200 dpi: 1 mm is 7.87 pixels.
+    let mm = 200.0 / 25.4;
+    arrow(&mut ui, Named::ArrowRight, NONE);
+    let s = ui.app.selection.unwrap();
+    assert!(near(s.x, 200.0 + mm) && near(s.width, 400.0), "{s:?}");
+    arrow(&mut ui, Named::ArrowDown, SHIFT);
+    assert!(near(ui.app.selection.unwrap().y, 200.0 + 10.0 * mm));
+    // Alt: 0.1 mm, but a pixel of the preview (0.127 mm) is more.
+    arrow(&mut ui, Named::ArrowLeft, ALT);
+    assert!(near(ui.app.selection.unwrap().x, 200.0 + mm - 1.0));
+    // Ctrl: the size, from the right and bottom edges.
+    arrow(&mut ui, Named::ArrowRight, CTRL);
+    arrow(&mut ui, Named::ArrowUp, CTRL | SHIFT);
+    let s = ui.app.selection.unwrap();
+    assert!(near(s.width, 400.0 + mm) && near(s.height, 400.0 - 10.0 * mm));
+    assert!(near(s.x, 200.0 + mm - 1.0), "the left edge stays: {s:?}");
+    // At the edge of the glass it stops.
+    for _ in 0..10 {
+        arrow(&mut ui, Named::ArrowLeft, SHIFT);
+    }
+    assert_eq!(ui.app.selection.unwrap().x, 0.0);
+    // Home: in the middle of the glass.
+    arrow(&mut ui, Named::Home, NONE);
+    let (s, glass) = (ui.app.selection.unwrap(), ui.app.glass());
+    assert!(near(s.x * 2.0 + s.width, glass.width), "{s:?} {glass:?}");
+    assert!(near(s.y * 2.0 + s.height, glass.height));
+    // Never smaller than a few pixels.
+    for _ in 0..80 {
+        arrow(&mut ui, Named::ArrowLeft, CTRL | SHIFT);
+    }
+    assert!(ui.app.selection.unwrap().width >= 4.0);
+}
+
+#[test]
+fn the_area_to_scan_is_typed_in_millimetres_and_a_field_keeps_its_arrows() {
+    use crate::MmField;
+    let mut ui = Ui::new();
+    ui.click("Anteprima");
+    ui.send(Message::Pane(crate::Pane::Scan));
+    // No area chosen: the fields show all of A4.
+    assert!(ui.shows("210") && ui.shows("297"));
+    // In a field the arrows move the text cursor: the field takes them,
+    // and the keyboard subscription never gets them.
+    let status = {
+        let mut sim = iced_test::Simulator::with_size(
+            iced::Settings::default(),
+            Size::new(1360.0, 900.0),
+            ui.app.view(),
+        );
+        sim.click("210").expect("the width field");
+        sim.tap_key(iced::keyboard::key::Named::ArrowLeft)
+    };
+    assert_eq!(status, iced::event::Status::Captured);
+    // Typed, with a comma as Italians write.
+    ui.send(Message::MmInput(MmField::Area(0), "12,5".into()));
+    ui.send(Message::MmInput(MmField::Area(2), "100".into()));
+    let (x, _, w, h) = ui.app.area_mm();
+    assert!(
+        (x - 12.5).abs() < 0.01 && (w - 100.0).abs() < 0.01,
+        "{x} {w}"
+    );
+    assert!((h - 297.0).abs() < 0.2, "the rest as it was: {h}");
+    // What is being typed stays as typed until Enter.
+    ui.send(Message::MmInput(MmField::Area(3), "5".into()));
+    assert!(ui.shows("5"));
+    ui.send(Message::MmSubmit);
+    assert!(ui.app.mm_draft.is_none());
+    // Beyond the glass it stops at its edge.
+    ui.send(Message::MmInput(MmField::Area(2), "900".into()));
+    let (x, _, w, _) = ui.app.area_mm();
+    let glass_mm = f64::from(ui.app.glass().width) * 25.4 / f64::from(crate::PREVIEW_DPI);
+    assert!((x + w - glass_mm).abs() < 0.2, "{x} + {w} on {glass_mm}");
+}
+
+/// Where the page shown lies on its sheet: mm from the left and top edges.
+fn page_offset(ui: &Ui) -> [f64; 2] {
+    let page = &ui.app.pages[ui.app.current.unwrap()];
+    let (w, h) = page.inches();
+    ui.app
+        .settings()
+        .layout(page.layout, page.focus)
+        .place(w, h)
+        .offset_mm()
+}
+
+#[test]
+fn the_page_moves_on_its_sheet_from_the_keyboard_and_the_pdf_has_it_there() {
+    use crate::PdfFit;
+    use iced::keyboard::key::Named;
+    let mut ui = two_photos_on_a4();
+    // At real size: room all round.
+    ui.send(Message::PdfFit(PdfFit::Actual));
+    assert!(ui.app.print_preview());
+    let [l0, t0] = page_offset(&ui);
+    arrow(&mut ui, Named::ArrowRight, NONE);
+    arrow(&mut ui, Named::ArrowDown, SHIFT);
+    let [l, t] = page_offset(&ui);
+    assert!(
+        (l - l0 - 1.0).abs() < 1e-3 && (t - t0 - 10.0).abs() < 1e-3,
+        "{l} {t}"
+    );
+    // Alt: a pixel of the scan at 200 dpi (0.127 mm) is more than 0.1 mm.
+    arrow(&mut ui, Named::ArrowLeft, ALT);
+    assert!((page_offset(&ui)[0] - (l - 25.4 / 200.0)).abs() < 1e-3);
+    // Ctrl: the page has no size of its own to change.
+    let before = ui.app.pages[1].focus;
+    arrow(&mut ui, Named::ArrowRight, CTRL);
+    assert_eq!(ui.app.pages[1].focus, before);
+    // At the edge of the sheet it stops.
+    for _ in 0..40 {
+        arrow(&mut ui, Named::ArrowLeft, SHIFT);
+        arrow(&mut ui, Named::ArrowUp, SHIFT);
+    }
+    assert_eq!(ui.app.pages[1].focus, [0.0, 0.0]);
+    assert!(page_offset(&ui).iter().all(|v| v.abs() < 1e-6));
+    // The PDF has it in its top left corner.
+    ui.send(Message::Save);
+    let m = pdf_matrices(&ui)[1];
+    assert!(m[2].abs() < 0.01, "left {m:?}");
+    let sheet = pdf_boxes(&ui)[1];
+    assert!(
+        (m[3] + m[1] - sheet.0.max(sheet.1)).abs() < 0.01
+            || (m[3] + m[1] - sheet.0.min(sheet.1)).abs() < 0.01,
+        "top {m:?} on {sheet:?}"
+    );
+    // Home: centred again.
+    arrow(&mut ui, Named::Home, NONE);
+    assert_eq!(ui.app.pages[1].focus, [0.5, 0.5]);
+    assert_eq!(ui.app.pages[0].focus, [0.5, 0.5], "the other page stays");
+}
+
+#[test]
+fn where_the_page_goes_is_typed_centred_and_given_to_every_page() {
+    use crate::{MmField, PdfFit};
+    let mut ui = two_photos_on_a4();
+    ui.send(Message::PdfFit(PdfFit::Actual));
+    assert!(ui.shows("Posizione sul foglio"));
+    ui.send(Message::MmInput(MmField::Offset(0), "15".into()));
+    ui.send(Message::MmInput(MmField::Offset(1), "20,5".into()));
+    let [l, t] = page_offset(&ui);
+    assert!(
+        (l - 15.0).abs() < 1e-3 && (t - 20.5).abs() < 1e-3,
+        "{l} {t}"
+    );
+    ui.send(Message::MmSubmit);
+    ui.click("Uguale per tutte le pagine");
+    assert_eq!(ui.app.pages[0].focus, ui.app.pages[1].focus);
+    ui.click("Centra");
+    assert_eq!(ui.app.pages[1].focus, [0.5, 0.5]);
+    // Fitted to the sheet, the page fills it one way inside the margin:
+    // it moves only the other way.
+    ui.send(Message::PdfFit(PdfFit::Page));
+    let [rx, ry] = {
+        let page = &ui.app.pages[1];
+        let (w, h) = page.inches();
+        ui.app
+            .settings()
+            .layout(page.layout, page.focus)
+            .place(w, h)
+            .room()
+    };
+    assert!(rx.abs() < 0.5 || ry.abs() < 0.5, "{rx} {ry}");
+}
+
+#[test]
+fn the_crop_moves_from_the_keyboard_and_a_series_of_presses_is_one_ctrl_z() {
+    use crate::editor::{Aspect, EditMsg, Section};
+    use crate::viewer::Selection;
+    use iced::keyboard::key::Named;
+    let mut ui = document(1);
+    ui.send(EditMsg::Open(0).into());
+    ui.send(EditMsg::Section(Section::Frame).into());
+    ui.send(
+        EditMsg::Crop(Some(Selection {
+            x: 100.0,
+            y: 100.0,
+            width: 300.0,
+            height: 200.0,
+        }))
+        .into(),
+    );
+    ui.send(EditMsg::Submit.into());
+    let steps = ui.app.editor.as_ref().unwrap().undo.len();
+    let crop = |ui: &Ui| ui.app.crop_selection().unwrap();
+    // 200 dpi: 1 mm is 7.87 pixels.
+    let mm = 200.0 / 25.4;
+    arrows(&mut ui, &[(Named::ArrowRight, NONE); 3]);
+    let c = crop(&ui);
+    assert!((c.x - (100.0 + 3.0 * mm)).abs() < 0.5, "{c:?}");
+    assert!((c.width - 300.0).abs() < 0.5, "{c:?}");
+    assert_eq!(
+        ui.app.editor.as_ref().unwrap().undo.len(),
+        steps + 1,
+        "three presses, one step"
+    );
+    ui.send(Message::Undo);
+    assert!((crop(&ui).x - 100.0).abs() < 0.5, "{:?}", crop(&ui));
+    // With fixed proportions the size keeps them (the square chosen is as
+    // large as the page: a small one first).
+    ui.send(EditMsg::Aspect(Aspect::Square).into());
+    ui.send(
+        EditMsg::Crop(Some(Selection {
+            x: 100.0,
+            y: 100.0,
+            width: 200.0,
+            height: 200.0,
+        }))
+        .into(),
+    );
+    ui.send(EditMsg::Submit.into());
+    let before = crop(&ui);
+    arrow(&mut ui, Named::ArrowRight, CTRL | SHIFT);
+    let c = crop(&ui);
+    assert!(c.width > before.width + 10.0, "{before:?} {c:?}");
+    assert!((c.width - c.height).abs() < 1.0, "square: {c:?}");
+    // Straightening: [ and ] by 0.1°, with Shift by 1°.
+    let angle = |ui: &Ui| ui.app.pages[0].transform.angle;
+    press(&mut ui, iced::keyboard::Key::Character("]".into()), NONE);
+    assert!((angle(&ui) - 0.1).abs() < 1e-4);
+    press(&mut ui, iced::keyboard::Key::Character("}".into()), SHIFT);
+    assert!((angle(&ui) - 1.1).abs() < 1e-4);
+    // AltGr (Ctrl + Alt) on an Italian keyboard.
+    press(
+        &mut ui,
+        iced::keyboard::Key::Character("[".into()),
+        CTRL | ALT,
+    );
+    assert!((angle(&ui) - 1.0).abs() < 1e-4, "{}", angle(&ui));
+}
+
+#[test]
+fn the_point_of_the_curve_clicked_last_moves_with_the_arrows() {
+    use crate::Group;
+    use iced::keyboard::key::Named;
+    let mut ui = Ui::new();
+    ui.click("Anteprima");
+    ui.send(Message::Pane(crate::Pane::Adjust));
+    if !ui.app.open.contains(&Group::Curve) {
+        ui.send(Message::Toggle(Group::Curve));
+    }
+    let area = crate::viewer::Selection {
+        x: 10.0,
+        y: 10.0,
+        width: 100.0,
+        height: 100.0,
+    };
+    ui.send(Message::Select(Some(area)));
+    ui.send(Message::CurveSet(
+        vec![[0.0, 0.0], [0.5, 0.5], [1.0, 1.0]],
+        Some(1),
+    ));
+    ui.app.curve_drag = None;
+    let steps = ui.app.undo.len();
+    let points = |ui: &Ui| ui.app.settings().adjust.curve[0].points().to_vec();
+    let level = 1.0 / 255.0;
+    arrows(
+        &mut ui,
+        &[(Named::ArrowUp, NONE), (Named::ArrowRight, SHIFT)],
+    );
+    let p = points(&ui)[1];
+    assert!(
+        near(p[0], 0.5 + 10.0 * level) && near(p[1], 0.5 + level),
+        "{p:?}"
+    );
+    assert_eq!(ui.app.undo.len(), steps + 1, "one step of Ctrl+Z");
+    assert_eq!(ui.app.selection, Some(area), "the area did not move");
+    // Tab: the next point, Shift+Tab the one before.
+    arrow(&mut ui, Named::Tab, NONE);
+    assert_eq!(ui.app.curve_selected, Some(2));
+    arrow(&mut ui, Named::Tab, SHIFT);
+    assert_eq!(ui.app.curve_selected, Some(1));
+    // Delete takes it away; the ends stay.
+    arrow(&mut ui, Named::Delete, NONE);
+    assert_eq!(points(&ui).len(), 2);
+    assert_eq!(ui.app.curve_selected, None);
+    ui.send(Message::CurvePoint(Some(0)));
+    arrow(&mut ui, Named::Delete, NONE);
+    assert_eq!(points(&ui).len(), 2, "not an end");
+    // Esc lets the point go and keeps the area; then the arrows move it.
+    arrow(&mut ui, Named::Escape, NONE);
+    assert_eq!(ui.app.curve_selected, None);
+    assert_eq!(ui.app.selection, Some(area));
+    arrow(&mut ui, Named::ArrowRight, NONE);
+    assert!(ui.app.selection.unwrap().x > 10.0);
+}
+
+#[test]
+fn page_up_and_down_go_through_the_pages_and_alt_moves_the_page() {
+    use iced::keyboard::key::Named;
+    let mut ui = document(3);
+    let order = scans(&ui);
+    ui.send(Message::PageShow(0));
+    arrow(&mut ui, Named::PageDown, NONE);
+    assert_eq!(ui.app.current, Some(1));
+    arrow(&mut ui, Named::PageUp, NONE);
+    arrow(&mut ui, Named::PageUp, NONE);
+    assert_eq!(ui.app.current, Some(0), "it stops at the first");
+    arrow(&mut ui, Named::PageDown, ALT);
+    assert_eq!(scans(&ui), [order[1], order[0], order[2]]);
+    assert_eq!(ui.app.current, Some(1), "the page shown is the one moved");
+    arrow(&mut ui, Named::PageDown, ALT);
+    arrow(&mut ui, Named::PageDown, ALT);
+    assert_eq!(
+        scans(&ui),
+        [order[1], order[2], order[0]],
+        "the last stays last"
+    );
+}
+
+#[test]
+fn the_zoomed_view_pans_with_the_arrows() {
+    use iced::keyboard::key::Named;
+    let mut ui = document(1);
+    ui.send(Message::PageShow(0));
+    // Fitted to the window: nothing to pan.
+    arrow(&mut ui, Named::ArrowRight, NONE);
+    assert_eq!(ui.app.result_view, crate::viewer::View::default());
+    ui.send(Message::ActualSize);
+    let size = ui.app.pages[0].picture.size;
+    arrow(&mut ui, Named::ArrowRight, NONE);
+    arrow(&mut ui, Named::ArrowDown, SHIFT);
+    let c = ui.app.result_view.center.unwrap();
+    assert!(near(c.x, size.width / 2.0 + 50.0), "{c:?}");
+    assert!(near(c.y, size.height / 2.0 + 250.0), "{c:?}");
+    arrow(&mut ui, Named::Home, NONE);
+    assert_eq!(ui.app.result_view.center, None);
+    assert_eq!(ui.app.result_view.scale, Some(1.0), "the zoom stays");
+}

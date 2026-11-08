@@ -33,7 +33,9 @@ pub fn capabilities(profile: &Profile) -> Capabilities {
         resolutions: d.resolutions.to_vec(),
         modes: vec![ColourMode::Colour, ColourMode::Grey, ColourMode::Lineart],
         depths: vec![8, 16],
-        // The 3770 has no adapter for slides (the chip could drive one).
+        // The 3770 has an adapter for slides and negatives in its lid (the
+        // "TMA"), but this driver does not drive it yet: phase 10 of
+        // docs/architecture-plan.md.
         transparency: false,
         buttons: d.buttons.iter().map(|&b| button_info(b)).collect(),
         lamp: Some(LampInfo {

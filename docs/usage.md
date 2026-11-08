@@ -107,7 +107,9 @@ does not inherit by mistake the colours of the session before. A look to reuse i
 | By default | 300 dpi, colour, 8 bits, PDF, automatic crop off | 600 dpi, colour, 16 bits, JPEG, automatic crop on |
 
 With a scanner that has an adapter for slides and negatives a third button, **Film**,
-appears: it is grey, because films are not supported yet. The HP 3770 has no such adapter.
+appears: it is grey, because films are not supported yet. The HP 3770 has one, in its lid
+(the light panel with the holder for two slides or a strip of negatives), but VetroScan
+cannot use it yet: for now the Film button does not appear with it.
 
 **Take care:**
 
@@ -132,10 +134,15 @@ is not compulsory: without a preview an A4 sheet is acquired.
 - To correct it, take one of the **eight handles** (corners and sides) or drag it from inside
   to move it.
 - **Clear selection** (or **Esc**) removes it.
+- With the **keyboard**: the arrows move it by 1 mm (**Shift** 10 mm, **Alt** a pixel of the
+  preview, 0.13 mm); **Ctrl** + arrows change its size, from the right and bottom edges;
+  **Home** puts it in the middle of the glass. It stops at the edges of the glass.
 
-The **Scan** tab says where the area starts and how large it is, in millimetres, and how many
-pixels and how much memory it will take. **Without a selection** the **A4** format is
-acquired (210 × 297 mm from the corner of the glass).
+The **Scan** tab says where the area starts and how large it is, in millimetres (**From the
+left**, **From the top**, **Width**, **Height**: you can also type them, with a comma or a
+point), and how many pixels and how much memory it will take. **Without a selection** the
+**A4** format is acquired (210 × 297 mm from the corner of the glass); typing a number makes
+an area from it.
 
 ### Automatic crop
 
@@ -274,6 +281,9 @@ highlights (top right), with the histogram behind. **Click** adds a point (up to
 to move it, **double-click** or drag it out to remove it. In Colour you can work on all
 channels (**All**) or on **R**, **G**, **B** separately. Three ready-made curves: **Linear**,
 **Medium contrast**, **Strong contrast**.
+The point clicked last stays chosen (it is drawn full, with its input and output): the
+**arrows** move it by one level (**Shift** ten), **Tab** chooses the next one (**Shift+Tab**
+the one before), **Delete** removes it (not the two ends), **Esc** lets it go.
 
 **Colour** (only in Colour): **Vibrance** (livens up dull colours and spares those already
 bright) and **Saturation** (all colours the same way).
@@ -414,14 +424,17 @@ The panel has three parts: **Colour**, **Crop**, **Size**.
 - **Rotate**: **90° left**, **90° right**, **180°**; **Mirror** (right ↔ left) and **Flip
   vertically** (top ↔ bottom).
 - **Straighten**: the **Angle** slider goes from −45° to +45°, in steps of 0.1°; the buttons
-  **−1°**, **−0.1°**, **+0.1°**, **+1°** move it a little; double-click on the slider resets
-  it. A grid appears on the viewer: line up an edge or a line of text with it. Until you
+  **−1°**, **−0.1°**, **+0.1°**, **+1°** move it a little, as do the keys **[** and **]**
+  (0.1°; with **Shift** 1°); double-click on the slider resets it. A grid appears on the viewer: line up an edge or a line of text with it. Until you
   choose a crop, the empty corners left by the rotation are cut off by themselves.
 - **Crop**: drag on the image for a new frame, move the edges with the handles, or the whole
   frame by dragging it from inside. **Proportions** keeps it in a fixed shape: *Free*, *Like
   the original*, *Square 1:1*, *4:3*, *3:2*, *16:9*, *A4 / A3 / A5*, *Photo 10 × 15*; for
   those that are not square a button switches from **portrait** to **landscape**. Below you
-  read the pixels and millimetres of the crop. **The whole image** removes the crop.
+  read the pixels and millimetres of the crop. **The whole image** removes the crop. With the
+  keyboard the arrows move the crop by 1 mm (**Shift** 10 mm, **Alt** 0.1 mm or a pixel),
+  **Ctrl** + arrows change its size keeping the proportions chosen, **Home** centres it; a
+  series of presses is one step of **Ctrl+Z**.
 - **Reset rotation and crop** undoes all of this, leaving the size.
 
 With the keyboard: **R** turns 90° right, **Shift+R** left.
@@ -472,7 +485,7 @@ then choose **On the sheet**:
 
 | On the sheet | What it does | When |
 |---|---|---|
-| **Actual size** | the scan at its size, in the middle; shrunk only if it does not fit | printing at 100%: an A4 document stays A4, a 10 × 15 photo stays 10 × 15 |
+| **Actual size** | the scan at its size, in the middle (it can be moved); shrunk only if it does not fit | printing at 100%: an A4 document stays A4, a 10 × 15 photo stays 10 × 15 |
 | **Fit to the sheet** | the whole scan, as large as the sheet allows inside the **Margin** | a small crop (a detail, a passport photo) enlarged on an A4 |
 | **Fill the sheet** | covers the sheet inside the margin, cutting what is left over at the sides | photo prints without white borders, on 10 × 15 or 13 × 18 |
 
@@ -491,6 +504,14 @@ viewer shows the page on its sheet as it is in the PDF: the margin dashed and, *
 edge of what ends up on paper**, always on top of the page. With **Fill the sheet** the part
 left over stays visible, dimmed, outside the red edge: **drag the page** to choose which part
 to keep (the choice stays with each page and the PDF cuts exactly like that).
+
+**Where the page goes on the sheet.** A page smaller than the sheet is in the middle; drag
+it to put it anywhere inside the margin, or move it with the **arrows** (1 mm; **Shift**
+10 mm; **Alt** 0.1 mm, or a pixel of the scan when that is larger). Under **Position on the
+sheet** the **Output** panel says how far it is from the left and top edges, in millimetres,
+and you can type them; **Centre** (or **Home**) puts it back in the middle, **The same for
+every page** gives its position to all pages, and so does **Apply to all pages** of a page
+with its own layout. A page that fills the sheet one way moves only the other way.
 
 To have exactly the shape of the sheet, crop first in the
 [editor](#editing-a-scan-already-made) with the proportion *A4 / A3 / A5* or *Photo 10 × 15*:
@@ -677,10 +698,30 @@ text field (a name, a number).
 | **1** | zoom 1:1 |
 | **\\** | Before / After |
 | **I** | eyedropper |
-| **Esc** | switches the eyedropper off, or clears the selection; in the editor: **Discard** |
+| **Esc** | switches the eyedropper off, lets the point of the curve go, or clears the selection; in the editor: **Discard** |
 | **E** | opens the editor on the page shown |
 | **Enter** | in the editor: **Apply** |
 | **R** / **Shift+R** | in the editor: turn 90° right / left |
+| **Page Down** / **Page Up** | the next / the previous page |
+| **Alt+Page Down** / **Alt+Page Up** | moves the page shown after / before the next one |
+
+**Moving precisely**, the same keys wherever something moves with the mouse: the point of the
+curve clicked last, the crop in the editor, the page on its sheet (**Output** panel, PDF), the
+area on the preview; with none of them, a zoomed image.
+
+| Keys | What it does |
+|---|---|
+| **Arrows** | move by 1 mm (the curve: by one level; a zoomed image: by a bit) |
+| **Shift** + arrows | by 10 mm (the curve: ten levels) |
+| **Alt** + arrows | by 0.1 mm, or one pixel of the scan when that is larger |
+| **Ctrl** + arrows | the size instead of the position (the right and bottom edges), same steps |
+| **Home** | back to the middle |
+| **[** / **]** | in the editor, *Crop*: straighten by −0.1° / +0.1° (with **Shift**: 1°) |
+| **Tab** / **Shift+Tab** | on the curve: the next / the previous point |
+| **Delete** | on the curve: removes the point chosen (not the two ends) |
+
+At an edge it stops. A series of presses within a second is one step of **Ctrl+Z**, like a
+slider dragged (where the mouse has **Ctrl+Z** too: curve and editor).
 
 | Mouse | What it does |
 |---|---|

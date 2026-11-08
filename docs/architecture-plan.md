@@ -384,7 +384,8 @@ It needs no new hardware, only slides and negatives to put in the holder.
 
 - **Correct the documents first**: `rts8822.rs` (the comment by `transparency: false`),
   `docs/usage.md` (the Film button), the CHANGELOG entry of v0.3.0 (a note in the new
-  version, the past entry stays). The README already lists the adapter as missing.
+  version, the past entry stays). The README already lists the adapter as missing. Done on
+  8 November 2026, with phase 11.
 - **Captures of the HP driver**, the same way as the ones of 7 November (`wia1scan` with
   "TMA Method" set, USBPcap): the adapter's start-up and warm-up (the manual asks for at least
   30 s), a preview of the holder, a slide and a strip of negatives at 600, 1200 and 2400 dpi,
@@ -417,7 +418,7 @@ It needs no new hardware, only slides and negatives to put in the holder.
   (`epson2`); not the Epson V500 / V550 / V600 / V370, which need a closed Epson plugin. These
   are backends of phase 9.
 
-## Phase 11 · moving things precisely from the keyboard · planned
+## Phase 11 · moving things precisely from the keyboard · done
 
 Added on 8 November 2026, at the user's request: in the **Output** pane the page must move on
 the sheet in every direction, and be corrected one step at a time from the keyboard; the same
@@ -458,6 +459,17 @@ to the sheet" it is always centred. Nothing moves with the arrows: `App::on_key`
   step for a series, nothing moves while typing in a field); the PDF golden test unchanged for
   centred pages; the keys in the usage guide's table of shortcuts, in Italian and English.
 - Low risk, no hardware: it can come before phase 10.
+- **How it was done** (8 November 2026): the keys are read in one place, `keys.rs`
+  (`keys::read`, `App::on_move`), which chooses what moves in this order: the point of the
+  curve chosen, the crop in the editor, the page on its sheet, the area on the preview, the
+  zoomed view. `Layout::focus` now places a page smaller than the room too, and `Placed`
+  gives `room`, `offset_mm` and `focus_at`; the golden test `pages_made_before_come_out_the_same`
+  checks the PDF numbers of 0.3.1 for centred pages. Two changes from the list above:
+  - the strip moves the page with **Alt + Page Up / Page Down**, not Alt + left and right,
+    which are already the 0.1 mm step;
+  - one step of Ctrl+Z for a series of presses where the mouse has Ctrl+Z (curve, crop,
+    straighten); the area on the preview and the page on its sheet have none, with the mouse
+    nor with the keys, as before.
 
 ## Summary
 
@@ -471,4 +483,4 @@ to the sheet" it is always centred. Nothing moves with the arrows: `App::on_key`
 | 8 · other HP (postponed) | to be decided | high | no: testers needed |
 | 9 · other brands (postponed) | to be decided | medium | eSCL yes, with a network scanner |
 | 10 · slides and negatives on the 3770 (planned) | to be decided | medium: captures needed | yes: the 3770's own adapter |
-| 11 · precise moves from the keyboard (planned) | to be decided | low | yes |
+| 11 · precise moves from the keyboard (done) | to be decided | low | yes |

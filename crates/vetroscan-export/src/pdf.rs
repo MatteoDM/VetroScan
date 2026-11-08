@@ -7,7 +7,7 @@
 //! is either the size of the scan (so it prints at its real size) or a
 //! sheet of paper ([`Layout`]): A4, Letter, a photo size…, turned the way
 //! the scan is, with the scan at its real size, fitted to the sheet or
-//! filling it, inside a margin.
+//! filling it, inside a margin, centred or moved anywhere inside it.
 
 use crate::compress::{encode, prepare, Encoding};
 use crate::Result;
@@ -90,8 +90,11 @@ pub struct Layout {
     /// fitted to the sheet or fills it (not at real size, nor with
     /// [`PageSize::Fit`]).
     pub margin_mm: f64,
-    /// When the scan fills the sheet and overflows it: which part is kept,
-    /// across and down, 0 to 1 (0: the left or top edge, 0.5: the middle).
+    /// Where the scan goes inside the margin, across and down, 0 to 1. A
+    /// scan smaller than the room left goes from its left or top edge (0)
+    /// through the middle (0.5) to its right or bottom edge (1); one that
+    /// overflows it (Fill) shows from its left or top part (0) to its right
+    /// or bottom part (1).
     pub focus: [f64; 2],
 }
 
@@ -126,6 +129,43 @@ pub struct Placed {
     /// What is shown of it, when it overflows (Fill): left, bottom, width,
     /// height.
     pub clip: Option<[f64; 4]>,
+    /// Inside the margin (the whole sheet at real size): left, bottom,
+    /// width, height.
+    pub area: [f64; 4],
+}
+
+impl Placed {
+    /// How far the image can move inside the margin, across and down,
+    /// points: the room left around it, negative when it overflows.
+    pub fn room(&self) -> [f64; 2] {
+        let [_, _, aw, ah] = self.area;
+        let [_, _, dw, dh] = self.image;
+        [aw - dw, ah - dh]
+    }
+
+    /// Distance of the image's left and top edges from the sheet's, mm
+    /// (negative: beyond it).
+    pub fn offset_mm(&self) -> [f64; 2] {
+        let [x, y, _, dh] = self.image;
+        [x / MM, (self.page.1 - y - dh) / MM]
+    }
+
+    /// The focus that puts the image's left and top edges `offset` mm from
+    /// the sheet's, as near as the margin allows; `focus` along a side
+    /// where it cannot move.
+    pub fn focus_at(&self, offset: [f64; 2], focus: [f64; 2]) -> [f64; 2] {
+        let [mx, _, _, ah] = self.area;
+        let my = self.page.1 - self.area[1] - ah;
+        let room = self.room();
+        let along = |i: usize, margin: f64| {
+            if room[i].abs() < 0.01 {
+                focus[i]
+            } else {
+                ((offset[i] * MM - margin) / room[i]).clamp(0.0, 1.0)
+            }
+        };
+        [along(0, mx), along(1, my)]
+    }
 }
 
 const MM: f64 = 72.0 / 25.4;
@@ -139,6 +179,7 @@ impl Layout {
                 page: (iw, ih),
                 image: [0.0, 0.0, iw, ih],
                 clip: None,
+                area: [0.0, 0.0, iw, ih],
             };
         };
         // The sheet turned the way the scan is, or as asked.
@@ -167,24 +208,18 @@ impl Layout {
             Placement::Fill => (aw / iw).max(ah / ih),
         };
         let (dw, dh) = (iw * scale, ih * scale);
-        // Centred; overflowing (Fill), moved so that the part chosen shows
-        // (y from the bottom: the top of the scan is at the top).
+        // Inside the margin where the focus puts it, centred by default;
+        // overflowing (Fill), the part chosen shows (y from the bottom: the
+        // top of the scan is at the top).
         let [fx, fy] = self.focus.map(|f| f.clamp(0.0, 1.0));
-        let x = if dw > aw + 0.01 {
-            m + (aw - dw) * fx
-        } else {
-            (pw - dw) / 2.0
-        };
-        let y = if dh > ah + 0.01 {
-            m + (ah - dh) * (1.0 - fy)
-        } else {
-            (ph - dh) / 2.0
-        };
+        let x = m + (aw - dw) * fx;
+        let y = m + (ah - dh) * (1.0 - fy);
         let overflows = dw > aw + 0.01 || dh > ah + 0.01;
         Placed {
             page: (pw, ph),
             image: [x, y, dw, dh],
             clip: overflows.then_some([m, m, aw, ah]),
+            area: [m, m, aw, ah],
         }
     }
 }
@@ -263,6 +298,7 @@ pub fn write_pages<W: Write>(out: &mut W, pages: &[PdfPage]) -> Result<()> {
             page: (pw, ph),
             image: [x, y, dw, dh],
             clip,
+            ..
         } = layout.place(iw, ih);
         object(
             &mut pdf,
@@ -515,6 +551,183 @@ mod tests {
         let mut out = Vec::new();
         write(&mut out, &[sample(Format::Grey)], layout, 85).unwrap();
         assert!(String::from_utf8_lossy(&out).contains(" re W n "));
+    }
+
+    /// How `place` laid pages out before they could move on the sheet
+    /// (0.3.1): centred, the focus only along a side that overflows.
+    fn place_0_3_1(layout: &Layout, w: f64, h: f64) -> String {
+        let p = layout.place(w, h);
+        let (pw, ph) = p.page;
+        let [m, _, aw, ah] = p.area;
+        let [_, _, dw, dh] = p.image;
+        let [fx, fy] = layout.focus.map(|f| f.clamp(0.0, 1.0));
+        let x = if dw > aw + 0.01 {
+            m + (aw - dw) * fx
+        } else {
+            (pw - dw) / 2.0
+        };
+        let y = if dh > ah + 0.01 {
+            m + (ah - dh) * (1.0 - fy)
+        } else {
+            (ph - dh) / 2.0
+        };
+        format!("{pw:.2} {ph:.2} {dw:.3} 0 0 {dh:.3} {x:.3} {y:.3} cm")
+    }
+
+    /// What the PDF writes of a placement.
+    fn written(p: &Placed) -> String {
+        let (pw, ph) = p.page;
+        let [x, y, dw, dh] = p.image;
+        format!("{pw:.2} {ph:.2} {dw:.3} 0 0 {dh:.3} {x:.3} {y:.3} cm")
+    }
+
+    #[test]
+    fn pages_made_before_come_out_the_same() {
+        // Golden test: every sheet, way, placement and margin, scans of
+        // many shapes, centred (as every page was) or with the part kept
+        // of one that overflows chosen: the numbers written in the PDF are
+        // those of 0.3.1.
+        let sizes = [
+            PageSize::Fit,
+            PageSize::A3,
+            PageSize::A4,
+            PageSize::A5,
+            PageSize::Letter,
+            PageSize::Legal,
+            PageSize::Photo10x15,
+            PageSize::Photo13x18,
+        ];
+        let scans = [
+            (4.0, 6.0),
+            (6.0, 4.0),
+            (8.27, 11.69),
+            (11.69, 8.27),
+            (2.0, 2.0),
+            (8.5, 14.0),
+            (12.0, 17.0),
+            (0.5, 7.0),
+        ];
+        let mut checked = 0;
+        for size in sizes {
+            for orientation in [
+                Orientation::Auto,
+                Orientation::Portrait,
+                Orientation::Landscape,
+            ] {
+                for placement in [Placement::Actual, Placement::FitPage, Placement::Fill] {
+                    for margin_mm in [0.0, 5.0, 10.0, 25.0] {
+                        for focus in [[0.5, 0.5], [0.0, 0.0], [1.0, 0.25]] {
+                            let layout = Layout {
+                                size,
+                                orientation,
+                                placement,
+                                margin_mm,
+                                focus,
+                            };
+                            for (w, h) in scans {
+                                let p = layout.place(w, h);
+                                // Off centre, only a side that overflowed
+                                // moved; one with room now moves too.
+                                let [rx, ry] = p.room();
+                                if focus != [0.5, 0.5] && (rx > 0.01 || ry > 0.01) {
+                                    continue;
+                                }
+                                let (now, then) = (written(&p), place_0_3_1(&layout, w, h));
+                                if focus == [0.5, 0.5] {
+                                    assert_eq!(now, then, "{layout:?} {w} x {h}");
+                                } else {
+                                    // A scan exactly as wide as the room
+                                    // was put at (pw - dw) / 2, a hair
+                                    // below 0: "-0.000", now "0.000".
+                                    assert_eq!(
+                                        now.replace("-0.000", "0.000"),
+                                        then.replace("-0.000", "0.000"),
+                                        "{layout:?} {w} x {h}"
+                                    );
+                                }
+                                checked += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(checked > 800, "{checked}");
+    }
+
+    #[test]
+    fn a_page_smaller_than_the_sheet_moves_inside_the_margin() {
+        // 4 x 6 inches at real size on A4: room all round.
+        let layout = |focus| Layout {
+            size: PageSize::A4,
+            orientation: Orientation::Portrait,
+            placement: Placement::Actual,
+            margin_mm: 0.0,
+            focus,
+        };
+        let top_left = layout([0.0, 0.0]).place(4.0, 6.0);
+        assert!(near(top_left.image[0], 0.0), "{top_left:?}");
+        assert!(
+            near(top_left.image[1] + top_left.image[3], top_left.page.1),
+            "{top_left:?}"
+        );
+        let bottom_right = layout([1.0, 1.0]).place(4.0, 6.0);
+        assert!(near(
+            bottom_right.image[0] + bottom_right.image[2],
+            bottom_right.page.0
+        ));
+        assert!(near(bottom_right.image[1], 0.0));
+        // With a margin it stops there.
+        let fitted = Layout {
+            placement: Placement::FitPage,
+            margin_mm: 10.0,
+            ..layout([0.0, 1.0])
+        };
+        let p = fitted.place(6.0, 4.0);
+        assert!(near(p.image[0], 10.0 * MM), "{p:?}");
+        assert!(near(p.image[1], 10.0 * MM), "{p:?}");
+    }
+
+    #[test]
+    fn distances_from_the_edges_go_and_come_back() {
+        let layout = Layout {
+            size: PageSize::A4,
+            orientation: Orientation::Portrait,
+            placement: Placement::Actual,
+            margin_mm: 0.0,
+            focus: [0.5, 0.5],
+        };
+        let p = layout.place(4.0, 6.0);
+        let [left, top] = p.offset_mm();
+        assert!((left - (210.0 - 101.6) / 2.0).abs() < 0.01, "{left}");
+        assert!((top - (297.0 - 152.4) / 2.0).abs() < 0.01, "{top}");
+        // 20 mm from the left, 30 from the top.
+        let focus = p.focus_at([20.0, 30.0], layout.focus);
+        let moved = Layout { focus, ..layout }.place(4.0, 6.0);
+        let [l, t] = moved.offset_mm();
+        assert!(
+            (l - 20.0).abs() < 1e-6 && (t - 30.0).abs() < 1e-6,
+            "{l} {t}"
+        );
+        // Beyond the sheet it stops at the edge.
+        assert_eq!(p.focus_at([-5.0, 500.0], layout.focus), [0.0, 1.0]);
+        // A page that fills the sheet's width cannot move across.
+        let filled = Layout {
+            placement: Placement::Fill,
+            ..layout
+        }
+        .place(4.0, 4.0);
+        assert!(filled.room()[0].abs() < 0.01 || filled.room()[1].abs() < 0.01);
+        // Overflowing, the offset is negative and moves what is kept.
+        let wide = Layout {
+            size: PageSize::Photo10x15,
+            placement: Placement::Fill,
+            ..layout
+        };
+        let p = wide.place(6.0, 4.0);
+        assert!(p.offset_mm()[0] < 0.0, "{p:?}");
+        let f = p.focus_at([0.0, 0.0], wide.focus);
+        assert_eq!(f[0], 0.0, "the left part kept");
     }
 
     #[test]
