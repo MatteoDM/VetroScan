@@ -1597,7 +1597,7 @@ checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 
 [[package]]
 name = "hp3770-app"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "dirs",
@@ -1618,14 +1618,14 @@ dependencies = [
 
 [[package]]
 name = "hp3770-capture"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "hp3770-core",
 ]
 
 [[package]]
 name = "hp3770-cli"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "clap",
  "hp3770-core",
@@ -1637,7 +1637,7 @@ dependencies = [
 
 [[package]]
 name = "hp3770-core"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "scan-imaging",
  "scanner-api",
@@ -1645,7 +1645,7 @@ dependencies = [
 
 [[package]]
 name = "hp3770-export"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "flate2",
  "hp3770-core",
@@ -1658,7 +1658,7 @@ dependencies = [
 
 [[package]]
 name = "hp3770-usb"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "hp3770-core",
  "nusb",
@@ -3646,11 +3646,11 @@ dependencies = [
 
 [[package]]
 name = "scan-imaging"
-version = "0.1.2"
+version = "0.2.0"
 
 [[package]]
 name = "scanner-api"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "scan-imaging",
 ]
