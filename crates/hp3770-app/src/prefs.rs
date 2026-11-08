@@ -106,6 +106,10 @@ pub struct Prefs {
     /// File names start with this, then date and time.
     pub document_name: String,
     pub photo_name: String,
+    /// What the Scan, Copy and Instant Share buttons do in each way of
+    /// working (names of the actions; unknown names take the default).
+    pub document_buttons: Vec<String>,
+    pub photo_buttons: Vec<String>,
     pub document: StoredMode,
     pub photo: StoredMode,
 }
@@ -119,6 +123,16 @@ impl Default for Prefs {
             folder: String::new(),
             document_name: "documento".into(),
             photo_name: "foto".into(),
+            document_buttons: vec![
+                "aggiungi-pagina".into(),
+                "rifai-ultima".into(),
+                "salva-documento".into(),
+            ],
+            photo_buttons: vec![
+                "scansiona-foto".into(),
+                "fotocopia".into(),
+                "apri-cartella".into(),
+            ],
             document: StoredMode::default(),
             photo: StoredMode {
                 dpi: 600,

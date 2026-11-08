@@ -363,6 +363,80 @@ impl Settings {
     }
 }
 
+/// What a front-panel button does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ButtonAction {
+    AddPage,
+    RedoLast,
+    SaveDocument,
+    ScanPhoto,
+    Photocopy,
+    OpenFolder,
+    Nothing,
+}
+
+impl ButtonAction {
+    const DOCUMENT: [ButtonAction; 5] = [
+        Self::AddPage,
+        Self::RedoLast,
+        Self::SaveDocument,
+        Self::OpenFolder,
+        Self::Nothing,
+    ];
+    const PHOTO: [ButtonAction; 4] = [
+        Self::ScanPhoto,
+        Self::Photocopy,
+        Self::OpenFolder,
+        Self::Nothing,
+    ];
+
+    fn key(self) -> &'static str {
+        match self {
+            Self::AddPage => "aggiungi-pagina",
+            Self::RedoLast => "rifai-ultima",
+            Self::SaveDocument => "salva-documento",
+            Self::ScanPhoto => "scansiona-foto",
+            Self::Photocopy => "fotocopia",
+            Self::OpenFolder => "apri-cartella",
+            Self::Nothing => "niente",
+        }
+    }
+
+    /// The actions of `stored` for `kind`, or the defaults.
+    fn from_keys(kind: Kind, stored: &[String]) -> [ButtonAction; 3] {
+        let (allowed, default): (&[ButtonAction], [ButtonAction; 3]) = match kind {
+            Kind::Document => (
+                &Self::DOCUMENT,
+                [Self::AddPage, Self::RedoLast, Self::SaveDocument],
+            ),
+            Kind::Photo => (
+                &Self::PHOTO,
+                [Self::ScanPhoto, Self::Photocopy, Self::OpenFolder],
+            ),
+        };
+        std::array::from_fn(|i| {
+            stored
+                .get(i)
+                .and_then(|k| allowed.iter().copied().find(|a| a.key() == k))
+                .unwrap_or(default[i])
+        })
+    }
+}
+
+impl std::fmt::Display for ButtonAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::AddPage => "Aggiungi una pagina",
+            Self::RedoLast => "Rifai l'ultima pagina",
+            Self::SaveDocument => "Salva il documento e apri la cartella",
+            Self::ScanPhoto => "Scansiona la foto",
+            Self::Photocopy => "Fotocopia (scansiona e stampa)",
+            Self::OpenFolder => "Apri la cartella",
+            Self::Nothing => "Niente",
+        })
+    }
+}
+
 /// Which way of working the application opens with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StartMode {
@@ -802,6 +876,9 @@ enum Message {
     PresetDelete(String),
     Key(iced::keyboard::Event),
     StartMode(StartMode),
+    /// A button's action in the current way of working: which button and
+    /// what it does.
+    ButtonAction(usize, ButtonAction),
     ChooseFolder,
     Folder(Option<PathBuf>),
     DefaultFolder,
@@ -862,6 +939,11 @@ struct App {
     custom_folder: Option<PathBuf>,
     document_name: String,
     photo_name: String,
+    /// What Scan, Copy and Instant Share do, per way of working.
+    document_buttons: [ButtonAction; 3],
+    photo_buttons: [ButtonAction; 3],
+    /// Print the next photo when it arrives (photocopy).
+    print_next: bool,
     /// What was last written to the preferences file.
     saved: prefs::Prefs,
     /// The raw preview of the glass, its adjusted image and picture.
@@ -937,6 +1019,9 @@ impl App {
                 custom_folder: (!stored.folder.is_empty()).then(|| PathBuf::from(&stored.folder)),
                 document_name: stored.document_name.clone(),
                 photo_name: stored.photo_name.clone(),
+                document_buttons: ButtonAction::from_keys(Kind::Document, &stored.document_buttons),
+                photo_buttons: ButtonAction::from_keys(Kind::Photo, &stored.photo_buttons),
+                print_next: false,
                 saved: stored.clone(),
                 preview: None,
                 preview_view: View::default(),
@@ -1342,6 +1427,12 @@ impl App {
                 .unwrap_or_default(),
             document_name: self.document_name.clone(),
             photo_name: self.photo_name.clone(),
+            document_buttons: self
+                .document_buttons
+                .iter()
+                .map(|a| a.key().into())
+                .collect(),
+            photo_buttons: self.photo_buttons.iter().map(|a| a.key().into()).collect(),
             document: self.document.to_stored(),
             photo: self.photo.to_stored(),
         }
@@ -1463,6 +1554,10 @@ impl App {
             Message::Tab(tab) => self.tab = tab,
             Message::Pane(pane) => self.pane = pane,
             Message::StartMode(mode) => self.start_mode = mode,
+            Message::ButtonAction(i, action) => match self.kind {
+                Kind::Document => self.document_buttons[i] = action,
+                Kind::Photo => self.photo_buttons[i] = action,
+            },
             Message::ChooseFolder => {
                 let start = self.folder();
                 return Task::perform(
@@ -1489,6 +1584,8 @@ impl App {
                 self.custom_folder = None;
                 self.document_name = d.document_name;
                 self.photo_name = d.photo_name;
+                self.document_buttons = ButtonAction::from_keys(Kind::Document, &[]);
+                self.photo_buttons = ButtonAction::from_keys(Kind::Photo, &[]);
                 self.theme = ThemeChoice::System;
                 self.redraw_preview();
                 self.note = "Impostazioni di fabbrica ripristinate".into();
@@ -1905,6 +2002,7 @@ impl App {
                     Err(e) => {
                         self.redo = None;
                         self.redo_auto = false;
+                        self.print_next = false;
                         self.note = format!("Errore: {e}");
                         if purpose == Purpose::Page {
                             notify("Scansione non riuscita", &e, true);
@@ -1963,6 +2061,9 @@ impl App {
                     (None, Kind::Photo) => {
                         self.pages = vec![page];
                         self.current = Some(0);
+                        if std::mem::take(&mut self.print_next) {
+                            self.print_shown();
+                        }
                         self.note = format!("Foto acquisita · {w} × {h} pixel a {dpi} dpi");
                         if self.photo.auto_save {
                             let folder = self.folder();
@@ -1994,12 +2095,21 @@ impl App {
         if self.busy.is_some() {
             return;
         }
-        match (self.kind, button) {
-            (_, Button::Scan) => {
+        let index = match button {
+            Button::Scan => 0,
+            Button::Copy => 1,
+            Button::InstantShare => 2,
+        };
+        let action = match self.kind {
+            Kind::Document => self.document_buttons[index],
+            Kind::Photo => self.photo_buttons[index],
+        };
+        match action {
+            ButtonAction::AddPage | ButtonAction::ScanPhoto => {
                 self.redone = None;
                 self.start(Purpose::Page);
             }
-            (Kind::Document, Button::Copy) => match self.pages.len() {
+            ButtonAction::RedoLast => match self.pages.len() {
                 0 => self.start(Purpose::Page),
                 n => {
                     self.redone = None;
@@ -2008,12 +2118,13 @@ impl App {
                     self.start(Purpose::Page);
                 }
             },
-            (Kind::Photo, Button::Copy) => notify(
-                "Fotocopia non ancora disponibile",
-                "La stampa diretta arriverà più avanti",
-                true,
-            ),
-            (Kind::Document, Button::InstantShare) => {
+            ButtonAction::Photocopy => {
+                self.redone = None;
+                self.print_next = true;
+                self.start(Purpose::Page);
+                notify("Fotocopia", "Scansione in corso, poi la stampa", false);
+            }
+            ButtonAction::SaveDocument => {
                 if self.pages.is_empty() {
                     notify(
                         "Documento vuoto",
@@ -2024,8 +2135,10 @@ impl App {
                 }
                 let folder = self.folder();
                 let _ = std::fs::create_dir_all(&folder);
-                let path =
-                    folder.join(Self::stamped(self.name(), self.document.output.extension()));
+                let path = folder.join(Self::stamped(
+                    self.name(),
+                    self.settings().output.extension(),
+                ));
                 match self.write(&path) {
                     Ok(what) => {
                         self.note = format!("Salvato: {what}");
@@ -2038,7 +2151,30 @@ impl App {
                     }
                 }
             }
-            (Kind::Photo, Button::InstantShare) => open_folder(&self.folder()),
+            ButtonAction::OpenFolder => open_folder(&self.folder()),
+            ButtonAction::Nothing => {}
+        }
+    }
+
+    /// Prints the photo shown on the default printer (the photocopy).
+    fn print_shown(&mut self) {
+        let shared = *self.settings();
+        let Some(image) = self.shown().map(|p| p.finished(&shared)) else {
+            return;
+        };
+        let path = std::env::temp_dir().join(Self::stamped("fotocopia", "png"));
+        match hp3770_export::save(&path, &image) {
+            Ok(()) => match print_file(&path) {
+                Ok(()) => {
+                    self.note = "Fotocopia inviata alla stampante predefinita".into();
+                    notify("Fotocopia inviata alla stampante", "", false);
+                }
+                Err(e) => {
+                    self.note = format!("Stampa non riuscita: {e}");
+                    notify("Stampa non riuscita", &e, true);
+                }
+            },
+            Err(e) => self.note = format!("Stampa non riuscita: {e}"),
         }
     }
 
@@ -2588,13 +2724,15 @@ impl App {
                     .style(text::warning),
             );
         }
+        let buttons = match self.kind {
+            Kind::Document => self.document_buttons,
+            Kind::Photo => self.photo_buttons,
+        };
         pane = pane.push(heading("Tasti dello scanner")).push(
-            text(match self.kind {
-                Kind::Document => {
-                    "Scan aggiunge una pagina · Copy rifà l'ultima · Instant Share salva il documento"
-                }
-                Kind::Photo => "Scan scansiona la foto · Instant Share apre la cartella",
-            })
+            text(format!(
+                "Scan: {} · Copy: {} · Instant Share: {} (si cambiano nelle Preferenze)",
+                buttons[0], buttons[1], buttons[2]
+            ))
             .size(12),
         );
         pane.into()
@@ -2861,6 +2999,23 @@ impl App {
         .into()
     }
 
+    /// The choice of what a front-panel button does.
+    fn button_choice(&self, index: usize, label: &'static str) -> Element<'_, Message> {
+        let (options, current): (&[ButtonAction], ButtonAction) = match self.kind {
+            Kind::Document => (&ButtonAction::DOCUMENT, self.document_buttons[index]),
+            Kind::Photo => (&ButtonAction::PHOTO, self.photo_buttons[index]),
+        };
+        labelled(
+            label,
+            pick_list(options, Some(current), move |a| {
+                Message::ButtonAction(index, a)
+            })
+            .width(Length::Fill)
+            .text_size(13)
+            .into(),
+        )
+    }
+
     fn prefs_pane(&self) -> Element<'_, Message> {
         let path = prefs::Prefs::path()
             .map(|p| p.display().to_string())
@@ -2917,6 +3072,15 @@ impl App {
                 Self::stamped(self.name(), self.settings().output.extension())
             ))
             .size(12),
+            heading(match self.kind {
+                Kind::Document => "Tasti dello scanner in Documento",
+                Kind::Photo => "Tasti dello scanner in Foto",
+            }),
+            self.button_choice(0, "Scan"),
+            self.button_choice(1, "Copy"),
+            self.button_choice(2, "Instant Share"),
+            text("Valgono anche con l'app in secondo piano; ignorati durante una scansione.")
+                .size(11),
             heading("Impostazioni"),
             text(format!("Salvate in {path}")).size(11),
             button(text("Ripristina impostazioni di fabbrica").size(13))
@@ -3172,4 +3336,19 @@ fn card<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
             }
         })
         .into()
+}
+
+/// Sends an image to the default printer: Paint on Windows (`/pt` prints
+/// without opening a window), `lp` elsewhere.
+fn print_file(path: &std::path::Path) -> Result<(), String> {
+    let mut command = if cfg!(windows) {
+        let mut c = std::process::Command::new("mspaint");
+        c.arg("/pt").arg(path);
+        c
+    } else {
+        let mut c = std::process::Command::new("lp");
+        c.arg(path);
+        c
+    };
+    command.spawn().map(|_| ()).map_err(|e| e.to_string())
 }
