@@ -14,6 +14,8 @@ manca.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-08
+
 ### Added
 - **Lampada**: l'app la spegne dopo un tempo senza scansioni scelto nelle Preferenze (da
   «appena finita la scansione» a 13 minuti, di base 2) e sempre chiudendosi, invece di
@@ -124,5 +126,6 @@ Prima versione.
 - Testi con una fila di spazi in mezzo (nota sul RAW, sui 16 bit e sui tasti in Windows); il
   pulsante della cartella predefinita usa il separatore del sistema.
 
-[Unreleased]: https://github.com/MatteoDM/scanner/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/MatteoDM/scanner/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/MatteoDM/scanner/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/MatteoDM/scanner/releases/tag/v0.1.0
