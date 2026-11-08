@@ -24,6 +24,7 @@ scan-imaging = { path = "crates/scan-imaging" }
 scanner-api = { path = "crates/scanner-api" }
 hp3770-core = { path = "crates/hp3770-core" }
 hp3770-usb = { path = "crates/hp3770-usb" }
+hp3770-capture = { path = "crates/hp3770-capture" }
 vetroscan-export = { path = "crates/vetroscan-export" }
 
 [workspace.lints.rust]

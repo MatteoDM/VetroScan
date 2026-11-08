@@ -1607,6 +1607,7 @@ name = "hp3770-cli"
 version = "0.4.0"
 dependencies = [
  "clap",
+ "hp3770-capture",
  "hp3770-core",
  "hp3770-usb",
  "png",

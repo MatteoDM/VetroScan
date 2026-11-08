@@ -17,6 +17,10 @@ hp3770-usb.workspace = true
 clap = { version = "4.5", features = ["derive"] }
 png = "0.18"
 
+[dev-dependencies]
+# Only for the development tools in examples/.
+hp3770-capture.workspace = true
+
 [[bin]]
 name = "hp3770"
 path = "src/main.rs"

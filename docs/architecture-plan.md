@@ -390,6 +390,23 @@ It needs no new hardware, only slides and negatives to put in the holder.
   "TMA Method" set, USBPcap): the adapter's start-up and warm-up (the manual asks for at least
   30 s), a preview of the holder, a slide and a strip of negatives at 600, 1200 and 2400 dpi,
   8 and 16 bits. The HP images are the reference for the comparison.
+  Tried on 8 November 2026, without an image. What was learnt:
+  - the HP driver chooses the adapter with the root item's private property 71684 "TMA
+    Select" (the scan item has 71685 "TMA Method", 0 or 1); the adapter's area is 42.3 x
+    93.1 mm (333 x 733 pixels at 200 dpi), 600 dpi by default; only 8 bits per channel (71686
+    "Source Depth" refuses every value), so the 16-bit captures make no sense;
+  - on Windows 11 every scan with the adapter fails (`WIA_ERROR_DEVICE_COMMUNICATION`): the
+    HP driver writes the lamp registers, waits a second without asking the scanner anything
+    and gives up. Its own errors (`TERR_XPA_LAMP_FAILED`, `TERR_BACKING_NOT_REMOVED`, ...) do
+    not reach WIA, and its log (`HKLM\Software\Hewlett-Packard\ScanJet\Tulip\{GUID}`,
+    found with Process Monitor) writes no file;
+  - with the registers written by hand (`E946`, `E950`-`E951`, `E954`-`E955`, every
+    combination; the development tools `examples/poke.rs` and `examples/replay.rs` of
+    `hp3770-cli`) the lid's light never came on: bit 6 of `E946` always lights the flatbed lamp,
+    bit 5 nothing visible. Matteo saw the lid's light on only during the HP driver's first
+    attempts, before a power cycle, with the chip in the state left by `hp3770 init`.
+  Next: power cycle, `hp3770 init`, the HP driver's attempt captured this time; check the
+  cable in the TMA socket and the light from the scanner's buttons.
 - **Driver**: the adapter's lamp (bit 4 of `E955`, already read by `Lamp::Transparency`), its
   calibration (no white strip under the lid: what the HP driver does instead comes from the
   captures), the area of the holder; `hp3900` (`ST_TA`, `ST_NEG` in `hp3900_rts8822.c`) is the
