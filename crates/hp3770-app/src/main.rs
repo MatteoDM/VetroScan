@@ -691,6 +691,10 @@ enum Message {
     Pane(Pane),
     Undo,
     Redo,
+    PresetName(String),
+    PresetSave,
+    PresetApply(String),
+    PresetDelete(String),
     Key(iced::keyboard::Event),
     StartMode(StartMode),
     ChooseFolder,
@@ -772,6 +776,9 @@ struct App {
     redo_auto: bool,
     redone: Option<(usize, Page)>,
     note: String,
+    /// Named setups (at most three), and the name being typed.
+    presets: Vec<prefs::Preset>,
+    preset_name: String,
     /// Earlier settings of what the panel edits, for Ctrl+Z.
     undo: Vec<(Target, Settings)>,
     redo_stack: Vec<(Target, Settings)>,
@@ -835,6 +842,8 @@ impl App {
                 redone: None,
                 note: "Pronto: fai un'anteprima, scegli l'area e scansiona".into(),
                 draft: None,
+                presets: prefs::load_presets(),
+                preset_name: String::new(),
                 undo: Vec::new(),
                 redo_stack: Vec::new(),
                 last_edit: None,
@@ -1339,6 +1348,51 @@ impl App {
             Message::Adjust(field, v) => {
                 self.draft = None;
                 self.change_field(field, |s| field.set(s, v));
+            }
+            Message::PresetName(name) => self.preset_name = name,
+            Message::PresetSave => {
+                let name = self.preset_name.trim().to_string();
+                if name.is_empty() {
+                    self.note = "Dai un nome al preset".into();
+                    return Task::none();
+                }
+                let setup = self.active().to_stored();
+                let existing = self.presets.iter().position(|p| p.name == name);
+                match existing {
+                    Some(i) => self.presets[i].setup = setup,
+                    None if self.presets.len() < prefs::MAX_PRESETS => {
+                        self.presets.push(prefs::Preset {
+                            name: name.clone(),
+                            setup,
+                        })
+                    }
+                    None => {
+                        self.note = format!(
+                            "Al massimo {} preset: eliminane uno o salva sopra a uno esistente",
+                            prefs::MAX_PRESETS
+                        );
+                        return Task::none();
+                    }
+                }
+                self.note = match prefs::save_presets(&self.presets) {
+                    Ok(()) => format!("Preset «{name}» salvato"),
+                    Err(e) => format!("Preset non salvato: {e}"),
+                };
+                self.preset_name.clear();
+            }
+            Message::PresetApply(name) => {
+                if let Some(p) = self.presets.iter().find(|p| p.name == name) {
+                    let new = Settings::from_stored(self.kind, &p.setup);
+                    self.change(|s| *s = new);
+                    self.note = format!("Preset «{name}» applicato (Ctrl+Z per tornare indietro)");
+                }
+            }
+            Message::PresetDelete(name) => {
+                self.presets.retain(|p| p.name != name);
+                self.note = match prefs::save_presets(&self.presets) {
+                    Ok(()) => format!("Preset «{name}» eliminato"),
+                    Err(e) => format!("Preset non salvato: {e}"),
+                };
             }
             Message::Undo => {
                 if let Some((target, settings)) = self.undo.pop() {
@@ -2419,8 +2473,54 @@ impl App {
             .spacing(8)
             .into(),
         );
+        let names: Vec<String> = self.presets.iter().map(|p| p.name.clone()).collect();
+        let mut presets = column![row![pick_list(names, None::<String>, Message::PresetApply)
+            .placeholder(if self.presets.is_empty() {
+                "Nessun preset salvato"
+            } else {
+                "Applica un preset…"
+            })
+            .text_size(13)
+            .width(Length::Fill),]]
+        .spacing(6);
+        let full = self.presets.len() >= prefs::MAX_PRESETS
+            && !self
+                .presets
+                .iter()
+                .any(|p| p.name == self.preset_name.trim());
+        presets = presets.push(
+            row![
+                iced::widget::text_input("Nome del preset", &self.preset_name)
+                    .on_input(Message::PresetName)
+                    .on_submit(Message::PresetSave)
+                    .size(13),
+                button(text("Salva").size(13))
+                    .style(button::secondary)
+                    .on_press_maybe((!full).then_some(Message::PresetSave)),
+            ]
+            .spacing(6),
+        );
+        if full {
+            presets = presets.push(
+                text("Tre preset salvati: scrivi il nome di uno per sostituirlo, o eliminane uno.")
+                    .size(11),
+            );
+        }
+        for p in &self.presets {
+            presets = presets.push(
+                row![
+                    text(&p.name).size(12).width(Length::Fill),
+                    button(text("Elimina").size(11))
+                        .style(button::text)
+                        .padding([1, 6])
+                        .on_press(Message::PresetDelete(p.name.clone())),
+                ]
+                .align_y(Alignment::Center),
+            );
+        }
         column![
             text(editing.to_uppercase()).size(11),
+            presets,
             histogram,
             base,
             colour,

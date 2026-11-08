@@ -147,9 +147,56 @@ impl Prefs {
     }
 }
 
+/// How many presets can be kept.
+pub const MAX_PRESETS: usize = 3;
+
+/// A named setup: everything of a way of working, adjustments included.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Preset {
+    pub name: String,
+    pub setup: StoredMode,
+}
+
+/// The file of the presets, next to the preferences.
+pub fn presets_path() -> Option<PathBuf> {
+    Some(dirs::config_dir()?.join("hp3770").join("preset.json"))
+}
+
+/// The saved presets (none if there is no file or it cannot be read).
+pub fn load_presets() -> Vec<Preset> {
+    presets_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|text| serde_json::from_str::<Vec<Preset>>(&text).ok())
+        .map(|mut v| {
+            v.truncate(MAX_PRESETS);
+            v
+        })
+        .unwrap_or_default()
+}
+
+/// Writes the presets.
+pub fn save_presets(presets: &[Preset]) -> Result<(), String> {
+    let path = presets_path().ok_or("cartella delle impostazioni sconosciuta")?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let text = serde_json::to_string_pretty(presets).map_err(|e| e.to_string())?;
+    std::fs::write(&path, text).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn presets_round_trip() {
+        let p = vec![Preset {
+            name: "Documento nitido".into(),
+            setup: StoredMode::default(),
+        }];
+        let text = serde_json::to_string(&p).unwrap();
+        assert_eq!(serde_json::from_str::<Vec<Preset>>(&text).unwrap(), p);
+    }
 
     #[test]
     fn round_trip_and_missing_fields() {
