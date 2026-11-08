@@ -30,10 +30,6 @@ mod worker;
 
 use editor::{Edit, EditMsg, Editor, Section};
 use histogram::Histogram;
-use hp3770_core::geometry::{Area, GLASS_INCHES, HP_WHITE, RESOLUTIONS};
-use hp3770_core::profile::HP3770;
-use hp3770_core::session::{Request, Stage};
-use hp3770_core::status::Status;
 use hp3770_export::{ImageFormat, PageSize};
 use iced::widget::{
     button, canvas, center, checkbox, column, container, mouse_area, opaque, pick_list,
@@ -45,6 +41,10 @@ use scan_imaging::convert;
 use scan_imaging::detect::{self, Found};
 use scan_imaging::transform::Transform;
 use scan_imaging::{Format, Image, Mode};
+use scanner_api::{
+    Area, Capabilities, DeviceInfo, DeviceStatus, LampState, Progress, ScanRequest,
+    SuggestedAction, Tone,
+};
 use std::borrow::Cow;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -781,7 +781,8 @@ impl Settings {
             .unwrap_or(allowed[0]);
         let a = &m.adjust;
         Self {
-            dpi: if RESOLUTIONS.contains(&m.dpi) {
+            // Checked against the scanner when it is open (fit_to_scanner).
+            dpi: if (50..=19_200).contains(&m.dpi) {
                 m.dpi
             } else {
                 base.dpi
@@ -972,9 +973,6 @@ fn factory_presets(kind: Kind) -> Vec<(&'static str, Settings)> {
     }
 }
 
-/// The front-panel buttons, in the order of the actions set for them.
-const BUTTON_NAMES: [&str; 3] = ["Scan", "Copy", "Instant Share"];
-
 /// What a front-panel button does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ButtonAction {
@@ -1014,24 +1012,32 @@ impl ButtonAction {
         }
     }
 
-    /// The actions of `stored` for `kind`, or the defaults.
-    fn from_keys(kind: Kind, stored: &[String]) -> [ButtonAction; 3] {
-        let (allowed, default): (&[ButtonAction], [ButtonAction; 3]) = match kind {
-            Kind::Document => (
-                &Self::DOCUMENT,
-                [Self::AddPage, Self::RedoLast, Self::SaveDocument],
-            ),
-            Kind::Photo => (
-                &Self::PHOTO,
-                [Self::ScanPhoto, Self::Photocopy, Self::OpenFolder],
-            ),
-        };
-        std::array::from_fn(|i| {
-            stored
-                .get(i)
-                .and_then(|k| allowed.iter().copied().find(|a| a.key() == k))
-                .unwrap_or(default[i])
-        })
+    /// The actions a button can have in `kind`.
+    fn allowed(kind: Kind) -> &'static [ButtonAction] {
+        match kind {
+            Kind::Document => &Self::DOCUMENT,
+            Kind::Photo => &Self::PHOTO,
+        }
+    }
+
+    /// The action saved as `key`, if `kind` has it.
+    fn from_key(kind: Kind, key: &str) -> Option<ButtonAction> {
+        Self::allowed(kind).iter().copied().find(|a| a.key() == key)
+    }
+
+    /// What a button meant for `action` does in `kind` until the user
+    /// chooses: Scan adds a page (scans a photo), Copy redoes the last page
+    /// (photocopies), Share saves the document (opens the folder).
+    fn default_for(kind: Kind, action: SuggestedAction) -> ButtonAction {
+        match (kind, action) {
+            (Kind::Document, SuggestedAction::Scan) => Self::AddPage,
+            (Kind::Document, SuggestedAction::Copy) => Self::RedoLast,
+            (Kind::Document, SuggestedAction::Share) => Self::SaveDocument,
+            (Kind::Photo, SuggestedAction::Scan) => Self::ScanPhoto,
+            (Kind::Photo, SuggestedAction::Copy) => Self::Photocopy,
+            (Kind::Photo, SuggestedAction::Share) => Self::OpenFolder,
+            (_, SuggestedAction::None) => Self::Nothing,
+        }
     }
 }
 
@@ -1095,14 +1101,17 @@ fn item_name(kind: Kind, i: usize, count: usize) -> String {
 struct Raw {
     full: Arc<Image>,
     proxy: Arc<Image>,
+    /// The tone curve of the scanner that made the samples.
+    tone: Tone,
 }
 
 impl Raw {
-    fn new(image: Image) -> Self {
+    fn new(image: Image, tone: Tone) -> Self {
         let proxy = shrink(&image, PROXY);
         Self {
             full: Arc::new(image),
             proxy: Arc::new(proxy),
+            tone,
         }
     }
 
@@ -1162,8 +1171,9 @@ fn shrink(image: &Image, max: usize) -> Image {
     }
 }
 
-/// The adjusted image of a raw scan (on the proxy, or at full size).
-fn render(raw: &Image, settings: &Settings, adjust: &Adjustments) -> Image {
+/// The adjusted image of a raw scan (on the proxy, or at full size),
+/// through the tone curve of the scanner that made it.
+fn render(raw: &Image, settings: &Settings, adjust: &Adjustments, tone: &Tone) -> Image {
     adjust::render(
         &raw.data,
         raw.width,
@@ -1172,23 +1182,23 @@ fn render(raw: &Image, settings: &Settings, adjust: &Adjustments) -> Image {
         settings.mode(),
         adjust,
         false,
-        &HP3770.tone(),
+        tone,
     )
 }
 
 /// What comes in from outside when straightening: the paper white of the
-/// linear samples.
-fn fill8() -> [u8; 3] {
-    HP_WHITE.map(|w| w as u8)
+/// linear samples (the white levels of the scanner's tone curve).
+fn fill8(tone: &Tone) -> [u8; 3] {
+    tone.white.map(|w| w as u8)
 }
 
-fn fill16() -> [u16; 3] {
-    HP_WHITE.map(|w| (w * 256.0) as u16)
+fn fill16(tone: &Tone) -> [u16; 3] {
+    tone.white.map(|w| (w * 256.0) as u16)
 }
 
 /// The linear samples of a scan with the geometry edits.
-fn edited(raw: &Image, t: &Transform) -> Image {
-    let (data, width, height) = t.apply(&raw.data, raw.width, raw.height, 3, &fill8());
+fn edited(raw: &Image, t: &Transform, tone: &Tone) -> Image {
+    let (data, width, height) = t.apply(&raw.data, raw.width, raw.height, 3, &fill8(tone));
     Image {
         width,
         height,
@@ -1203,6 +1213,7 @@ fn edited(raw: &Image, t: &Transform) -> Image {
 /// thumbnail if asked.
 fn draw_page(
     proxy: &Image,
+    tone: &Tone,
     settings: &Settings,
     adjust: &Adjustments,
     t: &Transform,
@@ -1212,9 +1223,9 @@ fn draw_page(
     let raw = if t.is_identity() {
         Cow::Borrowed(proxy)
     } else {
-        Cow::Owned(edited(proxy, t))
+        Cow::Owned(edited(proxy, t, tone))
     };
-    let shown = render(&raw, settings, adjust);
+    let shown = render(&raw, settings, adjust, tone);
     let rgb = shown.to_rgb();
     let mut picture = Picture::from_rgb(shown.width, shown.height, &rgb);
     picture.size = size;
@@ -1279,6 +1290,7 @@ impl Page {
         let size = Size::new(raw.full.width as f32, raw.full.height as f32);
         let (shown, picture, thumb) = draw_page(
             &raw.proxy,
+            &raw.tone,
             &settings,
             &settings.adjust,
             &Transform::default(),
@@ -1364,11 +1376,11 @@ impl Page {
             return (self.raw.full.clone(), self.raw16.clone());
         }
         let full = &self.raw.full;
-        let deep = self
-            .raw16
-            .as_ref()
-            .map(|samples| Arc::new(t.apply(samples, full.width, full.height, 3, &fill16()).0));
-        (Arc::new(edited(full, t)), deep)
+        let deep = self.raw16.as_ref().map(|samples| {
+            let fill = fill16(&self.raw.tone);
+            Arc::new(t.apply(samples, full.width, full.height, 3, &fill).0)
+        });
+        (Arc::new(edited(full, t, &self.raw.tone)), deep)
     }
 
     /// A point of the viewer (`frame`: the whole turned frame) on the
@@ -1400,8 +1412,15 @@ impl Page {
             settings.adjust
         };
         let (t, size) = self.preview_geometry(&self.transform, false);
-        let (shown, picture, thumb) =
-            draw_page(&self.raw.proxy, &settings, &adjust, &t, size, true);
+        let (shown, picture, thumb) = draw_page(
+            &self.raw.proxy,
+            &self.raw.tone,
+            &settings,
+            &adjust,
+            &t,
+            size,
+            true,
+        );
         self.shown = shown;
         self.picture = picture.replacing(&self.picture);
         if let Some(thumb) = thumb {
@@ -1424,9 +1443,9 @@ impl Page {
                 settings.mode(),
                 &settings.adjust,
                 false,
-                &HP3770.tone(),
+                &self.raw.tone,
             ),
-            None => render(&full, &settings, &settings.adjust),
+            None => render(&full, &settings, &settings.adjust, &self.raw.tone),
         }
     }
 
@@ -1443,9 +1462,15 @@ impl Page {
             ..self.transform
         };
         let small = if t.is_identity() {
-            render(&self.raw.proxy, &settings, &settings.adjust)
+            render(&self.raw.proxy, &settings, &settings.adjust, &self.raw.tone)
         } else {
-            render(&edited(&self.raw.proxy, &t), &settings, &settings.adjust)
+            let tone = &self.raw.tone;
+            render(
+                &edited(&self.raw.proxy, &t, tone),
+                &settings,
+                &settings.adjust,
+                tone,
+            )
         };
         let (w, h) = self.transform.output_size(full.width, full.height);
         let dpi = self.transform.output_dpi(full.width, full.height, full.dpi);
@@ -1717,6 +1742,8 @@ enum Message {
     /// A button's action in the current way of working: which button and
     /// what it does.
     ButtonAction(usize, ButtonAction),
+    /// Use this scanner (when there are several).
+    ChooseScanner(DeviceInfo),
     /// Make Windows leave the scanner buttons alone (or not).
     WiaQuiet(bool),
     WiaDone(Result<(), String>),
@@ -1820,12 +1847,59 @@ struct Confirm {
     then: Box<Message>,
 }
 
+/// The value of `offered` nearest to `wanted` (the larger on a tie);
+/// `wanted` itself when nothing is offered.
+fn nearest(offered: &[u16], wanted: u16) -> u16 {
+    offered
+        .iter()
+        .copied()
+        .min_by_key(|&d| (d.abs_diff(wanted), std::cmp::Reverse(d)))
+        .unwrap_or(wanted)
+}
+
+/// An image brought to `dpi` (the preview of a scanner whose resolutions
+/// do not include [`PREVIEW_DPI`]): each pixel the one under its centre.
+fn at_dpi(image: Image, dpi: u16) -> Image {
+    if image.dpi == dpi || image.dpi == 0 || image.format != Format::Rgb {
+        return image;
+    }
+    let k = f64::from(image.dpi) / f64::from(dpi);
+    let width = ((image.width as f64) / k).round().max(1.0) as usize;
+    let height = ((image.height as f64) / k).round().max(1.0) as usize;
+    let mut data = Vec::with_capacity(width * height * 3);
+    for y in 0..height {
+        let sy = (((y as f64 + 0.5) * k) as usize).min(image.height - 1);
+        for x in 0..width {
+            let sx = (((x as f64 + 0.5) * k) as usize).min(image.width - 1);
+            let i = (sy * image.width + sx) * 3;
+            data.extend_from_slice(&image.data[i..i + 3]);
+        }
+    }
+    Image {
+        width,
+        height,
+        dpi,
+        format: Format::Rgb,
+        data,
+    }
+}
+
+/// The area of a rectangle given in millimetres, in pixels at `dpi`.
+fn area_mm(dpi: u16, left: f64, top: f64, width: f64, height: f64) -> Area {
+    let px = |mm: f64| (mm * f64::from(dpi) / 25.4).round().max(0.0) as u32;
+    Area {
+        x: px(left),
+        y: px(top),
+        width: px(width),
+        height: px(height),
+    }
+}
+
 /// `area` (pixels at `dpi`) cut to the glass: the margin around an
 /// original near the edge, or the rounding of position and size apart,
 /// would ask the scanner for a pixel beyond it, and it refuses the scan.
-fn within_glass(area: Area, dpi: u16) -> Area {
-    let max_w = (GLASS_INCHES.0 * f64::from(dpi)).round() as u32;
-    let max_h = (GLASS_INCHES.1 * f64::from(dpi)).round() as u32;
+fn within_glass(area: Area, dpi: u16, caps: &Capabilities) -> Area {
+    let (max_w, max_h) = caps.glass_pixels(dpi);
     let x = area.x.min(max_w.saturating_sub(1));
     let y = area.y.min(max_h.saturating_sub(1));
     Area {
@@ -1858,7 +1932,15 @@ const INSET_MM: f32 = 0.4;
 
 struct App {
     worker: Option<Handle>,
-    status: Option<Result<Status, String>>,
+    status: Option<Result<DeviceStatus, String>>,
+    /// What the scanner in use can do (before one answers: the first model
+    /// the backends know). Every part of the app tied to a function of the
+    /// scanner asks here, and only here (see `offers`).
+    caps: Capabilities,
+    /// The scanner in use, once opened.
+    device: Option<DeviceInfo>,
+    /// Every scanner found, to choose from when there is more than one.
+    devices: Vec<DeviceInfo>,
     /// The scanner is plugged in but this user may not open it (Linux,
     /// udev rule missing).
     access_denied: bool,
@@ -1875,8 +1957,9 @@ struct App {
     document_name: String,
     photo_name: String,
     /// What Scan, Copy and Instant Share do, per way of working.
-    document_buttons: [ButtonAction; 3],
-    photo_buttons: [ButtonAction; 3],
+    /// What the buttons do, by scanner model and way of working (button
+    /// id → action key); a button not there does its default.
+    button_actions: std::collections::BTreeMap<String, prefs::StoredButtons>,
     /// Print the next photo when it arrives (photocopy).
     print_next: bool,
     /// Whether Windows leaves the buttons alone (None: nothing to set).
@@ -1899,7 +1982,7 @@ struct App {
     eyedropper: bool,
     before: bool,
     /// The scan running, and where it is.
-    busy: Option<(Purpose, Option<Stage>)>,
+    busy: Option<(Purpose, Option<Progress>)>,
     /// Pages of the document; in Foto mode, the last photo only.
     pages: Vec<Page>,
     current: Option<usize>,
@@ -1982,6 +2065,13 @@ impl App {
             Self {
                 worker: None,
                 status: None,
+                caps: worker::registry()
+                    .models()
+                    .into_iter()
+                    .next()
+                    .unwrap_or_else(Capabilities::placeholder),
+                device: None,
+                devices: Vec::new(),
                 access_denied: false,
                 system_dark: false,
                 theme,
@@ -1997,8 +2087,7 @@ impl App {
                 custom_folder: (!stored.folder.is_empty()).then(|| PathBuf::from(&stored.folder)),
                 document_name: stored.document_name.clone(),
                 photo_name: stored.photo_name.clone(),
-                document_buttons: ButtonAction::from_keys(Kind::Document, &stored.document_buttons),
-                photo_buttons: ButtonAction::from_keys(Kind::Photo, &stored.photo_buttons),
+                button_actions: stored.buttons.clone(),
                 print_next: false,
                 wia_quiet: wia::quiet(),
                 saved: stored.clone(),
@@ -2456,7 +2545,7 @@ impl App {
                     shared.adjust
                 };
                 (
-                    raw.proxy.clone(),
+                    raw.clone(),
                     shared,
                     adjust,
                     Transform::default(),
@@ -2467,7 +2556,7 @@ impl App {
             Target::Page => self.shown().map(|p| self.page_job(p, true)),
             Target::Index(i) => self.pages.get(i).map(|p| self.page_job(p, false)),
         };
-        let Some((proxy, settings, adjust, transform, size, thumb)) = job else {
+        let Some((raw, settings, adjust, transform, size, thumb)) = job else {
             return Task::none();
         };
         let page = self.shown_key();
@@ -2476,7 +2565,8 @@ impl App {
         Task::perform(
             async move {
                 let (shown, mut picture, thumb) = draw_page(
-                    &proxy,
+                    &raw.proxy,
+                    &raw.tone,
                     &settings,
                     &adjust,
                     &transform,
@@ -2507,14 +2597,7 @@ impl App {
         &self,
         page: &Page,
         shown: bool,
-    ) -> (
-        Arc<Image>,
-        Settings,
-        Adjustments,
-        Transform,
-        Option<Size>,
-        bool,
-    ) {
+    ) -> (Raw, Settings, Adjustments, Transform, Option<Size>, bool) {
         let shared = *self.settings();
         let editor = self.editor().filter(|_| shown);
         let edit = match editor {
@@ -2530,14 +2613,7 @@ impl App {
         let frame = shown && self.cropping();
         let (t, size) = page.preview_geometry(&edit.transform, frame);
         let thumb = !frame && !(self.before && shown);
-        (
-            page.raw.proxy.clone(),
-            settings,
-            adjust,
-            t,
-            Some(size),
-            thumb,
-        )
+        (page.raw.clone(), settings, adjust, t, Some(size), thumb)
     }
 
     fn redraw_preview(&mut self) {
@@ -2548,19 +2624,16 @@ impl App {
             settings.adjust
         };
         if let Some((raw, shown, picture)) = &mut self.preview {
-            *shown = render(&raw.proxy, &settings, &adjust);
+            *shown = render(&raw.proxy, &settings, &adjust, &raw.tone);
             *picture =
                 Picture::from_rgb(shown.width, shown.height, &shown.to_rgb()).replacing(picture);
         }
     }
 
     /// Size of the glass in preview pixels.
-    fn glass() -> Size {
-        let dpi = f32::from(PREVIEW_DPI);
-        Size::new(
-            (GLASS_INCHES.0 as f32 * dpi).round(),
-            (GLASS_INCHES.1 as f32 * dpi).round(),
-        )
+    fn glass(&self) -> Size {
+        let (w, h) = self.caps.glass_pixels(PREVIEW_DPI);
+        Size::new(w as f32, h as f32)
     }
 
     /// The area to scan in millimetres: the selection, or an A4 page.
@@ -2576,30 +2649,50 @@ impl App {
 
     /// The scan: the chip's linear colour data, every adjustment is done
     /// afterwards.
-    fn request(&self) -> Request {
+    fn request(&self) -> ScanRequest {
         self.request_mm(self.area_mm())
     }
 
+    /// The resolution chosen, or the nearest the scanner in use offers
+    /// (the choice stays saved for a scanner that has it).
+    fn dpi(&self) -> u16 {
+        nearest(&self.caps.resolutions, self.settings().dpi)
+    }
+
+    /// The resolution of the preview: the scanner's nearest to
+    /// [`PREVIEW_DPI`] (the preview is brought to that afterwards).
+    fn preview_dpi(&self) -> u16 {
+        nearest(&self.caps.resolutions, PREVIEW_DPI)
+    }
+
+    /// Whether the scanner in use gives 16-bit samples.
+    fn offers_16bit(&self) -> bool {
+        self.caps.depths.contains(&16)
+    }
+
+    /// The bits per sample chosen, if the scanner in use gives them (8
+    /// otherwise; the choice stays saved).
+    fn depth(&self) -> u8 {
+        if self.offers_16bit() {
+            self.settings().depth
+        } else {
+            8
+        }
+    }
+
     /// The scan of an area given in millimetres.
-    fn request_mm(&self, (x, y, w, h): (f64, f64, f64, f64)) -> Request {
-        let dpi = self.settings().dpi;
-        // A RAW file always gets the chip's 16-bit samples.
+    fn request_mm(&self, (x, y, w, h): (f64, f64, f64, f64)) -> ScanRequest {
+        let dpi = self.dpi();
+        // A RAW file always gets the 16-bit samples, when there are some.
         let s = self.settings();
-        let depth = if s.depth == 16 || matches!(s.output, Output::Raw(_)) {
+        let raw = matches!(s.output, Output::Raw(_));
+        let depth = if self.depth() == 16 || (raw && self.offers_16bit()) {
             16
         } else {
             8
         };
-        let area = within_glass(Area::from_mm(dpi, x, y, w, h), dpi);
-        Request {
-            linear: true,
-            adjust: Adjustments {
-                sharpen: 0.0,
-                ..Adjustments::default()
-            },
-            depth,
-            ..Request::new(dpi, area, Mode::Colour)
-        }
+        let area = within_glass(area_mm(dpi, x, y, w, h), dpi, &self.caps);
+        ScanRequest { dpi, area, depth }
     }
 
     /// The passes for the originals found, when the automatic crop applies
@@ -2609,7 +2702,7 @@ impl App {
         if !self.settings().auto_crop || self.selection.is_some() || self.found.is_empty() {
             return Vec::new();
         }
-        let glass = Self::glass();
+        let glass = self.glass();
         let margin = f32::from(PREVIEW_DPI) / 25.4;
         let expand = |b: [f32; 4]| {
             let (l, t) = ((b[0] - margin).max(0.0), (b[1] - margin).max(0.0));
@@ -2649,17 +2742,17 @@ impl App {
     }
 
     /// The scan of a pass.
-    fn job_request(&self, job: &Job) -> Request {
+    fn job_request(&self, job: &Job) -> ScanRequest {
         let mm = |px: f32| f64::from(px) * 25.4 / f64::from(PREVIEW_DPI);
         let [x, y, w, h] = job.bounds;
         self.request_mm((mm(x), mm(y), mm(w), mm(h)))
     }
 
     fn job_memory(&self, job: &Job) -> f64 {
-        Self::bytes(&self.job_request(job), self.settings().dpi)
+        Self::bytes(&self.job_request(job), self.dpi())
     }
 
-    fn bytes(request: &Request, dpi: u16) -> f64 {
+    fn bytes(request: &ScanRequest, dpi: u16) -> f64 {
         let a = request.area;
         let raw = 3.0 * f64::from(a.width) * f64::from(a.height);
         // 2400 dpi: the chip's half-width data and the doubled image; 16
@@ -2675,7 +2768,7 @@ impl App {
         if !plan.is_empty() {
             return plan.iter().map(|j| self.job_memory(j)).fold(0.0, f64::max);
         }
-        Self::bytes(&self.request(), self.settings().dpi)
+        Self::bytes(&self.request(), self.dpi())
     }
 
     fn start(&mut self, purpose: Purpose) {
@@ -2708,15 +2801,16 @@ impl App {
             return;
         }
         let request = if purpose == Purpose::Preview {
-            let glass = Self::glass();
-            Request {
+            let dpi = self.preview_dpi();
+            let (width, height) = self.caps.glass_pixels(dpi);
+            ScanRequest {
                 area: Area {
                     x: 0,
                     y: 0,
-                    width: glass.width as u32,
-                    height: glass.height as u32,
+                    width,
+                    height,
                 },
-                dpi: PREVIEW_DPI,
+                dpi,
                 ..self.request()
             }
         } else if let Some(job) = self.next_job() {
@@ -2725,14 +2819,14 @@ impl App {
                 area: Some(request.area),
                 ..job
             });
-            request.dpi = self.settings().dpi;
+            request.dpi = self.dpi();
             request
         } else {
             self.batch = (0, 1);
             self.request()
         };
         if let (Some(worker), None) = (&self.worker, &self.busy) {
-            worker.send(Command::Scan(purpose, Box::new(request)));
+            worker.send(Command::Scan(purpose, request));
             self.busy = Some((purpose, None));
             self.eyedropper = false;
         }
@@ -2854,12 +2948,10 @@ impl App {
                 .unwrap_or_default(),
             document_name: self.document_name.clone(),
             photo_name: self.photo_name.clone(),
-            document_buttons: self
-                .document_buttons
-                .iter()
-                .map(|a| a.key().into())
-                .collect(),
-            photo_buttons: self.photo_buttons.iter().map(|a| a.key().into()).collect(),
+            // For older versions: the HP 3770's buttons by position.
+            document_buttons: self.legacy_button_keys(Kind::Document),
+            photo_buttons: self.legacy_button_keys(Kind::Photo),
+            buttons: self.button_actions.clone(),
             document: self.document.to_stored(),
             photo: self.photo.to_stored(),
             lamp_off_minutes: self.lamp_off,
@@ -2894,8 +2986,67 @@ impl App {
             && self.current.is_some_and(|i| i < self.pages.len())
     }
 
+    /// What button `index` of the scanner in use does in `kind`: the
+    /// action chosen for that model, or the default of what it is meant for.
+    fn button_action(&self, kind: Kind, index: usize) -> ButtonAction {
+        let Some(button) = self.caps.buttons.get(index) else {
+            return ButtonAction::Nothing;
+        };
+        self.button_actions
+            .get(&self.caps.name())
+            .and_then(|m| match kind {
+                Kind::Document => m.document.get(&button.id),
+                Kind::Photo => m.photo.get(&button.id),
+            })
+            .and_then(|key| ButtonAction::from_key(kind, key))
+            .unwrap_or_else(|| ButtonAction::default_for(kind, button.action))
+    }
+
+    /// Chooses what button `index` of the scanner in use does in the
+    /// current way of working, for that model.
+    fn set_button_action(&mut self, index: usize, action: ButtonAction) {
+        let Some(button) = self.caps.buttons.get(index) else {
+            return;
+        };
+        let model = self.button_actions.entry(self.caps.name()).or_default();
+        let map = match self.kind {
+            Kind::Document => &mut model.document,
+            Kind::Photo => &mut model.photo,
+        };
+        map.insert(button.id.clone(), action.key().into());
+    }
+
+    /// The actions of the HP Scanjet 3770's buttons by position, as the
+    /// preferences before v0.2.0 kept them.
+    fn legacy_button_keys(&self, kind: Kind) -> Vec<String> {
+        let suggested = [
+            SuggestedAction::Scan,
+            SuggestedAction::Copy,
+            SuggestedAction::Share,
+        ];
+        let model = self.button_actions.get(prefs::LEGACY_MODEL);
+        prefs::LEGACY_BUTTONS
+            .iter()
+            .zip(suggested)
+            .map(|(id, action)| {
+                model
+                    .and_then(|m| match kind {
+                        Kind::Document => m.document.get(*id),
+                        Kind::Photo => m.photo.get(*id),
+                    })
+                    .and_then(|key| ButtonAction::from_key(kind, key))
+                    .unwrap_or_else(|| ButtonAction::default_for(kind, action))
+                    .key()
+                    .to_string()
+            })
+            .collect()
+    }
+
     /// Tells the scanner thread when to switch the lamp off.
     fn send_lamp_timer(&self) {
+        if self.caps.lamp.is_none() {
+            return;
+        }
         if let Some(worker) = &self.worker {
             let after = std::time::Duration::from_secs(60 * u64::from(self.lamp_off));
             worker.send(Command::LampTimer(after));
@@ -3097,7 +3248,7 @@ impl App {
                     settings.mode(),
                     &settings.adjust,
                     false,
-                    &HP3770.tone(),
+                    &page.raw.tone,
                 )
             });
             let (data, channels, w, h, dpi) = match deep {
@@ -3164,9 +3315,9 @@ impl App {
                     full.height,
                     full.dpi,
                     samples,
-                    HP_WHITE.map(|w| w * 256.0),
+                    page.raw.tone.white.map(|w| w * 256.0),
                 ),
-                None => hp3770_export::Linear16::from_linear8(&full, HP_WHITE)
+                None => hp3770_export::Linear16::from_linear8(&full, page.raw.tone.white)
                     .map_err(|e| e.to_string())?,
             };
             match format {
@@ -3356,10 +3507,12 @@ impl App {
                     w.send(Command::Status);
                 }
             }
-            Message::ButtonAction(i, action) => match self.kind {
-                Kind::Document => self.document_buttons[i] = action,
-                Kind::Photo => self.photo_buttons[i] = action,
-            },
+            Message::ButtonAction(i, action) => self.set_button_action(i, action),
+            Message::ChooseScanner(device) => {
+                if let Some(w) = &self.worker {
+                    w.send(Command::Choose(device));
+                }
+            }
             Message::ChooseFolder => {
                 let start = self.folder();
                 return Task::perform(
@@ -3386,8 +3539,7 @@ impl App {
                 self.custom_folder = None;
                 self.document_name = d.document_name;
                 self.photo_name = d.photo_name;
-                self.document_buttons = ButtonAction::from_keys(Kind::Document, &[]);
-                self.photo_buttons = ButtonAction::from_keys(Kind::Photo, &[]);
+                self.button_actions.clear();
                 self.theme = ThemeChoice::System;
                 self.lamp_off = d.lamp_off_minutes;
                 self.send_lamp_timer();
@@ -3654,7 +3806,7 @@ impl App {
                 }
             }
             Message::AutoLevels => {
-                if let Some(proxy) = self.active_proxy() {
+                if let Some((proxy, tone)) = self.active_proxy() {
                     let settings = self.active();
                     let base = Adjustments {
                         black: 0.0,
@@ -3662,7 +3814,7 @@ impl App {
                         sharpen: 0.0,
                         ..settings.adjust
                     };
-                    let shown = render(&proxy, &settings, &base);
+                    let shown = render(&proxy, &settings, &base, &tone);
                     let (black, white) = adjust::auto_levels(&shown);
                     self.change(|s| {
                         s.adjust.black = black;
@@ -3671,12 +3823,12 @@ impl App {
                 }
             }
             Message::AutoThreshold => {
-                if let Some(proxy) = self.active_proxy() {
+                if let Some((proxy, tone)) = self.active_proxy() {
                     let settings = Settings {
                         colour: Colour::Grey,
                         ..self.active()
                     };
-                    let grey = render(&proxy, &settings, &settings.adjust);
+                    let grey = render(&proxy, &settings, &settings.adjust, &tone);
                     let t = adjust::auto_threshold(&grey.data);
                     self.change(|s| s.threshold = t);
                 }
@@ -3843,8 +3995,10 @@ impl App {
                     false
                 };
                 if !asked {
-                    // The lamp off first: nobody is going to scan.
-                    let Some(worker) = self.worker.clone() else {
+                    // The lamp off first, if there is one: nobody is going
+                    // to scan.
+                    let Some(worker) = self.worker.clone().filter(|_| self.caps.lamp.is_some())
+                    else {
                         return iced::window::close(id);
                     };
                     self.note = "Spegnimento della lampada…".into();
@@ -4072,18 +4226,21 @@ impl App {
 
     /// The small copy of the samples the panel acts on: the page with its
     /// geometry edits, or the preview.
-    fn active_proxy(&self) -> Option<Arc<Image>> {
+    fn active_proxy(&self) -> Option<(Arc<Image>, Tone)> {
         if self.editing_page() {
             self.shown().map(|p| {
                 let (t, _) = p.preview_geometry(&p.transform, false);
-                if t.is_identity() {
+                let proxy = if t.is_identity() {
                     p.raw.proxy.clone()
                 } else {
-                    Arc::new(edited(&p.raw.proxy, &t))
-                }
+                    Arc::new(edited(&p.raw.proxy, &t, &p.raw.tone))
+                };
+                (proxy, p.raw.tone)
             })
         } else {
-            self.preview.as_ref().map(|(raw, ..)| raw.proxy.clone())
+            self.preview
+                .as_ref()
+                .map(|(raw, ..)| (raw.proxy.clone(), raw.tone))
         }
     }
 
@@ -4101,6 +4258,12 @@ impl App {
                 self.worker = Some(handle);
                 self.send_lamp_timer();
             }
+            Event::Opened(device, caps, devices) => {
+                self.caps = *caps;
+                self.device = Some(device);
+                self.devices = devices;
+                self.send_lamp_timer();
+            }
             Event::Status(status) => {
                 self.access_denied = status.is_err() && access::denied();
                 self.status = Some(status);
@@ -4113,7 +4276,9 @@ impl App {
             Event::Done(purpose, result) => {
                 self.busy = None;
                 match result {
-                    Ok(done) => self.on_scan(purpose, done.0.clone(), done.1.samples16.clone()),
+                    Ok(done) => {
+                        self.on_scan(purpose, done.image.clone(), done.samples16.clone());
+                    }
                     Err(e) => {
                         self.redo = None;
                         self.redo_auto = false;
@@ -4159,9 +4324,10 @@ impl App {
         match purpose {
             Purpose::Preview => {
                 self.close_editor(true);
-                let raw = Raw::new(image);
+                // The preview is worked in pixels of PREVIEW_DPI.
+                let raw = Raw::new(at_dpi(image, PREVIEW_DPI), self.caps.tone);
                 let settings = *self.settings();
-                let shown = render(&raw.proxy, &settings, &settings.adjust);
+                let shown = render(&raw.proxy, &settings, &settings.adjust, &raw.tone);
                 let picture = Picture::from_rgb(shown.width, shown.height, &shown.to_rgb());
                 self.found = detect::objects(&raw.full);
                 self.preview = Some((raw, shown, picture));
@@ -4196,7 +4362,7 @@ impl App {
         self.unsaved = true;
         self.pdf_rev += 1;
         let (w, h, dpi) = (image.width, image.height, image.dpi);
-        let mut page = Page::new(Raw::new(image), *self.settings());
+        let mut page = Page::new(Raw::new(image, self.caps.tone), *self.settings());
         // "Solo questa pagina" from the start: every page keeps the look it
         // was scanned with, and changing one does not change the others.
         if self.kind == Kind::Document {
@@ -4301,29 +4467,20 @@ impl App {
     /// runs. Documento: Scan adds a page, Copy redoes the last one,
     /// Instant Share saves the document. Foto: Scan scans (and saves if
     /// automatic saving is on), Instant Share opens the folder.
-    fn on_button(&mut self, button: hp3770_core::device::Button) {
-        use hp3770_core::device::Button;
+    fn on_button(&mut self, index: usize) {
+        let Some(name) = self.caps.buttons.get(index).map(|b| b.label.clone()) else {
+            return;
+        };
         if self.busy.is_some() {
-            self.note = format!("Tasto {} ignorato: scansione in corso", button.name());
+            self.note = format!("Tasto {name} ignorato: scansione in corso");
             return;
         }
         if self.confirm.is_some() {
-            self.note = format!(
-                "Tasto {} ignorato: rispondi prima alla domanda",
-                button.name()
-            );
+            self.note = format!("Tasto {name} ignorato: rispondi prima alla domanda");
             notify("Rispondi alla domanda nell'app", "", false);
             return;
         }
-        let index = match button {
-            Button::Scan => 0,
-            Button::Copy => 1,
-            Button::InstantShare => 2,
-        };
-        let action = match self.kind {
-            Kind::Document => self.document_buttons[index],
-            Kind::Photo => self.photo_buttons[index],
-        };
+        let action = self.button_action(self.kind, index);
         match action {
             ButtonAction::AddPage | ButtonAction::ScanPhoto => {
                 self.redone = None;
@@ -4545,9 +4702,11 @@ impl App {
             ),
             (Some(Ok(s)), None) => (
                 iced::Color::from_rgb(0.24, 0.77, 0.48),
-                match s.lamp {
-                    hp3770_core::status::Lamp::Off => "Pronto · lampada spenta".to_string(),
-                    _ => "Pronto · lampada accesa".to_string(),
+                match (s.ready, s.lamp) {
+                    (false, _) => "Occupato".to_string(),
+                    (true, Some(LampState::Off)) => "Pronto · lampada spenta".to_string(),
+                    (true, Some(_)) => "Pronto · lampada accesa".to_string(),
+                    (true, None) => "Pronto".to_string(),
                 },
             ),
             (Some(Err(_)), None) => (
@@ -4748,17 +4907,9 @@ impl App {
         }
         // Which front-panel button adds a page (or scans a photo), as set
         // in the preferences.
-        let (buttons, adds, what) = match self.kind {
-            Kind::Document => (
-                self.document_buttons,
-                ButtonAction::AddPage,
-                "aggiunge una pagina",
-            ),
-            Kind::Photo => (
-                self.photo_buttons,
-                ButtonAction::ScanPhoto,
-                "scansiona una foto",
-            ),
+        let (adds, what) = match self.kind {
+            Kind::Document => (ButtonAction::AddPage, "aggiunge una pagina"),
+            Kind::Photo => (ButtonAction::ScanPhoto, "scansiona una foto"),
         };
         // A page dragged out of the strip goes back where it was.
         let strip = |list| {
@@ -4773,10 +4924,9 @@ impl App {
                 None => area.into(),
             }
         };
-        let Some(button) = buttons
-            .iter()
-            .position(|a| *a == adds)
-            .map(|i| BUTTON_NAMES[i])
+        let Some(button) = (0..self.caps.buttons.len())
+            .find(|&i| self.button_action(self.kind, i) == adds)
+            .map(|i| self.caps.buttons[i].label.clone())
         else {
             return strip(list.padding([12, 10]));
         };
@@ -4905,7 +5055,7 @@ impl App {
             Tab::Preview => (
                 viewer::viewer(
                     self.preview.as_ref().map(|(_, _, p)| p),
-                    Self::glass(),
+                    self.glass(),
                     "Premi «Anteprima» per vedere il vetro",
                     self.preview_view,
                     self.selection,
@@ -4958,7 +5108,7 @@ impl App {
             Tab::Result => (
                 viewer::viewer(
                     self.shown().map(|p| &p.picture),
-                    Self::glass(),
+                    self.glass(),
                     "Nessuna scansione: premi «Scansiona»",
                     self.result_view,
                     self.crop_selection(),
@@ -5155,14 +5305,14 @@ impl App {
             },
         };
         let (fraction, detail) = match stage {
-            None | Some(Stage::Starting) => (0.02, "Avvio dello scanner"),
-            Some(Stage::WarmingUp) => (0.05, "La lampada era spenta: riscaldamento"),
-            Some(Stage::Calibrating) => (0.1, "Calibrazione su striscia bianca"),
-            Some(Stage::Scanning { .. }) => (0.0, "Lettura"),
-            Some(Stage::Finishing) => (0.97, "Ritorno del carrello ed elaborazione"),
+            None | Some(Progress::Starting) => (0.02, "Avvio dello scanner"),
+            Some(Progress::WarmingUp) => (0.05, "La lampada era spenta: riscaldamento"),
+            Some(Progress::Calibrating) => (0.1, "Calibrazione"),
+            Some(Progress::Scanning { .. }) => (0.0, "Lettura"),
+            Some(Progress::Finishing) => (0.97, "Fine della scansione ed elaborazione"),
         };
         let fraction = match stage {
-            Some(Stage::Scanning { done, total }) => {
+            Some(Progress::Scanning { done, total }) => {
                 0.1 + 0.85 * *done as f32 / (*total).max(1) as f32
             }
             _ => fraction,
@@ -5279,9 +5429,13 @@ impl App {
             heading("Originale"),
             labelled(
                 "Risoluzione",
-                pick_list(RESOLUTIONS, Some(self.settings().dpi), Message::Dpi)
-                    .width(Length::Fill)
-                    .into()
+                pick_list(
+                    self.caps.resolutions.clone(),
+                    Some(self.dpi()),
+                    Message::Dpi
+                )
+                .width(Length::Fill)
+                .into()
             ),
             labelled(
                 "Colore",
@@ -5289,30 +5443,37 @@ impl App {
                     .width(Length::Fill)
                     .into()
             ),
-            labelled(
-                "Profondità",
-                pick_list(
-                    [Depth(8), Depth(16)],
-                    Some(Depth(self.settings().depth)),
-                    Message::Depth
-                )
-                .width(Length::Fill)
-                .into()
-            ),
-            text(if self.settings().depth == 16 {
-                "16 bit: ombre e sfumature senza scalini anche dopo curve forti; \
-                 più memoria."
-            } else {
-                "8 bit: come il driver HP. Per foto e RAW meglio 16 bit."
-            })
-            .size(11),
-            heading("Area"),
+        ]
+        .spacing(10);
+        // The depth only for a scanner that gives 16 bits.
+        if self.offers_16bit() {
+            pane = pane
+                .push(labelled(
+                    "Profondità",
+                    pick_list(
+                        [Depth(8), Depth(16)],
+                        Some(Depth(self.depth())),
+                        Message::Depth,
+                    )
+                    .width(Length::Fill)
+                    .into(),
+                ))
+                .push(
+                    text(if self.depth() == 16 {
+                        "16 bit: ombre e sfumature senza scalini anche dopo curve forti; \
+                         più memoria."
+                    } else {
+                        "8 bit: come il driver HP. Per foto e RAW meglio 16 bit."
+                    })
+                    .size(11),
+                );
+        }
+        pane = pane.push(heading("Area")).push(
             checkbox(self.settings().auto_crop)
                 .label("Ritaglio automatico")
                 .on_toggle(Message::AutoCrop)
                 .text_size(13),
-        ]
-        .spacing(10);
+        );
         let plan = self.plan();
         if !plan.is_empty() {
             let n = self.found.len();
@@ -5407,24 +5568,30 @@ impl App {
                 .style(text::danger),
             );
         }
-        if self.settings().dpi > 1200 && self.selection.is_none() && plan.is_empty() {
+        if self.dpi() > 1200 && self.selection.is_none() && plan.is_empty() {
             pane = pane.push(
                 text("2400 dpi servono per piccoli originali: seleziona l'area sull'anteprima.")
                     .size(12)
                     .style(text::warning),
             );
         }
-        let buttons = match self.kind {
-            Kind::Document => self.document_buttons,
-            Kind::Photo => self.photo_buttons,
-        };
-        pane = pane.push(heading("Tasti dello scanner")).push(
-            text(format!(
-                "Scan: {} · Copy: {} · Instant Share: {} (si cambiano nelle Preferenze)",
-                buttons[0], buttons[1], buttons[2]
-            ))
-            .size(12),
-        );
+        // Only for a scanner with buttons.
+        if !self.caps.buttons.is_empty() {
+            let what: Vec<String> = self
+                .caps
+                .buttons
+                .iter()
+                .enumerate()
+                .map(|(i, b)| format!("{}: {}", b.label, self.button_action(self.kind, i)))
+                .collect();
+            pane = pane.push(heading("Tasti dello scanner")).push(
+                text(format!(
+                    "{} (si cambiano nelle Preferenze)",
+                    what.join(" · ")
+                ))
+                .size(12),
+            );
+        }
         pane.into()
     }
 
@@ -5773,7 +5940,11 @@ impl App {
     /// Whether Windows opens its own scan app on a button press, and the
     /// switch (Windows only, with the HP driver).
     fn wia_row(&self) -> Element<'_, Message> {
-        match self.wia_quiet {
+        let hp_usb = self
+            .device
+            .as_ref()
+            .is_some_and(|d| d.backend == hp3770_core::rts8822::BACKEND);
+        match self.wia_quiet.filter(|_| hp_usb) {
             None => Space::new().into(),
             Some(quiet) => column![
                 text(if quiet {
@@ -5805,12 +5976,72 @@ impl App {
         }
     }
 
+    /// The preferences tied to functions of the scanner in use: which
+    /// scanner (when there are several), its buttons, its lamp. Only what
+    /// it has is shown.
+    fn scanner_prefs(&self) -> Element<'_, Message> {
+        let mut col = column![].spacing(10);
+        if self.devices.len() > 1 {
+            col = col.push(heading("Scanner")).push(labelled(
+                "Usa",
+                pick_list(
+                    self.devices.clone(),
+                    self.device.clone(),
+                    Message::ChooseScanner,
+                )
+                .width(Length::Fill)
+                .text_size(13)
+                .into(),
+            ));
+        }
+        if !self.caps.buttons.is_empty() {
+            col = col.push(heading(match self.kind {
+                Kind::Document => "Tasti dello scanner in Documento",
+                Kind::Photo => "Tasti dello scanner in Foto",
+            }));
+            for (i, b) in self.caps.buttons.iter().enumerate() {
+                col = col.push(self.button_choice(i, b.label.clone()));
+            }
+            col = col
+                .push(
+                    text(
+                        "Valgono anche con l'app in secondo piano; ignorati durante una \
+                         scansione.",
+                    )
+                    .size(11),
+                )
+                .push(self.wia_row());
+        }
+        if self.caps.lamp.is_some() {
+            col = col
+                .push(heading("Lampada"))
+                .push(labelled(
+                    "Spegnila",
+                    pick_list(
+                        LAMP_CHOICES,
+                        Some(LampAfter(self.lamp_off)),
+                        Message::LampAfter,
+                    )
+                    .width(Length::Fill)
+                    .into(),
+                ))
+                .push(
+                    text(
+                        "Senza scansioni per questo tempo l'app spegne la lampada, e la \
+                         spegne sempre chiudendosi. Riaccenderla costa circa 10 secondi di \
+                         riscaldamento alla scansione dopo. Lo scanner la spegne comunque da \
+                         solo dopo 13 minuti.",
+                    )
+                    .size(11),
+                );
+        }
+        col.into()
+    }
+
     /// The choice of what a front-panel button does.
-    fn button_choice(&self, index: usize, label: &'static str) -> Element<'_, Message> {
-        let (options, current): (&[ButtonAction], ButtonAction) = match self.kind {
-            Kind::Document => (&ButtonAction::DOCUMENT, self.document_buttons[index]),
-            Kind::Photo => (&ButtonAction::PHOTO, self.photo_buttons[index]),
-        };
+    fn button_choice(&self, index: usize, label: String) -> Element<'_, Message> {
+        let options = ButtonAction::allowed(self.kind);
+        let current = self.button_action(self.kind, index);
         labelled(
             label,
             pick_list(options, Some(current), move |a| {
@@ -5879,33 +6110,7 @@ impl App {
                 Self::stamped(self.name(), self.settings().output.extension())
             ))
             .size(12),
-            heading(match self.kind {
-                Kind::Document => "Tasti dello scanner in Documento",
-                Kind::Photo => "Tasti dello scanner in Foto",
-            }),
-            self.button_choice(0, "Scan"),
-            self.button_choice(1, "Copy"),
-            self.button_choice(2, "Instant Share"),
-            text("Valgono anche con l'app in secondo piano; ignorati durante una scansione.")
-                .size(11),
-            self.wia_row(),
-            heading("Lampada"),
-            labelled(
-                "Spegnila",
-                pick_list(
-                    LAMP_CHOICES,
-                    Some(LampAfter(self.lamp_off)),
-                    Message::LampAfter
-                )
-                .width(Length::Fill)
-                .into()
-            ),
-            text(
-                "Senza scansioni per questo tempo l'app spegne la lampada, e la spegne \
-                 sempre chiudendosi. Riaccenderla costa circa 10 secondi di riscaldamento \
-                 alla scansione dopo. Lo scanner la spegne comunque da solo dopo 13 minuti."
-            )
-            .size(11),
+            self.scanner_prefs(),
             heading("Impostazioni"),
             text(format!("Salvate in {path}")).size(11),
             button(text("Ripristina impostazioni di fabbrica").size(13))
@@ -5918,7 +6123,7 @@ impl App {
 
     fn output_pane(&self) -> Element<'_, Message> {
         let s = self.active();
-        let options = outputs(self.kind, s.colour, self.settings().depth);
+        let options = outputs(self.kind, s.colour, self.depth());
         let mut pane = column![
             heading("Formato"),
             pick_list(options, Some(self.settings().output), Message::Output).width(Length::Fill),
@@ -6084,7 +6289,11 @@ impl App {
         let s = self.settings();
         let request = self.request();
         let link = match &self.status {
-            Some(Ok(st)) => format!("USB {}", if st.usb2 { "2.0" } else { "1.1" }),
+            // What the scanner says first about itself ("USB 2.0").
+            Some(Ok(st)) => st
+                .details
+                .first()
+                .map_or_else(|| "collegato".to_string(), |(l, v)| format!("{l} {v}")),
             Some(Err(_)) => "non collegato".to_string(),
             None => "…".to_string(),
         };
@@ -6094,7 +6303,7 @@ impl App {
         container(
             row![
                 fact("Scanner", link),
-                fact("Risoluzione", format!("{} dpi · {}", s.dpi, s.colour)),
+                fact("Risoluzione", format!("{} dpi · {}", self.dpi(), s.colour)),
                 fact(
                     "Immagine",
                     format!("{} × {}", request.area.width, request.area.height)
@@ -6335,18 +6544,46 @@ mod tests {
 
     #[test]
     fn areas_stay_on_the_glass() {
-        for dpi in RESOLUTIONS {
-            let max_w = (GLASS_INCHES.0 * f64::from(dpi)).round() as u32;
-            let max_h = (GLASS_INCHES.1 * f64::from(dpi)).round() as u32;
+        use scanner_api::Scanner as _;
+        let caps = scanner_api::fake::FakeScanner::flatbed()
+            .capabilities()
+            .clone();
+        for &dpi in &caps.resolutions {
+            let (max_w, max_h) = caps.glass_pixels(dpi);
             // An original at the bottom right corner, with the margin of
             // "Rifai" around it (1 mm past both edges).
-            let area = within_glass(Area::from_mm(dpi, 150.0, 240.0, 66.9, 58.2), dpi);
+            let area = within_glass(area_mm(dpi, 150.0, 240.0, 66.9, 58.2), dpi, &caps);
             assert!(area.x + area.width <= max_w, "{dpi} dpi: {area:?}");
             assert!(area.y + area.height <= max_h, "{dpi} dpi: {area:?}");
             assert!(area.width > 0 && area.height > 0);
             // An area inside is left alone.
-            let inside = Area::from_mm(dpi, 10.0, 10.0, 100.0, 100.0);
-            assert_eq!(within_glass(inside, dpi), inside);
+            let inside = area_mm(dpi, 10.0, 10.0, 100.0, 100.0);
+            assert_eq!(within_glass(inside, dpi, &caps), inside);
         }
+    }
+
+    #[test]
+    fn the_nearest_resolution_offered() {
+        let offered = [150, 300, 600, 1200];
+        assert_eq!(nearest(&offered, 300), 300);
+        assert_eq!(nearest(&offered, 2400), 1200);
+        assert_eq!(nearest(&offered, 200), 150);
+        assert_eq!(nearest(&offered, 225), 300, "a tie takes the larger");
+        assert_eq!(nearest(&[], 200), 200);
+    }
+
+    #[test]
+    fn a_preview_is_brought_to_its_resolution() {
+        let image = Image {
+            width: 6,
+            height: 3,
+            dpi: 300,
+            format: Format::Rgb,
+            data: (0..6 * 3 * 3).map(|i| i as u8).collect(),
+        };
+        let small = at_dpi(image.clone(), 200);
+        assert_eq!((small.width, small.height, small.dpi), (4, 2, 200));
+        assert_eq!(small.data.len(), 4 * 2 * 3);
+        assert_eq!(at_dpi(image.clone(), 300), image);
     }
 }

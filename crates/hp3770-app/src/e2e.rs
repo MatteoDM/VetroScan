@@ -11,6 +11,7 @@ use crate::worker::{fake, Event};
 use crate::{App, Kind, Message};
 use iced::futures::StreamExt;
 use iced::{Size, Task};
+use scanner_api::fake::FakeScanner;
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
@@ -30,8 +31,13 @@ impl Ui {
 
     /// The made-up scanner taking `pace` for each stage of a scan.
     fn with_pace(pace: Duration) -> Self {
+        Self::with_scanners(vec![FakeScanner::flatbed().paced(pace)])
+    }
+
+    /// The app with these made-up scanners (the first one in use).
+    fn with_scanners(scanners: Vec<FakeScanner>) -> Self {
         let (app, _) = App::new();
-        let (handle, events) = fake::spawn(pace);
+        let (handle, events) = fake::spawn_with(scanners);
         let mut ui = Self {
             app,
             events,
@@ -341,9 +347,7 @@ fn a_scanner_button_with_a_question_pending_tells_the_person_at_the_scanner() {
     ui.send(Message::Kind(Kind::Photo));
     ui.scan(1);
     testing::take_effects();
-    ui.send(Message::Worker(Event::Button(
-        hp3770_core::device::Button::Scan,
-    )));
+    ui.send(Message::Worker(Event::Button(0)));
     assert_eq!(ui.question(), Some("Fare una nuova scansione?"));
     let effects = testing::take_effects();
     assert!(
@@ -351,9 +355,7 @@ fn a_scanner_button_with_a_question_pending_tells_the_person_at_the_scanner() {
         "{effects:?}"
     );
     // A second press while the question is up does nothing more.
-    ui.send(Message::Worker(Event::Button(
-        hp3770_core::device::Button::Scan,
-    )));
+    ui.send(Message::Worker(Event::Button(0)));
     assert!(ui.app.busy.is_none());
 }
 
@@ -362,9 +364,7 @@ fn photocopy_answered_no_does_not_print_the_next_photo() {
     let mut ui = Ui::new();
     ui.send(Message::Kind(Kind::Photo));
     ui.scan(1);
-    ui.send(Message::Worker(Event::Button(
-        hp3770_core::device::Button::Copy,
-    )));
+    ui.send(Message::Worker(Event::Button(1)));
     if ui.question().is_none() {
         // Copy is not the photocopy in this setup: nothing to check.
         return;
@@ -407,11 +407,11 @@ fn closing_switches_the_lamp_off_first() {
     };
     ui.send(Message::RefreshStatus);
     ui.settle();
-    assert_eq!(lamp(&ui), Some(hp3770_core::status::Lamp::Flatbed));
+    assert_eq!(lamp(&ui), Some(Some(scanner_api::LampState::On)));
     ui.send(Message::CloseRequested(iced::window::Id::unique()));
     assert!(ui.closed);
     ui.settle();
-    assert_eq!(lamp(&ui), Some(hp3770_core::status::Lamp::Off));
+    assert_eq!(lamp(&ui), Some(Some(scanner_api::LampState::Off)));
 }
 
 #[test]
@@ -1294,4 +1294,142 @@ fn the_preview_finds_the_three_originals_and_foto_scans_each() {
     );
     ui.click("Scansiona 3 foto");
     assert_eq!(ui.app.pages.len(), 3);
+}
+
+// ------------------------------------------- what the scanner offers
+
+/// The made-up A3 scanner without buttons.
+fn without_buttons() -> FakeScanner {
+    use scanner_api::Scanner as _;
+    FakeScanner::with(scanner_api::Capabilities {
+        model: "Piano senza tasti".into(),
+        buttons: Vec::new(),
+        ..FakeScanner::a3().capabilities().clone()
+    })
+}
+
+#[test]
+fn the_flatbed_offers_its_lamp_its_buttons_and_16_bits() {
+    let mut ui = Ui::new();
+    assert_eq!(ui.app.caps.model, "Piano A4");
+    assert!(ui.shows("Pronto · lampada accesa"));
+    ui.send(Message::Pane(crate::Pane::Scan));
+    assert!(ui.shows("Profondità"));
+    assert!(ui.shows("Tasti dello scanner"));
+    ui.send(Message::Pane(crate::Pane::Prefs));
+    for label in ["Lampada", "Spegnila", "Scan", "Copy", "Instant Share"] {
+        assert!(ui.shows(label), "{label}");
+    }
+    // One scanner: no choice of scanner.
+    assert!(!ui.shows("Usa"));
+}
+
+#[test]
+fn a_scanner_without_a_lamp_and_16_bits_shows_neither() {
+    let mut ui = Ui::with_scanners(vec![FakeScanner::a3()]);
+    assert_eq!(ui.app.caps.model, "Piano A3");
+    // Ready, and nothing about a lamp.
+    assert!(ui.shows("Pronto"));
+    assert!(!ui.shows("Pronto · lampada accesa"));
+    ui.send(Message::Pane(crate::Pane::Scan));
+    assert!(!ui.shows("Profondità"));
+    // 16 bits asked for (or kept from another scanner): 8 come.
+    ui.send(Message::Depth(crate::Depth(16)));
+    assert_eq!(ui.app.request().depth, 8);
+    ui.send(Message::Pane(crate::Pane::Prefs));
+    assert!(!ui.shows("Lampada"));
+    assert!(!ui.shows("Spegnila"));
+    // Its own two buttons, not the 3770's.
+    assert!(ui.shows("Start") && ui.shows("Send"));
+    assert!(!ui.shows("Instant Share"));
+    // Closing does not wait for a lamp.
+    ui.send(Message::CloseRequested(iced::window::Id::unique()));
+    assert!(ui.closed);
+    assert!(!ui.app.note.contains("lampada"), "{}", ui.app.note);
+}
+
+#[test]
+fn resolutions_and_glass_are_the_scanners() {
+    let mut ui = Ui::with_scanners(vec![FakeScanner::a3()]);
+    // 2400 dpi chosen (on the 3770, say): the nearest the A3 has.
+    ui.send(Message::Dpi(2400));
+    assert_eq!(ui.app.dpi(), 1200);
+    assert_eq!(ui.app.request().dpi, 1200);
+    ui.send(Message::Dpi(600));
+    assert_eq!(ui.app.request().dpi, 600);
+    // The preview covers the A3 glass, in pixels of the preview.
+    ui.send(Message::Preview);
+    ui.settle();
+    let (raw, ..) = ui.app.preview.as_ref().expect("a preview");
+    assert_eq!(raw.full.dpi, crate::PREVIEW_DPI);
+    assert_eq!(
+        (raw.full.width, raw.full.height),
+        (2340, 3300),
+        "11.7 × 16.5 inches at 200 dpi"
+    );
+    // A page scanned on it keeps its tone curve.
+    ui.send(Message::Kind(Kind::Document));
+    ui.scan(1);
+    assert_eq!(ui.app.pages[0].raw.tone.white, [230.0; 3]);
+}
+
+#[test]
+fn a_scanner_without_buttons_shows_no_button_settings() {
+    let mut ui = Ui::with_scanners(vec![without_buttons()]);
+    ui.send(Message::Pane(crate::Pane::Scan));
+    assert!(!ui.shows("Tasti dello scanner"));
+    ui.send(Message::Pane(crate::Pane::Prefs));
+    assert!(!ui.shows("Tasti dello scanner in Documento"));
+    // A press that cannot be is ignored.
+    ui.send(Message::Worker(Event::Button(0)));
+    assert!(ui.app.busy.is_none());
+    assert!(ui.app.pages.is_empty());
+}
+
+#[test]
+fn button_actions_are_kept_for_each_model() {
+    use crate::ButtonAction;
+    let mut ui = Ui::with_scanners(vec![FakeScanner::flatbed(), FakeScanner::a3()]);
+    ui.send(Message::Pane(crate::Pane::Prefs));
+    assert!(ui.shows("Usa"), "two scanners: a choice");
+    // On the flatbed, Scan redoes the last page.
+    ui.send(Message::ButtonAction(0, ButtonAction::RedoLast));
+    // The A3: its Start does its default, adding a page.
+    let a3 = ui.app.devices[1].clone();
+    ui.send(Message::ChooseScanner(a3));
+    while ui.app.caps.model != "Piano A3" {
+        let event = ui
+            .events
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the A3 opened");
+        ui.send(Message::Worker(event));
+    }
+    ui.settle();
+    assert_eq!(
+        ui.app.button_action(Kind::Document, 0),
+        ButtonAction::AddPage
+    );
+    ui.send(Message::ButtonAction(0, ButtonAction::SaveDocument));
+    // Back on the flatbed: its choice is still there.
+    let flatbed = ui.app.devices[0].clone();
+    ui.send(Message::ChooseScanner(flatbed));
+    while ui.app.caps.model != "Piano A4" {
+        let event = ui
+            .events
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the flatbed opened");
+        ui.send(Message::Worker(event));
+    }
+    ui.settle();
+    assert_eq!(
+        ui.app.button_action(Kind::Document, 0),
+        ButtonAction::RedoLast
+    );
+    // Both are saved, by model and button id.
+    let stored = ui.app.prefs().buttons;
+    assert_eq!(stored["Prova Piano A4"].document["scan"], "rifai-ultima");
+    assert_eq!(
+        stored["Prova Piano A3"].document["start"],
+        "salva-documento"
+    );
 }

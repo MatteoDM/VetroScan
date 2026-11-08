@@ -7,7 +7,22 @@
 //! stays readable and a field added later only takes its default.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
+
+/// The scanner whose buttons the preferences before v0.2.0 meant, and the
+/// ids of its buttons in that order.
+pub const LEGACY_MODEL: &str = "HP Scanjet 3770";
+pub const LEGACY_BUTTONS: [&str; 3] = ["scan", "copy", "instant-share"];
+
+/// What the buttons of one scanner model do in each way of working:
+/// button id → name of the action.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StoredButtons {
+    pub document: BTreeMap<String, String>,
+    pub photo: BTreeMap<String, String>,
+}
 
 /// The adjustments, as stored.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -133,10 +148,14 @@ pub struct Prefs {
     /// File names start with this, then date and time.
     pub document_name: String,
     pub photo_name: String,
-    /// What the Scan, Copy and Instant Share buttons do in each way of
-    /// working (names of the actions; unknown names take the default).
+    /// What the Scan, Copy and Instant Share buttons of the HP Scanjet 3770
+    /// do in each way of working (names of the actions; unknown names take
+    /// the default). Before v0.2.0 the only record; now a copy of
+    /// [`Prefs::buttons`] for that model, kept for older versions.
     pub document_buttons: Vec<String>,
     pub photo_buttons: Vec<String>,
+    /// What the buttons do, by scanner model ("HP Scanjet 3770").
+    pub buttons: BTreeMap<String, StoredButtons>,
     pub document: StoredMode,
     pub photo: StoredMode,
     /// Minutes without scanning before the app switches the lamp off (0:
@@ -163,6 +182,7 @@ impl Default for Prefs {
                 "fotocopia".into(),
                 "apri-cartella".into(),
             ],
+            buttons: BTreeMap::new(),
             document: StoredMode::default(),
             photo: StoredMode {
                 dpi: 600,
@@ -199,8 +219,30 @@ impl Prefs {
     pub fn load() -> Self {
         Self::path()
             .and_then(|p| std::fs::read_to_string(p).ok())
-            .and_then(|text| serde_json::from_str(&text).ok())
+            .and_then(|text| serde_json::from_str::<Self>(&text).ok())
             .unwrap_or_default()
+            .migrated()
+    }
+
+    /// Preferences of an older version brought up to date: the actions of
+    /// the HP Scanjet 3770's buttons, by position, become the actions of
+    /// its buttons by id.
+    pub fn migrated(mut self) -> Self {
+        if !self.buttons.contains_key(LEGACY_MODEL) {
+            let by_id = |actions: &[String]| -> BTreeMap<String, String> {
+                LEGACY_BUTTONS
+                    .iter()
+                    .zip(actions)
+                    .map(|(id, a)| ((*id).to_string(), a.clone()))
+                    .collect()
+            };
+            let stored = StoredButtons {
+                document: by_id(&self.document_buttons),
+                photo: by_id(&self.photo_buttons),
+            };
+            self.buttons.insert(LEGACY_MODEL.into(), stored);
+        }
+        self
     }
 
     /// Writes the preferences (errors are reported, not fatal).
@@ -254,6 +296,33 @@ pub fn save_presets(presets: &[Preset]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn button_actions_by_position_become_actions_by_id() {
+        // A file of v0.1.x: actions by position only.
+        let old = r#"{"document_buttons": ["rifai-ultima", "aggiungi-pagina", "niente"],
+                      "photo_buttons": ["fotocopia"]}"#;
+        let p = serde_json::from_str::<Prefs>(old).unwrap().migrated();
+        let hp = &p.buttons[LEGACY_MODEL];
+        assert_eq!(hp.document["scan"], "rifai-ultima");
+        assert_eq!(hp.document["copy"], "aggiungi-pagina");
+        assert_eq!(hp.document["instant-share"], "niente");
+        assert_eq!(hp.photo["scan"], "fotocopia");
+        assert!(!hp.photo.contains_key("copy"), "the rest takes the default");
+        // Once migrated, the record by id wins.
+        let mut again = p.clone();
+        again.document_buttons = vec!["niente".into()];
+        assert_eq!(
+            again.migrated().buttons[LEGACY_MODEL].document["scan"],
+            "rifai-ultima"
+        );
+        // A new file: the defaults, by id.
+        let fresh = Prefs::default().migrated();
+        assert_eq!(
+            fresh.buttons[LEGACY_MODEL].document["scan"],
+            "aggiungi-pagina"
+        );
+    }
 
     #[test]
     fn presets_round_trip() {

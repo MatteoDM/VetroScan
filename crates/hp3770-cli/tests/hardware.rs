@@ -131,3 +131,53 @@ fn the_carriage_is_home_after_a_scan() {
     assert!(status.contains("carriage at home   yes"), "{status}");
     assert!(status.contains("operation running  no"), "{status}");
 }
+
+/// The way the app reaches the scanner: the registry, then the contract
+/// only (state, buttons, a scan, the lamp).
+#[test]
+#[ignore = "needs the scanner"]
+fn the_registry_opens_the_scanner_like_the_app() {
+    use scanner_api::{Area, LampState, Registry, ScanRequest};
+    let registry = Registry::new().with(hp3770_usb::UsbBackend);
+    let devices = registry.list();
+    assert_eq!(devices.len(), 1, "{devices:?}");
+    assert_eq!(devices[0].name, "HP Scanjet 3770");
+    let mut scanner = registry.open(&devices[0]).expect("opened");
+    let caps = scanner.capabilities().clone();
+    assert_eq!(caps.max_dpi(), 2400);
+    assert!(scanner.status().expect("state").ready);
+    assert_eq!(
+        scanner.poll_buttons().expect("buttons"),
+        0,
+        "no button held"
+    );
+    let side = pixels(MM, 300);
+    let request = ScanRequest {
+        dpi: 300,
+        area: Area {
+            x: pixels(70.0, 300),
+            y: pixels(150.0, 300),
+            width: side,
+            height: side,
+        },
+        depth: 16,
+    };
+    let mut stages = 0;
+    let result = scanner
+        .scan(&request, &mut |_| {
+            stages += 1;
+            true
+        })
+        .expect("scanned");
+    assert!(stages >= 3);
+    assert_eq!(result.image.dpi, 300);
+    assert!(result.image.width.abs_diff(side as usize) <= 2);
+    assert_eq!(
+        result.samples16.map(|s| s.len()),
+        Some(result.image.data.len())
+    );
+    assert!(result.details.iter().any(|(l, _)| l == "calibration"));
+    // The lamp, on after the scan, goes off when asked.
+    scanner.lamp_off().expect("lamp off");
+    assert_eq!(scanner.status().expect("state").lamp, Some(LampState::Off));
+}

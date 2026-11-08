@@ -59,7 +59,8 @@ fn button_info(button: Button) -> ButtonInfo {
 /// The scanner's state for the application.
 pub fn device_status(s: &Status) -> DeviceStatus {
     DeviceStatus {
-        ready: s.init_done && !s.executing,
+        // Not initialised yet is ready too: a scan starts by initialising.
+        ready: !s.executing,
         lamp: Some(match s.lamp {
             Lamp::Off => LampState::Off,
             Lamp::Flatbed => LampState::On,

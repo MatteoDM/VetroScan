@@ -16,8 +16,14 @@ manca.
 
 ### Added
 - La **versione** dell'app, piccola, in alto a destra del nome.
+- Con più scanner collegati, nelle **Preferenze** si sceglie quale usare.
 
 ### Changed
+- L'app mostra solo quello che lo scanner in uso sa fare: risoluzioni, vetro, profondità a 16
+  bit, tasti e lampada vengono dallo scanner, non più da valori fissi dell'HP 3770. Con l'HP
+  3770 non cambia niente.
+- Le azioni dei **tasti dello scanner** si ricordano per modello di scanner; quelle già scelte
+  per l'HP 3770 restano.
 - **Ogni pagina ha le sue regolazioni**: nel documento «Solo questa pagina» è spuntata fin
   dalla scansione, così cambiare colori o toni di una pagina non cambia le altre. Con
   **Applica a tutte le pagine** l'aspetto della pagina mostrata passa a tutte, all'anteprima

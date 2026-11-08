@@ -92,9 +92,32 @@ pub struct Capabilities {
 }
 
 impl Capabilities {
+    /// What to assume when no backend knows any model: an A4 glass at 300
+    /// dpi, no buttons, no lamp, a plain gamma 2.2 up to full white.
+    pub fn placeholder() -> Self {
+        Self {
+            manufacturer: String::new(),
+            model: "Nessuno scanner".into(),
+            glass_inches: (8.27, 11.69),
+            resolutions: vec![300],
+            modes: vec![ColourMode::Colour],
+            depths: vec![8],
+            transparency: false,
+            buttons: Vec::new(),
+            lamp: None,
+            tone: Tone {
+                white: [255.0; 3],
+                grey_white: 255.0,
+                gamma: 2.2,
+            },
+        }
+    }
+
     /// Manufacturer and model, as one name ("HP Scanjet 3770").
     pub fn name(&self) -> String {
         format!("{} {}", self.manufacturer, self.model)
+            .trim()
+            .to_string()
     }
 
     /// The highest resolution.

@@ -305,6 +305,10 @@ impl Backend for FakeBackend {
             .collect()
     }
 
+    fn models(&self) -> Vec<Capabilities> {
+        self.scanners.iter().map(|s| s.caps.clone()).collect()
+    }
+
     fn open(&self, device: &DeviceInfo) -> Result<Box<dyn Scanner>> {
         let scanner = device
             .id
@@ -428,5 +432,7 @@ mod tests {
             "Piano A4"
         );
         assert!(Registry::new().open_first().is_err());
+        assert_eq!(registry.models().len(), 2);
+        assert_eq!(registry.models()[1].model, "Piano A3");
     }
 }

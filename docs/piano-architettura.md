@@ -1,6 +1,6 @@
 # Piano: da «app per l'HP 3770» ad «app per scanner»
 
-Stato: **Fasi 0–3 fatte (v0.1.2; le Fasi 1–3 escono con la v0.2.0); prossima: Fase 4**
+Stato: **Fasi 0–4 fatte (v0.1.2; le Fasi 1–4 escono con la v0.2.0, da pubblicare); prossima: Fase 5**
 (piano scritto l'8 novembre 2026, dopo la v0.1.1; aggiornato l'8 novembre 2026 con le lingue,
 il nome nuovo e le fasi rimandate). Ogni fase si chiude con un commit, i test verdi e una
 versione; qui si segna cosa è fatto.
@@ -159,6 +159,35 @@ Fatta. Com'è andata:
   si adatta da sola, secondo la regola «le capacità comandano»: per ogni capacità un e2e
   controlla che con lo scanner che ce l'ha l'app la offra e con quello che non ce l'ha
   non ne mostri niente.
+
+Fatta. Com'è andata:
+
+- Il thread dello scanner (`worker.rs`) tiene un `Box<dyn Scanner>` aperto dal `Registry`
+  (`hp3770_usb::UsbBackend`, o lo scanner finto con `HP3770_FAKE_SCANNER`). Gli e2e
+  fanno girare lo **stesso** thread su `scanner_api::fake`: prima avevano un finto a parte.
+  Gli eventi portano `DeviceStatus`, `Progress`, `ScanResult` e il tasto come indice;
+  `Event::Opened` dà capacità ed elenco degli scanner.
+- Prima che uno scanner risponda l'app usa il primo modello che i backend conoscono
+  (`Backend::models()`); `Capabilities::placeholder()` se non ne conoscono nessuno.
+- Il `Tone` viaggia con i campioni (`Raw::tone`): ogni pagina si disegna con la curva dello
+  scanner che l'ha acquisita, e il bianco della carta per raddrizzare e per i RAW è il suo.
+- Risoluzione e profondità scelte restano salvate; l'app usa la risoluzione più vicina che
+  lo scanner offre (`App::dpi`) e 8 bit se non ne dà 16 (`App::depth`). L'anteprima si fa
+  alla risoluzione dello scanner più vicina a 200 dpi e si riporta a 200.
+- Tasti per id: le azioni si salvano in `Prefs::buttons` per modello e id; le preferenze
+  della v0.1.x (per posizione) passano all'HP Scanjet 3770 con un test di migrazione, e si
+  continua a scriverle anche nel vecchio formato per chi torna indietro.
+- Le capacità comandano: lampada (preferenze, timer, spegnimento alla chiusura, stato),
+  tasti (preferenze, riepilogo, suggerimento della striscia, opzione di Windows solo col
+  backend `rts8822`), 16 bit, risoluzioni, vetro e dettagli dello stato vengono tutti da
+  `Capabilities` / `DeviceStatus`. Con più scanner, «Usa» nelle Preferenze.
+- Nuovi e2e: il piano A4 (lampada, tasti, 16 bit), il piano A3 (niente lampada né 16 bit,
+  i suoi due tasti, vetro e risoluzioni suoi, chiusura senza attese), uno scanner senza
+  tasti, le azioni dei tasti ricordate per modello passando da uno scanner all'altro. Il
+  thread ha test suoi: una pressione arriva una volta e solo per tasti che esistono, niente
+  spegnimento della lampada a chi non ce l'ha, si apre lo scanner scelto.
+- Smoke test sullo scanner vero: in più `the_registry_opens_the_scanner_like_the_app`
+  (registro, stato, tasti, scansione a 16 bit, lampada spenta).
 - Il nome dell'app e dei pacchetti cambia nella Fase 7.
 
 ## Fase 5 · l'app in italiano e in inglese → v0.3.0

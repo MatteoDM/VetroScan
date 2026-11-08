@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! The scanners of every backend in one list.
 
-use crate::{Error, Result, Scanner};
+use crate::{Capabilities, Error, Result, Scanner};
 
 /// A scanner a backend found.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -12,6 +12,13 @@ pub struct DeviceInfo {
     pub id: String,
     /// What to show: manufacturer and model.
     pub name: String,
+}
+
+impl std::fmt::Display for DeviceInfo {
+    /// What a list of scanners shows: the name.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.name)
+    }
 }
 
 /// A way of reaching scanners (USB for one chip family, the network, a
@@ -26,6 +33,12 @@ pub trait Backend: Send + Sync {
 
     /// Opens one of the scanners of [`Backend::list`].
     fn open(&self, device: &DeviceInfo) -> Result<Box<dyn Scanner>>;
+
+    /// What the models this backend knows can do, connected or not: what
+    /// the application shows before a scanner answers.
+    fn models(&self) -> Vec<Capabilities> {
+        Vec::new()
+    }
 }
 
 /// Every backend the application knows, in order of preference.
@@ -57,6 +70,11 @@ impl Registry {
     /// The scanners of every backend, backend by backend.
     pub fn list(&self) -> Vec<DeviceInfo> {
         self.backends.iter().flat_map(|b| b.list()).collect()
+    }
+
+    /// The models every backend knows, backend by backend.
+    pub fn models(&self) -> Vec<Capabilities> {
+        self.backends.iter().flat_map(|b| b.models()).collect()
     }
 
     /// Opens a scanner found by [`Registry::list`].

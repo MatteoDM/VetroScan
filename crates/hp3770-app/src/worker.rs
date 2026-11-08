@@ -1,20 +1,20 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! The thread that owns the scanner.
 //!
-//! USB requests block, and a scan takes from seconds to minutes: every
+//! Scanner calls block, and a scan takes from seconds to minutes: every
 //! request goes through one thread, which the interface talks to with
 //! [`Command`]s and hears from through [`Event`]s (an iced subscription).
 //! When idle the thread reads the front-panel buttons every 150 ms.
+//!
+//! The thread only knows the scanner contract ([`scanner_api::Scanner`]):
+//! it opens what the [`Registry`] finds, and does with the lamp and the
+//! buttons only what the scanner's capabilities say it has.
 
-use hp3770_core::device::Button;
-use hp3770_core::profile::HP3770;
-use hp3770_core::session::{self, Report, Request, Stage};
-use hp3770_core::status::Status;
-use hp3770_core::transport::Chip;
-use hp3770_usb::Scanner;
 use iced::futures::channel::mpsc;
 use iced::futures::{SinkExt, Stream};
-use scan_imaging::Image;
+use scanner_api::{
+    Capabilities, DeviceInfo, DeviceStatus, Progress, Registry, ScanRequest, ScanResult, Scanner,
+};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc as std_mpsc, Arc};
 use std::time::{Duration, Instant};
@@ -22,12 +22,14 @@ use std::time::{Duration, Instant};
 /// What the interface asks for.
 #[derive(Debug, Clone)]
 pub enum Command {
-    /// Read the scanner state.
+    /// Read the scanner state (opening it if needed).
     Status,
+    /// Use this scanner from now on (one of [`Event::Opened`]'s list).
+    Choose(DeviceInfo),
     /// Make a scan.
-    Scan(Purpose, Box<Request>),
-    /// Switch the lamp off after this long without scanning (the chip's
-    /// own timer, 13 minutes, stays as a safety net).
+    Scan(Purpose, ScanRequest),
+    /// Switch the lamp off after this long without scanning (scanners
+    /// with a lamp only).
     LampTimer(Duration),
     /// Switch the lamp off now (the app is closing); says when done.
     LampOff(Option<std_mpsc::Sender<()>>),
@@ -59,14 +61,17 @@ pub enum Event {
     /// The thread is running: where to send commands, and the flag that
     /// cancels the running scan.
     Ready(Handle),
+    /// A scanner was opened: which one, what it can do, and all the
+    /// scanners there are now (to choose from when more than one).
+    Opened(DeviceInfo, Box<Capabilities>, Vec<DeviceInfo>),
     /// The scanner state, or why it could not be read.
-    Status(Result<Status, String>),
+    Status(Result<DeviceStatus, String>),
     /// A scan moved on.
-    Progress(Stage),
+    Progress(Progress),
     /// A scan ended.
-    Done(Purpose, Result<Arc<(Image, Report)>, String>),
-    /// A front-panel button was pressed.
-    Button(Button),
+    Done(Purpose, Result<Arc<ScanResult>, String>),
+    /// A front-panel button was pressed: its index in the capabilities.
+    Button(usize),
 }
 
 /// How the interface reaches the thread.
@@ -91,6 +96,17 @@ impl Handle {
     }
 }
 
+/// The scanners the app looks for: on USB, the RTS8822 driver.
+pub fn registry() -> Registry {
+    if std::env::var_os("HP3770_FAKE_SCANNER").is_some() {
+        // A made-up scanner, to try the interface with no scanner.
+        return Registry::new().with(scanner_api::fake::FakeBackend::new(vec![
+            scanner_api::fake::FakeScanner::flatbed().paced(Duration::from_millis(400)),
+        ]));
+    }
+    Registry::new().with(hp3770_usb::UsbBackend)
+}
+
 /// The subscription stream of the thread's events.
 pub fn events() -> impl Stream<Item = Event> {
     iced::stream::channel(64, async |mut output: mpsc::Sender<Event>| {
@@ -100,33 +116,54 @@ pub fn events() -> impl Stream<Item = Event> {
             commands,
             cancel: cancel.clone(),
         };
-        let _ = output.send(Event::Ready(handle)).await;
-        let mut sender = output.clone();
-        let thread = std::thread::Builder::new().name("scanner".into());
-        if std::env::var_os("HP3770_FAKE_SCANNER").is_some() {
-            // A made-up scanner, to try the interface with no scanner.
-            thread.spawn(move || {
-                fake::run(&receiver, &cancel, Duration::from_millis(400), |event| {
-                    let _ = iced::futures::executor::block_on(sender.send(event));
-                });
-            })
-        } else {
-            thread.spawn(move || Worker::new(sender, cancel).run(receiver))
-        }
-        .expect("scanner thread");
+        let _ = SinkExt::send(&mut output, Event::Ready(handle)).await;
+        let sender = output.clone();
+        std::thread::Builder::new()
+            .name("scanner".into())
+            .spawn(move || Worker::new(registry(), Box::new(sender), cancel).run(&receiver))
+            .expect("scanner thread");
         // Keep the stream alive for as long as the application runs.
         std::future::pending::<()>().await;
     })
 }
 
+/// Where the thread's events go.
+pub trait Output: Send {
+    /// Sends an event, waiting if the interface is behind.
+    fn send(&mut self, event: Event);
+    /// Sends an event if there is room now; drops it otherwise (the
+    /// progress of a scan, which must never wait).
+    fn try_send(&mut self, event: Event);
+}
+
+impl Output for mpsc::Sender<Event> {
+    fn send(&mut self, event: Event) {
+        let _ = iced::futures::executor::block_on(SinkExt::send(self, event));
+    }
+
+    fn try_send(&mut self, event: Event) {
+        let _ = mpsc::Sender::try_send(self, event);
+    }
+}
+
+impl Output for std_mpsc::Sender<Event> {
+    fn send(&mut self, event: Event) {
+        let _ = std_mpsc::Sender::send(self, event);
+    }
+
+    fn try_send(&mut self, event: Event) {
+        let _ = std_mpsc::Sender::send(self, event);
+    }
+}
+
 /// What a scan stopped with "Annulla" ends with, instead of an error.
 pub const CANCELLED: &str = "annullata";
 
-/// The text of a failed scan for the interface: [`CANCELLED`] when it was
-/// the user who stopped it.
-fn error_text(e: hp3770_core::Error) -> String {
+/// The text of a failed call for the interface: [`CANCELLED`] when it was
+/// the user who stopped the scan.
+fn error_text(e: scanner_api::Error) -> String {
     match e {
-        hp3770_core::Error::Cancelled(_) => CANCELLED.into(),
+        scanner_api::Error::Cancelled => CANCELLED.into(),
         e => e.to_string(),
     }
 }
@@ -135,11 +172,14 @@ fn error_text(e: hp3770_core::Error) -> String {
 const BUTTON_POLL: Duration = Duration::from_millis(150);
 
 struct Worker {
-    output: mpsc::Sender<Event>,
+    registry: Registry,
+    output: Box<dyn Output>,
     cancel: Arc<AtomicBool>,
-    chip: Option<Chip<Scanner>>,
+    scanner: Option<Box<dyn Scanner>>,
+    /// The scanner chosen in the interface (none: the first found).
+    chosen: Option<DeviceInfo>,
     /// Buttons held at the last poll.
-    held: u8,
+    held: u32,
     /// When the scanner was last opened for the buttons (to retry slowly
     /// after it went away).
     last_open: Option<Instant>,
@@ -151,11 +191,13 @@ struct Worker {
 }
 
 impl Worker {
-    fn new(output: mpsc::Sender<Event>, cancel: Arc<AtomicBool>) -> Self {
+    fn new(registry: Registry, output: Box<dyn Output>, cancel: Arc<AtomicBool>) -> Self {
         Self {
+            registry,
             output,
             cancel,
-            chip: None,
+            scanner: None,
+            chosen: None,
             held: 0,
             last_open: None,
             lamp_used: Some(Instant::now()),
@@ -164,70 +206,102 @@ impl Worker {
         }
     }
 
-    /// Switches the flatbed lamp off (if the scanner is open), and tells
-    /// the interface the new state.
+    /// Whether the open scanner has a lamp the host switches.
+    fn has_lamp(&self) -> bool {
+        self.scanner
+            .as_ref()
+            .is_some_and(|s| s.capabilities().lamp.is_some())
+    }
+
+    /// Switches the lamp off (if the scanner is open and has one), and
+    /// tells the interface the new state.
     fn lamp_off(&mut self) {
-        let Some(chip) = self.chip.as_mut() else {
+        if !self.has_lamp() {
+            self.lamp_used = None;
+            return;
+        }
+        let Some(scanner) = self.scanner.as_mut() else {
             return;
         };
-        // lamp_flatbed reads the chip's block; the copy kept by a scan is
-        // not needed to switch off.
-        let mut init = hp3770_core::init::Registers::default();
-        match chip.lamp_flatbed(&mut init, false) {
+        // Not again every 150 ms if it fails: the scanner's own timer will.
+        self.lamp_used = None;
+        match scanner.lamp_off() {
             Ok(()) => {
-                self.lamp_used = None;
                 log("lampada spenta");
-                let status = chip.status().map_err(|e| e.to_string());
-                self.emit(Event::Status(status));
+                let status = scanner.status().map_err(error_text);
+                self.output.send(Event::Status(status));
             }
-            Err(e) => {
-                // Not again every 150 ms: the chip's own timer will.
-                self.lamp_used = None;
-                log(&format!("lampada non spenta: {e}"));
-            }
+            Err(e) => log(&format!("lampada non spenta: {e}")),
         }
     }
 
-    fn emit(&mut self, event: Event) {
-        let _ = iced::futures::executor::block_on(self.output.send(event));
-    }
-
-    /// The open scanner, opened if needed.
-    fn chip(&mut self) -> Result<&mut Chip<Scanner>, String> {
-        if self.chip.is_none() {
+    /// The open scanner, opened if needed: the one chosen, or the first.
+    fn scanner(&mut self) -> Result<&mut Box<dyn Scanner>, String> {
+        if self.scanner.is_none() {
             // For trying the interface without touching the scanner (for
             // instance while another program uses it).
             if std::env::var_os("HP3770_NO_SCANNER").is_some() {
                 return Err("scanner disattivato (HP3770_NO_SCANNER)".into());
             }
-            let scanner = hp3770_usb::open().map_err(|e| e.to_string())?;
-            self.chip = Some(Chip::new(scanner));
+            let devices = self.registry.list();
+            let first = self
+                .chosen
+                .as_ref()
+                .and_then(|c| devices.iter().find(|d| *d == c))
+                .or(devices.first())
+                .cloned();
+            let Some(device) = first else {
+                // Nothing listed: open as the backends would anyway, for
+                // their own words on why not.
+                return Err(match self.registry.open_first() {
+                    Ok(_) => "scanner non elencato".into(),
+                    Err(e) => error_text(e),
+                });
+            };
+            let scanner = self.registry.open(&device).map_err(error_text)?;
+            let caps = Box::new(scanner.capabilities().clone());
+            self.output.send(Event::Opened(device, caps, devices));
+            self.scanner = Some(scanner);
         }
-        Ok(self.chip.as_mut().expect("just opened"))
+        Ok(self.scanner.as_mut().expect("just opened"))
     }
 
-    fn run(mut self, commands: std_mpsc::Receiver<Command>) {
+    fn status(&mut self) -> Result<DeviceStatus, String> {
+        self.scanner().and_then(|s| s.status().map_err(error_text))
+    }
+
+    /// Reads the state for the interface; a scanner that does not answer
+    /// is opened again next time.
+    fn send_status(&mut self) {
+        let status = self.status();
+        if status.is_err() {
+            self.scanner = None;
+        }
+        self.output.send(Event::Status(status));
+    }
+
+    fn run(mut self, commands: &std_mpsc::Receiver<Command>) {
         loop {
             match commands.recv_timeout(BUTTON_POLL) {
-                Ok(Command::Status) => {
-                    let status = self
-                        .chip()
-                        .and_then(|c| c.status().map_err(|e| e.to_string()));
-                    if status.is_err() {
-                        self.chip = None;
-                    }
-                    self.emit(Event::Status(status));
+                Ok(Command::Status) => self.send_status(),
+                Ok(Command::Choose(device)) => {
+                    self.chosen = Some(device);
+                    self.scanner = None;
+                    self.held = 0;
+                    self.send_status();
                 }
                 Ok(Command::Scan(purpose, request)) => {
                     let result = self.scan(&request);
-                    if result.is_err() {
+                    if result.as_ref().is_err_and(|e| e != CANCELLED) {
                         // Open the scanner again next time.
-                        self.chip = None;
+                        self.scanner = None;
                     }
-                    self.emit(Event::Done(purpose, result.map(Arc::new)));
+                    self.output.send(Event::Done(purpose, result.map(Arc::new)));
                     // Presses during the scan are not taken.
-                    self.held = 0xff;
-                    self.lamp_used = Some(Instant::now());
+                    self.held = u32::MAX;
+                    if self.has_lamp() {
+                        self.lamp_used = Some(Instant::now());
+                    }
                 }
                 Ok(Command::LampTimer(after)) => self.lamp_after = after,
                 Ok(Command::LampOff(done)) => {
@@ -247,34 +321,39 @@ impl Worker {
         }
     }
 
-    fn scan(&mut self, request: &Request) -> Result<(Image, Report), String> {
+    fn scan(&mut self, request: &ScanRequest) -> Result<ScanResult, String> {
         let cancel = self.cancel.clone();
-        let mut output = self.output.clone();
-        let chip = self.chip()?;
+        self.scanner()?;
+        let mut scanner = self.scanner.take().expect("just opened");
         // Never wait for the interface while the image comes in: if the
-        // chip's buffer fills, the carriage stops and goes back, and the
+        // scanner's buffer fills, the carriage stops and goes back, and the
         // line read across the stop comes out brighter. Only changes of
         // the percentage are sent, and dropped if the queue is full.
         let mut last = None;
-        session::scan(chip, &HP3770, request, &mut |stage| {
-            let key = match stage {
-                Stage::Scanning { done, total } => done * 100 / total.max(1),
-                _ => usize::MAX,
-            };
-            if last != Some(key) || key == usize::MAX {
-                last = Some(key);
-                let _ = output.try_send(Event::Progress(stage));
-            }
-            !cancel.load(Ordering::SeqCst)
-        })
-        .map_err(error_text)
+        let output = &mut self.output;
+        let result = scanner
+            .scan(request, &mut |progress| {
+                let key = match progress {
+                    Progress::Scanning { done, total } => done * 100 / total.max(1),
+                    _ => usize::MAX,
+                };
+                if last != Some(key) || key == usize::MAX {
+                    last = Some(key);
+                    output.try_send(Event::Progress(progress));
+                }
+                !cancel.load(Ordering::SeqCst)
+            })
+            .map_err(error_text);
+        self.scanner = Some(scanner);
+        result
     }
 
-    /// Reads the buttons. If the scanner went away (unplugged, switched
-    /// off, taken for a moment by another program) it is opened again,
-    /// at most every 300 ms, so the buttons never stop working.
+    /// Reads the buttons of a scanner that has some. If the scanner went
+    /// away (unplugged, switched off, taken for a moment by another
+    /// program) it is opened again, at most every 300 ms, so the buttons
+    /// never stop working.
     fn poll_buttons(&mut self) {
-        if self.chip.is_none() {
+        if self.scanner.is_none() {
             if self
                 .last_open
                 .is_some_and(|t| t.elapsed() < Duration::from_millis(300))
@@ -282,27 +361,28 @@ impl Worker {
                 return;
             }
             self.last_open = Some(Instant::now());
-            if let Err(e) = self.chip() {
+            if let Err(e) = self.scanner() {
                 log(&format!("scanner non aperto: {e}"));
                 return;
             }
             log("scanner riaperto");
-            let status = self
-                .chip()
-                .and_then(|c| c.status().map_err(|e| e.to_string()));
-            self.emit(Event::Status(status));
+            let status = self.status();
+            self.output.send(Event::Status(status));
             // A button still held when the scanner comes back is the press
             // that made it go away (Windows reacting to the same press).
             self.held = 0;
         }
-        let Some(chip) = self.chip.as_mut() else {
+        let Some(scanner) = self.scanner.as_mut() else {
             return;
         };
-        let held = match chip.buttons_held() {
+        if scanner.capabilities().buttons.is_empty() {
+            return;
+        }
+        let held = match scanner.poll_buttons() {
             Ok(held) => held,
             Err(e) => {
                 log(&format!("lettura tasti non riuscita: {e}"));
-                self.chip = None;
+                self.scanner = None;
                 return;
             }
         };
@@ -316,11 +396,15 @@ impl Worker {
             log(&format!("lettura scartata: {pressed:02x}"));
             return;
         }
-        for button in [Button::Scan, Button::Copy, Button::InstantShare] {
-            if pressed & button.mask() != 0 {
-                log(&format!("tasto {}", button.name()));
-                self.emit(Event::Button(button));
-            }
+        let index = pressed.trailing_zeros() as usize;
+        let label = scanner
+            .capabilities()
+            .buttons
+            .get(index)
+            .map(|b| b.label.clone());
+        if let Some(label) = label {
+            log(&format!("tasto {label}"));
+            self.output.send(Event::Button(index));
         }
     }
 }
@@ -350,157 +434,15 @@ fn log(line: &str) {
     }
 }
 
-/// A scanner made up in memory, for the tests of the interface and for
-/// trying it with no scanner (`HP3770_FAKE_SCANNER=1`): a white lid with
-/// three originals on the glass, scanned at any resolution and in any mode.
+/// The made-up scanners for the tests of the interface: the real thread,
+/// on [`scanner_api::fake`] scanners.
+#[cfg(test)]
 pub mod fake {
     use super::*;
-    use hp3770_core::geometry::Area;
-    use hp3770_core::status::Lamp;
-    use scan_imaging::{Format, Mode};
+    use scanner_api::fake::{FakeBackend, FakeScanner};
 
-    // The glass with the originals on it: the same made-up glass as
-    // scanner_api::fake.
-    use scanner_api::fake::glass;
-
-    /// The scanner state of the made-up scanner, its lamp on or off.
-    pub fn status(lamp_on: bool) -> Status {
-        Status {
-            usb2: true,
-            chipset_id: 6,
-            init_done: true,
-            executing: false,
-            head_at_home: true,
-            lamp: if lamp_on { Lamp::Flatbed } else { Lamp::Off },
-            tma_attached: false,
-            buttons_held: 0,
-            link_word: 1024,
-        }
-    }
-
-    /// The scan of `request`, as the real scanner would give it back.
-    pub fn scan(request: &Request) -> (Image, Report) {
-        let Area {
-            x,
-            y,
-            width,
-            height,
-        } = request.area;
-        let (width, height) = (width as usize, height as usize);
-        let dpi = f64::from(request.dpi);
-        let mut rgb = Vec::with_capacity(width * height * 3);
-        for row in 0..height {
-            let gy = (f64::from(y) + row as f64 + 0.5) / dpi;
-            for col in 0..width {
-                let gx = (f64::from(x) + col as f64 + 0.5) / dpi;
-                rgb.extend_from_slice(&glass(gx, gy));
-            }
-        }
-        let grey = |p: &[u8]| {
-            ((u32::from(p[0]) * 299 + u32::from(p[1]) * 587 + u32::from(p[2]) * 114) / 1000) as u8
-        };
-        let (format, data) = match request.mode {
-            Mode::Colour => (Format::Rgb, rgb.clone()),
-            Mode::Grey => (Format::Grey, rgb.chunks_exact(3).map(grey).collect()),
-            Mode::Lineart { threshold } => {
-                let stride = width.div_ceil(8);
-                let mut data = vec![0u8; stride * height];
-                for (i, p) in rgb.chunks_exact(3).enumerate() {
-                    if grey(p) >= 255 - threshold {
-                        let (row, col) = (i / width, i % width);
-                        data[row * stride + col / 8] |= 0x80 >> (col % 8);
-                    }
-                }
-                (Format::Lineart, data)
-            }
-        };
-        let samples16 = (request.depth == 16 && request.mode == Mode::Colour)
-            .then(|| rgb.iter().map(|&v| u16::from(v) * 257).collect());
-        (
-            Image {
-                width,
-                height,
-                dpi: request.dpi,
-                format,
-                data,
-            },
-            Report {
-                warmed_up: false,
-                gains: [16, 14, 21],
-                offsets: [300, 300, 310],
-                peak_buffered: 0,
-                white: [Vec::new(), Vec::new(), Vec::new()],
-                samples16,
-            },
-        )
-    }
-
-    /// Answers the interface's commands like the scanner thread, taking
-    /// `pace` for each stage of a scan (so that "Annulla" can stop it).
-    pub fn run(
-        commands: &std_mpsc::Receiver<Command>,
-        cancel: &AtomicBool,
-        pace: Duration,
-        mut emit: impl FnMut(Event),
-    ) {
-        // The lamp as the real thread handles it: on after a scan, off after
-        // the time set without scanning, or when asked.
-        let mut lamp_used = Some(Instant::now());
-        let mut lamp_after = Duration::from_secs(120);
-        loop {
-            let command = match commands.recv_timeout(Duration::from_millis(50)) {
-                Ok(command) => command,
-                Err(std_mpsc::RecvTimeoutError::Timeout) => {
-                    if lamp_due(lamp_used, lamp_after, Instant::now()) {
-                        lamp_used = None;
-                        emit(Event::Status(Ok(status(false))));
-                    }
-                    continue;
-                }
-                Err(std_mpsc::RecvTimeoutError::Disconnected) => return,
-            };
-            match command {
-                Command::Status => emit(Event::Status(Ok(status(lamp_used.is_some())))),
-                Command::LampTimer(after) => lamp_after = after,
-                Command::LampOff(done) => {
-                    lamp_used = None;
-                    emit(Event::Status(Ok(status(false))));
-                    if let Some(done) = done {
-                        let _ = done.send(());
-                    }
-                }
-                Command::Scan(purpose, request) => {
-                    let stages = [
-                        Stage::Starting,
-                        Stage::Calibrating,
-                        Stage::Scanning { done: 1, total: 2 },
-                        Stage::Finishing,
-                    ];
-                    let mut cancelled = false;
-                    for stage in stages {
-                        emit(Event::Progress(stage));
-                        std::thread::sleep(pace);
-                        if cancel.load(Ordering::SeqCst) {
-                            cancelled = true;
-                            break;
-                        }
-                    }
-                    let result = if cancelled {
-                        Err(CANCELLED.to_string())
-                    } else {
-                        Ok(Arc::new(scan(&request)))
-                    };
-                    lamp_used = Some(Instant::now());
-                    emit(Event::Done(purpose, result));
-                }
-            }
-        }
-    }
-
-    /// A made-up scanner on a thread of its own, for the tests: the handle
-    /// the interface sends to, and where its events come out.
-    #[cfg(test)]
-    pub fn spawn(pace: Duration) -> (Handle, std_mpsc::Receiver<Event>) {
+    /// The thread with these made-up scanners (the first is opened).
+    pub fn spawn_with(scanners: Vec<FakeScanner>) -> (Handle, std_mpsc::Receiver<Event>) {
         let (commands, receiver) = std_mpsc::channel();
         let (events, out) = std_mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -508,10 +450,9 @@ pub mod fake {
             commands,
             cancel: cancel.clone(),
         };
+        let registry = Registry::new().with(FakeBackend::new(scanners));
         std::thread::spawn(move || {
-            run(&receiver, &cancel, pace, |e| {
-                let _ = events.send(e);
-            });
+            Worker::new(registry, Box::new(events), cancel).run(&receiver);
         });
         (handle, out)
     }
@@ -538,10 +479,68 @@ mod tests {
 
     #[test]
     fn a_scan_stopped_by_the_user_is_not_an_error() {
-        assert_eq!(error_text(hp3770_core::Error::Cancelled("scan")), CANCELLED);
+        assert_eq!(error_text(scanner_api::Error::Cancelled), CANCELLED);
         assert_ne!(
-            error_text(hp3770_core::Error::Transport("gone".into())),
+            error_text(scanner_api::Error::Disconnected("gone".into())),
             CANCELLED
         );
+    }
+
+    fn next(events: &std_mpsc::Receiver<Event>) -> Event {
+        events
+            .recv_timeout(Duration::from_secs(10))
+            .expect("an event")
+    }
+
+    #[test]
+    fn a_press_comes_once_and_only_for_buttons_there_are() {
+        use scanner_api::fake::FakeScanner;
+        let scanner = FakeScanner::a3();
+        let controls = scanner.controls();
+        let (handle, events) = fake::spawn_with(vec![scanner]);
+        handle.send(Command::Status);
+        assert!(matches!(next(&events), Event::Opened(..)));
+        assert!(matches!(next(&events), Event::Status(Ok(_))));
+        controls.hold(1, true);
+        assert!(matches!(next(&events), Event::Button(1)));
+        // Held down: not again.
+        assert!(events.recv_timeout(Duration::from_millis(500)).is_err());
+        controls.hold(1, false);
+        // A bit beyond its two buttons is never a press.
+        controls.hold(4, true);
+        assert!(events.recv_timeout(Duration::from_millis(500)).is_err());
+    }
+
+    #[test]
+    fn a_scanner_without_a_lamp_is_never_asked_to_switch_it_off() {
+        use scanner_api::fake::FakeScanner;
+        let (handle, events) = fake::spawn_with(vec![FakeScanner::a3()]);
+        handle.send(Command::Status);
+        let _ = next(&events);
+        let _ = next(&events);
+        let (done, wait) = std_mpsc::channel();
+        handle.send(Command::LampOff(Some(done)));
+        wait.recv_timeout(Duration::from_secs(5)).unwrap();
+        // No status after it: nothing was switched.
+        assert!(events.recv_timeout(Duration::from_millis(400)).is_err());
+    }
+
+    #[test]
+    fn the_scanner_chosen_is_the_one_opened() {
+        use scanner_api::fake::FakeScanner;
+        let (handle, events) = fake::spawn_with(vec![FakeScanner::flatbed(), FakeScanner::a3()]);
+        handle.send(Command::Status);
+        let Event::Opened(first, _, all) = next(&events) else {
+            panic!("opened");
+        };
+        assert_eq!(first.name, "Prova Piano A4");
+        assert_eq!(all.len(), 2);
+        let _ = next(&events);
+        handle.send(Command::Choose(all[1].clone()));
+        let Event::Opened(second, caps, _) = next(&events) else {
+            panic!("opened");
+        };
+        assert_eq!(second.name, "Prova Piano A3");
+        assert_eq!(caps.max_dpi(), 1200);
     }
 }

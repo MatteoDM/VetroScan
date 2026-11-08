@@ -211,6 +211,13 @@ impl scanner_api::Backend for UsbBackend {
             .collect()
     }
 
+    fn models(&self) -> Vec<scanner_api::Capabilities> {
+        hp3770_core::profile::PROFILES
+            .into_iter()
+            .map(hp3770_core::rts8822::capabilities)
+            .collect()
+    }
+
     /// Opens the scanner as [`open`] does (`usbscan.sys` first on Windows),
     /// so its errors say what each way of opening it found.
     fn open(
