@@ -12,6 +12,7 @@
 //! value gives Windows its default back.
 
 /// WIA's "take no action" event handler.
+#[cfg(windows)]
 pub const NO_ACTION: &str = "{E0372B7D-E115-4525-BC55-B629E68C745A}";
 
 #[cfg(windows)]
