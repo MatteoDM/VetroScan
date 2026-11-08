@@ -14,6 +14,17 @@ manca.
 
 ## [Unreleased]
 
+### Added
+- **PDF, una pagina diversa dalle altre**: orientamento, posizione sul foglio e margine per
+  pagina («Impaginazione propria»), con **Applica a tutte le pagine** e **Come le altre**.
+- **Il foglio nel visore**: con il pannello Uscita aperto, la pagina sul suo foglio com'è nel
+  PDF, il margine tratteggiato e in rosso il bordo di quello che finisce sulla carta; con
+  «Riempi il foglio» si trascina la pagina per scegliere cosa tenere.
+
+### Fixed
+- PDF a dimensione reale con un margine impostato: una pagina grande quanto il foglio non
+  viene più tagliata al margine (a dimensione reale il margine non vale).
+
 ### Changed
 - Riaprendo l'app le **regolazioni** (colori, toni, curva, nitidezza, soglia del bianco e
   nero) ripartono da zero invece di tornare quelle della volta prima; risoluzione, colore,

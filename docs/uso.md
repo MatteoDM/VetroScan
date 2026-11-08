@@ -470,13 +470,24 @@ vero si sceglie poi **Sul foglio**:
 
 **Orientamento**: *Automatico* gira il foglio in orizzontale per le scansioni più larghe che
 alte; *Verticale* o *Orizzontale* tengono tutti i fogli così (un ritaglio orizzontale su un
-A4 verticale, per esempio, va in alto, largo quanto il foglio). Una pagina può fare
-eccezione: con la pagina mostrata nel visore, **Solo la pagina N** sceglie *Verticale* o
-*Orizzontale* soltanto per lei, e nella colonna delle pagine compare **vert.** o **oriz.**
-accanto al suo numero. Per avere
-proprio la forma del foglio, ritaglia prima nell'[editor](#modificare-una-scansione-già-fatta)
-con la proporzione *A4 / A3 / A5* o *Foto 10 × 15*: con **Adatta al foglio** il ritaglio
-riempie allora tutto il foglio, margine a parte.
+A4 verticale, per esempio, va in alto, largo quanto il foglio).
+
+**Una pagina diversa dalle altre.** Orientamento, *Sul foglio* e margine valgono per tutte le
+pagine; per quella mostrata nel visore, **Impaginazione propria per la pagina N** le dà
+scelte sue (nella colonna delle pagine compare **foglio** accanto al numero). Da lì
+**Applica a tutte le pagine** fa delle sue scelte quelle del documento (e toglie le
+eccezioni), **Come le altre** la riporta a quelle del documento.
+
+**Il foglio nel visore.** Con il pannello **Uscita** aperto e un PDF su un foglio vero, il
+visore mostra la pagina sul suo foglio com'è nel PDF: il margine tratteggiato e, **in rosso,
+il bordo di quello che finisce sulla carta**. Con **Riempi il foglio** la parte che avanza
+resta visibile, scurita, fuori dal bordo rosso: **trascina la pagina** per scegliere quale
+parte tenere (la scelta resta a ogni pagina e il PDF taglia esattamente così).
+
+Per avere proprio la forma del foglio, ritaglia prima
+nell'[editor](#modificare-una-scansione-già-fatta) con la proporzione *A4 / A3 / A5* o
+*Foto 10 × 15*: con **Adatta al foglio** il ritaglio riempie allora tutto il foglio, margine a
+parte.
 
 #### La dimensione del PDF
 

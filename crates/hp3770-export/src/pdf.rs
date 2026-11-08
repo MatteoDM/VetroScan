@@ -81,7 +81,7 @@ pub enum Orientation {
 }
 
 /// The sheet of the pages and where the scan goes on it.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Layout {
     pub size: PageSize,
     pub orientation: Orientation,
@@ -90,6 +90,21 @@ pub struct Layout {
     /// fitted to the sheet or fills it (not at real size, nor with
     /// [`PageSize::Fit`]).
     pub margin_mm: f64,
+    /// When the scan fills the sheet and overflows it: which part is kept,
+    /// across and down, 0 to 1 (0: the left or top edge, 0.5: the middle).
+    pub focus: [f64; 2],
+}
+
+impl Default for Layout {
+    fn default() -> Self {
+        Self {
+            size: PageSize::default(),
+            orientation: Orientation::default(),
+            placement: Placement::default(),
+            margin_mm: 0.0,
+            focus: [0.5, 0.5],
+        }
+    }
 }
 
 impl From<PageSize> for Layout {
@@ -138,18 +153,33 @@ impl Layout {
             (sw.min(sh), sw.max(sh))
         };
         let (pw, ph) = (sw * MM, sh * MM);
-        // The margin, at most a third of the shorter side.
-        let m = (self.margin_mm.max(0.0) * MM).min(pw.min(ph) / 3.0);
+        // The margin, at most a third of the shorter side; none at real size
+        // (an A4 page on A4 stays as it is).
+        let m = match self.placement {
+            Placement::Actual => 0.0,
+            _ => (self.margin_mm.max(0.0) * MM).min(pw.min(ph) / 3.0),
+        };
         let (aw, ah) = (pw - 2.0 * m, ph - 2.0 * m);
         let fit = (aw / iw).min(ah / ih);
         let scale = match self.placement {
-            // An A4 page on A4 stays as it is: no margin at real size.
-            Placement::Actual => (pw / iw).min(ph / ih).min(1.0),
+            Placement::Actual => fit.min(1.0),
             Placement::FitPage => fit,
             Placement::Fill => (aw / iw).max(ah / ih),
         };
         let (dw, dh) = (iw * scale, ih * scale);
-        let (x, y) = ((pw - dw) / 2.0, (ph - dh) / 2.0);
+        // Centred; overflowing (Fill), moved so that the part chosen shows
+        // (y from the bottom: the top of the scan is at the top).
+        let [fx, fy] = self.focus.map(|f| f.clamp(0.0, 1.0));
+        let x = if dw > aw + 0.01 {
+            m + (aw - dw) * fx
+        } else {
+            (pw - dw) / 2.0
+        };
+        let y = if dh > ah + 0.01 {
+            m + (ah - dh) * (1.0 - fy)
+        } else {
+            (ph - dh) / 2.0
+        };
         let overflows = dw > aw + 0.01 || dh > ah + 0.01;
         Placed {
             page: (pw, ph),
@@ -355,6 +385,7 @@ mod tests {
             orientation: Orientation::Auto,
             placement: Placement::FitPage,
             margin_mm: 10.0,
+            focus: [0.5, 0.5],
         };
         let p = layout.place(2.0, 3.0);
         let (aw, ah) = (595.276 - 2.0 * 10.0 * MM, 841.89 - 2.0 * 10.0 * MM);
@@ -371,12 +402,54 @@ mod tests {
     }
 
     #[test]
+    fn at_real_size_the_margin_cuts_nothing() {
+        // A full A4 page on A4 with a margin set: as it is, no clip.
+        let layout = Layout {
+            size: PageSize::A4,
+            margin_mm: 10.0,
+            ..Layout::default()
+        };
+        let p = layout.place(210.0 / 25.4, 297.0 / 25.4);
+        assert_eq!(p.clip, None, "{p:?}");
+        assert!(near(p.image[2], 595.276) && near(p.image[0], 0.0), "{p:?}");
+    }
+
+    #[test]
+    fn the_part_kept_of_a_filled_sheet_is_chosen() {
+        // A wide scan filling an upright 10 x 15: it overflows across.
+        let layout = |fx| Layout {
+            size: PageSize::Photo10x15,
+            orientation: Orientation::Portrait,
+            placement: Placement::Fill,
+            margin_mm: 0.0,
+            focus: [fx, 0.5],
+        };
+        let left = layout(0.0).place(6.0, 4.0);
+        let middle = layout(0.5).place(6.0, 4.0);
+        let right = layout(1.0).place(6.0, 4.0);
+        // The left edge of the scan at the left edge of the sheet...
+        assert!(near(left.image[0], 0.0), "{left:?}");
+        // ...its right edge at the right edge of the sheet...
+        assert!(
+            near(right.image[0] + right.image[2], right.page.0),
+            "{right:?}"
+        );
+        // ...or centred.
+        assert!(
+            near(middle.image[0] * 2.0 + middle.image[2], middle.page.0),
+            "{middle:?}"
+        );
+        assert!(left.clip.is_some());
+    }
+
+    #[test]
     fn a_landscape_scan_on_a_sheet_kept_upright() {
         let layout = Layout {
             size: PageSize::A4,
             orientation: Orientation::Portrait,
             placement: Placement::FitPage,
             margin_mm: 10.0,
+            focus: [0.5, 0.5],
         };
         let p = layout.place(9.0, 6.0);
         assert!(p.page.0 < p.page.1, "{p:?}");
@@ -421,6 +494,7 @@ mod tests {
             orientation: Orientation::Auto,
             placement: Placement::Fill,
             margin_mm: 0.0,
+            focus: [0.5, 0.5],
         };
         let p = layout.place(4.0, 4.0);
         assert!(near(p.image[3], p.image[2]));
@@ -436,6 +510,7 @@ mod tests {
             orientation: Orientation::Auto,
             placement: Placement::Fill,
             margin_mm: 5.0,
+            focus: [0.5, 0.5],
         };
         let mut out = Vec::new();
         write(&mut out, &[sample(Format::Grey)], layout, 85).unwrap();

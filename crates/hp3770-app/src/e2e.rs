@@ -637,7 +637,7 @@ fn pdf_boxes(ui: &Ui) -> Vec<(f64, f64)> {
 
 #[test]
 fn landscape_crops_on_upright_sheets_and_one_page_turned_its_own_way() {
-    use crate::{PageSheet, PdfFit, PdfSize, Sheet};
+    use crate::{PdfFit, PdfSize, Sheet};
     let mut ui = Ui::new();
     ui.send(Message::Kind(Kind::Photo));
     ui.click("Anteprima");
@@ -652,14 +652,174 @@ fn landscape_crops_on_upright_sheets_and_one_page_turned_its_own_way() {
     // The second page sideways, the first as the document.
     ui.send(Message::PageShow(1));
     ui.send(Message::Pane(crate::Pane::Output));
-    assert!(ui.shows("Solo la foto 2"));
-    ui.send(Message::PageSheet(PageSheet(Some(Sheet::Landscape))));
-    assert!(ui.shows("2 · oriz."));
+    assert!(ui.shows("Impaginazione propria per la foto 2"));
+    ui.send(Message::PdfOwnLayout(true));
+    ui.send(Message::PdfSheet(Sheet::Landscape));
+    assert!(ui.shows("2 · foglio"));
+    assert_eq!(
+        ui.app.photo.pdf_sheet,
+        Sheet::Portrait,
+        "the document stays"
+    );
     ui.send(Message::Save);
     let boxes = pdf_boxes(&ui);
     assert_eq!(boxes.len(), 2);
     assert!(boxes[0].0 < boxes[0].1, "page 1 upright: {boxes:?}");
     assert!(boxes[1].0 > boxes[1].1, "page 2 sideways: {boxes:?}");
+}
+
+/// Two photos, PDF on A4 fitted with a 10 mm margin, the output panel
+/// open on the second.
+fn two_photos_on_a4() -> Ui {
+    use crate::{Margin, PdfFit, PdfSize};
+    let mut ui = Ui::new();
+    ui.send(Message::Kind(Kind::Photo));
+    ui.click("Anteprima");
+    ui.send(Message::DropFound(2));
+    ui.scan(1);
+    assert_eq!(ui.app.pages.len(), 2);
+    ui.send(Message::Output(crate::Output::Pdf));
+    ui.send(Message::PdfSize(PdfSize::A4));
+    ui.send(Message::PdfFit(PdfFit::Page));
+    ui.send(Message::PdfMargin(Margin(10)));
+    ui.send(Message::PageShow(1));
+    ui.send(Message::Pane(crate::Pane::Output));
+    ui
+}
+
+/// The image matrix (width, height, left, bottom) of every page of the
+/// PDF saved.
+fn pdf_matrices(ui: &Ui) -> Vec<[f64; 4]> {
+    let name = ui
+        .saved()
+        .into_iter()
+        .find(|n| n.ends_with(".pdf"))
+        .expect("a PDF");
+    let bytes = std::fs::read(ui.app.folder().join(name)).unwrap();
+    String::from_utf8_lossy(&bytes)
+        .split(
+            "stream
+q ",
+        )
+        .skip(1)
+        .map(|s| {
+            let s = s.split(" cm").next().unwrap();
+            let s = s.rsplit("re W n").next().unwrap();
+            let v: Vec<f64> = s
+                .split_whitespace()
+                .filter_map(|w| w.parse().ok())
+                .collect();
+            [v[0], v[3], v[4], v[5]]
+        })
+        .collect()
+}
+
+#[test]
+fn one_page_has_its_own_margin_and_then_gives_it_to_all() {
+    use crate::{Margin, PdfFit};
+    let mut ui = two_photos_on_a4();
+    assert!(ui.app.print_preview(), "the sheet is in the viewer");
+    ui.send(Message::PdfOwnLayout(true));
+    ui.send(Message::PdfMargin(Margin(20)));
+    assert_eq!(ui.app.photo.pdf_margin, 10, "the document keeps its margin");
+    assert!(ui.shows("Applica a tutte le pagine"));
+    ui.send(Message::Save);
+    let m = pdf_matrices(&ui);
+    // Page 2 fitted inside a wider margin: smaller than page 1's fit
+    // would make it, and no closer than 20 mm to the edge.
+    let mm = 72.0 / 25.4;
+    assert!(
+        m[1][2] >= 20.0 * mm - 0.5 && m[1][3] >= 20.0 * mm - 0.5,
+        "{m:?}"
+    );
+    // Its layout for every page.
+    ui.send(Message::PdfFit(PdfFit::Fill));
+    ui.send(Message::PdfApplyToAll);
+    assert_eq!(ui.app.photo.pdf_margin, 20);
+    assert_eq!(ui.app.photo.pdf_fit, PdfFit::Fill);
+    assert!(ui.app.pages.iter().all(|p| p.layout.is_none()));
+    // And back: "Come le altre" drops an own layout.
+    ui.send(Message::PdfOwnLayout(true));
+    ui.send(Message::PdfMargin(Margin(5)));
+    ui.click("Come le altre");
+    assert!(ui.app.pages[1].layout.is_none());
+    assert_eq!(ui.app.photo.pdf_margin, 20);
+}
+
+#[test]
+fn the_part_kept_of_a_filled_page_is_where_it_was_dragged() {
+    use crate::PdfFit;
+    let mut ui = two_photos_on_a4();
+    ui.send(Message::PageShow(0));
+    ui.send(Message::PdfFit(PdfFit::Fill));
+    // The first photo (4 x 2.8 in) fills a landscape A4 and overflows it
+    // in height: kept, its top, then its bottom.
+    let saved_with = |ui: &mut Ui, focus: [f32; 2]| {
+        for name in ui.saved() {
+            std::fs::remove_file(ui.app.folder().join(name)).unwrap();
+        }
+        ui.send(Message::PageFocus(focus));
+        ui.send(Message::Save);
+        pdf_matrices(ui)[0]
+    };
+    let top = saved_with(&mut ui, [0.5, 0.0]);
+    let bottom = saved_with(&mut ui, [0.5, 1.0]);
+    // y from the bottom of the sheet: the top part kept puts the image
+    // low (its top at the top of the margin), the bottom part high.
+    assert!(top[3] < bottom[3] - 1.0, "top {top:?} bottom {bottom:?}");
+    assert_eq!(top[0], bottom[0], "same size");
+}
+
+#[test]
+#[ignore = "writes a screenshot to look at"]
+fn screenshot_of_the_print_preview() {
+    use crate::PdfFit;
+    let mut ui = two_photos_on_a4();
+    ui.send(Message::PageShow(0));
+    ui.send(Message::PdfFit(PdfFit::Fill));
+    ui.send(Message::PageFocus([0.5, 0.2]));
+    let mut sim = iced_test::Simulator::with_size(
+        iced::Settings::default(),
+        Size::new(1360.0, 900.0),
+        ui.app.view(),
+    );
+    let snapshot = sim.snapshot(&iced::Theme::Dark).unwrap();
+    let path = std::env::temp_dir().join("hp3770-print-preview.png");
+    let _ = std::fs::remove_file(&path);
+    let _ = snapshot.matches_image(&path);
+    eprintln!("screenshot: {}", path.display());
+}
+
+#[test]
+fn dragging_the_page_on_the_sheet_moves_what_is_kept() {
+    use crate::PdfFit;
+    use iced::mouse;
+    let mut ui = two_photos_on_a4();
+    ui.send(Message::PdfFit(PdfFit::Fill));
+    ui.send(Message::PageFocus([0.5, 0.5]));
+    assert!(ui.app.print_preview());
+    // Press in the middle of the viewer (the sheet is centred there), drag
+    // right: more of the left part is kept.
+    let mut sim = iced_test::Simulator::with_size(
+        iced::Settings::default(),
+        Size::new(1360.0, 900.0),
+        ui.app.view(),
+    );
+    let at = |x: f32, y: f32| iced::Point::new(x, y);
+    sim.point_at(at(560.0, 450.0));
+    let _ = sim.simulate([iced::Event::Mouse(mouse::Event::ButtonPressed(
+        mouse::Button::Left,
+    ))]);
+    sim.point_at(at(660.0, 450.0));
+    let _ = sim.simulate([iced::Event::Mouse(mouse::Event::CursorMoved {
+        position: at(660.0, 450.0),
+    })]);
+    let messages: Vec<Message> = sim.into_messages().collect();
+    for m in messages {
+        ui.send(m);
+    }
+    let focus = ui.app.pages[1].focus;
+    assert!(focus[0] < 0.5 || focus[1] < 0.5, "moved: {focus:?}");
 }
 
 // ------------------------------------------------- size of the PDF

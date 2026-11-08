@@ -22,6 +22,7 @@ mod e2e;
 mod editor;
 mod histogram;
 mod prefs;
+mod sheet;
 mod testing;
 mod viewer;
 mod wia;
@@ -415,25 +416,14 @@ impl From<Sheet> for hp3770_export::Orientation {
     }
 }
 
-/// The sheet of one page: as the document's, or turned its own way.
+/// How a page sits on its sheet of the PDF: which way the sheet is turned,
+/// where the page goes on it, the margin. The document has one; a page may
+/// have its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct PageSheet(Option<Sheet>);
-
-const PAGE_SHEETS: [PageSheet; 3] = [
-    PageSheet(None),
-    PageSheet(Some(Sheet::Portrait)),
-    PageSheet(Some(Sheet::Landscape)),
-];
-
-impl std::fmt::Display for PageSheet {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self.0 {
-            None => "Come il documento",
-            Some(Sheet::Auto) => "Automatico",
-            Some(Sheet::Portrait) => "Verticale",
-            Some(Sheet::Landscape) => "Orizzontale",
-        })
-    }
+struct PageLayout {
+    sheet: Sheet,
+    fit: PdfFit,
+    margin: u8,
 }
 
 /// The chip switches the lamp off by itself after this many minutes (the
@@ -629,18 +619,29 @@ impl Settings {
         }
     }
 
-    /// How a PDF page is laid out: on the sheet of the document, turned
-    /// `own` way if the page has one.
-    fn layout(&self, own: Option<Sheet>) -> hp3770_export::Layout {
+    /// The layout of the document's pages (those without their own).
+    fn page_layout(&self) -> PageLayout {
+        PageLayout {
+            sheet: self.pdf_sheet,
+            fit: self.pdf_fit,
+            margin: self.pdf_margin,
+        }
+    }
+
+    /// How a PDF page is laid out: on the document's sheet, with its own
+    /// layout if it has one, the part `focus` kept when it overflows.
+    fn layout(&self, own: Option<PageLayout>, focus: [f32; 2]) -> hp3770_export::Layout {
+        let l = own.unwrap_or(self.page_layout());
         hp3770_export::Layout {
             size: self.pdf_size.into(),
-            orientation: own.unwrap_or(self.pdf_sheet).into(),
-            placement: match self.pdf_fit {
+            orientation: l.sheet.into(),
+            placement: match l.fit {
                 PdfFit::Actual => hp3770_export::Placement::Actual,
                 PdfFit::Page => hp3770_export::Placement::FitPage,
                 PdfFit::Fill => hp3770_export::Placement::Fill,
             },
-            margin_mm: f64::from(self.pdf_margin),
+            margin_mm: f64::from(l.margin),
+            focus: focus.map(f64::from),
         }
     }
 
@@ -1265,8 +1266,11 @@ struct Page {
     transform: Transform,
     /// The colour mode it was scanned in.
     scanned_colour: Colour,
-    /// Its sheet in a PDF turned its own way (none: as the document's).
-    sheet: Option<Sheet>,
+    /// Its own layout in a PDF (none: the document's).
+    layout: Option<PageLayout>,
+    /// In a PDF, when it fills the sheet and overflows it: the part kept,
+    /// across and down (0 to 1, 0.5 the middle).
+    focus: [f32; 2],
 }
 
 impl Page {
@@ -1292,8 +1296,21 @@ impl Page {
             raw16: None,
             transform: Transform::default(),
             scanned_colour: settings.colour,
-            sheet: None,
+            layout: None,
+            focus: [0.5, 0.5],
         }
+    }
+
+    /// Its size in inches as finished (crop, turns and size applied).
+    fn inches(&self) -> (f64, f64) {
+        let full = &self.raw.full;
+        let (w, h) = self.transform.output_size(full.width, full.height);
+        let dpi = f64::from(
+            self.transform
+                .output_dpi(full.width, full.height, full.dpi)
+                .max(1),
+        );
+        (w as f64 / dpi, h as f64 / dpi)
     }
 
     /// What the editor changes.
@@ -1725,8 +1742,13 @@ enum Message {
     PdfLimitText(String),
     /// The estimate of the PDF is ready.
     Estimated(Arc<Estimated>),
-    /// The sheet of the page shown: as the document's, or its own way.
-    PageSheet(PageSheet),
+    /// The page shown gets a layout of its own in the PDF (from the
+    /// document's), or goes back to the document's.
+    PdfOwnLayout(bool),
+    /// The layout of the page shown becomes the document's, for every page.
+    PdfApplyToAll,
+    /// The part kept of the page shown, when it overflows its sheet.
+    PageFocus([f32; 2]),
     AutoSave(bool),
     AutoCrop(bool),
     /// Find the originals on the preview again.
@@ -2171,7 +2193,9 @@ impl App {
                 | Message::PageMove(..)
                 | Message::PageDelete(_)
                 | Message::PageDuplicate(_)
-                | Message::PageSheet(_)
+                | Message::PdfOwnLayout(_)
+                | Message::PdfApplyToAll
+                | Message::PageFocus(_)
                 | Message::AcceptRedo
         )
     }
@@ -2841,6 +2865,34 @@ impl App {
         }
     }
 
+    /// The own layout of the page shown, if it has one.
+    fn own_layout_mut(&mut self) -> Option<&mut PageLayout> {
+        self.current
+            .and_then(|i| self.pages.get_mut(i))
+            .and_then(|p| p.layout.as_mut())
+    }
+
+    /// The layout of the page shown in the PDF, and whether it is its own.
+    fn shown_layout(&self) -> (PageLayout, bool) {
+        let own = self
+            .current
+            .and_then(|i| self.pages.get(i))
+            .and_then(|p| p.layout);
+        (own.unwrap_or(self.settings().page_layout()), own.is_some())
+    }
+
+    /// Whether the viewer shows the page on its sheet: the output is a PDF
+    /// on real paper, its panel open, a page there.
+    fn print_preview(&self) -> bool {
+        let s = self.settings();
+        self.pane == Pane::Output
+            && s.output == Output::Pdf
+            && s.pdf_size != PdfSize::Fit
+            && self.redone.is_none()
+            && self.editor.is_none()
+            && self.current.is_some_and(|i| i < self.pages.len())
+    }
+
     /// Tells the scanner thread when to switch the lamp off.
     fn send_lamp_timer(&self) {
         if let Some(worker) = &self.worker {
@@ -2966,7 +3018,7 @@ impl App {
                 .zip(&encodings)
                 .map(|((image, page), &encoding)| PdfPage {
                     image,
-                    layout: settings.layout(page.sheet),
+                    layout: settings.layout(page.layout, page.focus),
                     encoding,
                 })
                 .collect();
@@ -3268,7 +3320,13 @@ impl App {
                 }
             }
             Message::Tab(tab) => self.tab = tab,
-            Message::Pane(pane) => self.pane = pane,
+            Message::Pane(pane) => {
+                self.pane = pane;
+                // The page on its sheet, where the output is chosen.
+                if self.print_preview() {
+                    self.tab = Tab::Result;
+                }
+            }
             Message::StartMode(mode) => self.start_mode = mode,
             Message::WiaQuiet(on) => {
                 self.note = "Conferma la richiesta di Windows (amministratore)…".into();
@@ -3364,9 +3422,19 @@ impl App {
             }
             Message::Output(output) => self.settings_mut().output = output,
             Message::PdfSize(size) => self.settings_mut().pdf_size = size,
-            Message::PdfFit(fit) => self.settings_mut().pdf_fit = fit,
-            Message::PdfMargin(Margin(mm)) => self.settings_mut().pdf_margin = mm,
-            Message::PdfSheet(sheet) => self.settings_mut().pdf_sheet = sheet,
+            // The page shown when it has its own layout, else the document.
+            Message::PdfFit(fit) => match self.own_layout_mut() {
+                Some(l) => l.fit = fit,
+                None => self.settings_mut().pdf_fit = fit,
+            },
+            Message::PdfMargin(Margin(mm)) => match self.own_layout_mut() {
+                Some(l) => l.margin = mm,
+                None => self.settings_mut().pdf_margin = mm,
+            },
+            Message::PdfSheet(sheet) => match self.own_layout_mut() {
+                Some(l) => l.sheet = sheet,
+                None => self.settings_mut().pdf_sheet = sheet,
+            },
             Message::PdfQuality(q) => {
                 self.settings_mut().pdf_quality = q.clamp(PDF_QUALITY_MIN, 100);
             }
@@ -3380,9 +3448,31 @@ impl App {
                 self.estimating = false;
                 self.pdf_estimate = Some(done);
             }
-            Message::PageSheet(PageSheet(sheet)) => {
+            Message::PdfOwnLayout(on) => {
+                let document = self.settings().page_layout();
                 if let Some(page) = self.current.and_then(|i| self.pages.get_mut(i)) {
-                    page.sheet = sheet;
+                    page.layout = on.then_some(page.layout.unwrap_or(document));
+                }
+            }
+            Message::PdfApplyToAll => {
+                let own = self
+                    .current
+                    .and_then(|i| self.pages.get(i))
+                    .and_then(|p| p.layout);
+                if let Some(l) = own {
+                    let s = self.settings_mut();
+                    s.pdf_sheet = l.sheet;
+                    s.pdf_fit = l.fit;
+                    s.pdf_margin = l.margin;
+                    for page in &mut self.pages {
+                        page.layout = None;
+                    }
+                    self.note = "Impaginazione applicata a tutte le pagine".into();
+                }
+            }
+            Message::PageFocus(focus) => {
+                if let Some(page) = self.current.and_then(|i| self.pages.get_mut(i)) {
+                    page.focus = focus.map(|f| f.clamp(0.0, 1.0));
                 }
             }
             Message::AutoSave(on) => self.settings_mut().auto_save = on,
@@ -4580,10 +4670,8 @@ impl App {
             if !page.transform.is_identity() {
                 label.push_str(" · ✎");
             }
-            match page.sheet {
-                Some(Sheet::Portrait) => label.push_str(" · vert."),
-                Some(Sheet::Landscape) => label.push_str(" · oriz."),
-                _ => {}
+            if page.layout.is_some() {
+                label.push_str(" · foglio");
             }
             let edited_here = self.editor().is_some_and(|e| e.index == i);
             list = list.push(
@@ -4796,6 +4884,39 @@ impl App {
                 ),
                 self.preview_view.scale,
             ),
+            Tab::Result if self.print_preview() => {
+                let page = &self.pages[self.current.unwrap_or(0)];
+                let s = self.settings();
+                let (l, own) = self.shown_layout();
+                let (w, h) = page.inches();
+                let placed = s.layout(page.layout, page.focus).place(w, h);
+                let margin = match l.fit {
+                    PdfFit::Actual => 0.0,
+                    _ => f64::from(l.margin) * 72.0 / 25.4,
+                };
+                let caption = format!(
+                    "{} · {} · {}{}",
+                    s.pdf_size,
+                    match l.sheet {
+                        Sheet::Auto => "orientamento automatico",
+                        Sheet::Portrait => "verticale",
+                        Sheet::Landscape => "orizzontale",
+                    },
+                    l.fit.to_string().to_lowercase(),
+                    if own { " · solo questa pagina" } else { "" }
+                );
+                (
+                    sheet::sheet(
+                        &page.picture,
+                        placed,
+                        margin,
+                        page.focus,
+                        Message::PageFocus,
+                        caption,
+                    ),
+                    None,
+                )
+            }
             Tab::Result => (
                 viewer::viewer(
                     self.shown().map(|p| &p.picture),
@@ -5785,71 +5906,82 @@ impl App {
                     .into(),
             ));
             if s.pdf_size != PdfSize::Fit {
+                // The document's layout, or the own one of the page shown.
+                let (l, own) = self.shown_layout();
+                if let Some(i) = self.current.filter(|&i| i < self.pages.len()) {
+                    pane = pane.push(
+                        checkbox(own)
+                            .label(format!(
+                                "Impaginazione propria per la {}",
+                                self.page_name(i)
+                            ))
+                            .on_toggle(Message::PdfOwnLayout)
+                            .text_size(13),
+                    );
+                }
+                pane = pane.push(
+                    text(if own {
+                        "Le scelte qui sotto valgono solo per questa pagina."
+                    } else {
+                        "Le scelte qui sotto valgono per tutte le pagine senza impaginazione propria."
+                    })
+                    .size(11),
+                );
                 pane = pane.push(labelled(
                     "Orientamento",
-                    pick_list(SHEETS, Some(s.pdf_sheet), Message::PdfSheet)
+                    pick_list(SHEETS, Some(l.sheet), Message::PdfSheet)
                         .width(Length::Fill)
                         .into(),
                 ));
-                // A page turned its own way (a landscape crop on an upright
-                // document, say).
-                if let Some((i, page)) =
-                    self.current.and_then(|i| self.pages.get(i).map(|p| (i, p)))
-                {
-                    pane = pane.push(labelled(
-                        format!("Solo la {}", self.page_name(i)),
-                        pick_list(PAGE_SHEETS, Some(PageSheet(page.sheet)), Message::PageSheet)
-                            .width(Length::Fill)
-                            .into(),
-                    ));
-                }
                 pane = pane.push(labelled(
                     "Sul foglio",
-                    pick_list(PDF_FITS, Some(s.pdf_fit), Message::PdfFit)
+                    pick_list(PDF_FITS, Some(l.fit), Message::PdfFit)
                         .width(Length::Fill)
                         .into(),
                 ));
-                if s.pdf_fit != PdfFit::Actual {
+                if l.fit != PdfFit::Actual {
                     pane = pane.push(labelled(
                         "Margine",
                         pick_list(
                             PDF_MARGINS.map(Margin),
-                            Some(Margin(s.pdf_margin)),
+                            Some(Margin(l.margin)),
                             Message::PdfMargin,
                         )
                         .width(Length::Fill)
                         .into(),
                     ));
                 }
+                if own {
+                    pane = pane.push(
+                        row![
+                            button(text("Applica a tutte le pagine").size(13))
+                                .style(button::secondary)
+                                .on_press(Message::PdfApplyToAll),
+                            button(text("Come le altre").size(13))
+                                .style(button::text)
+                                .on_press(Message::PdfOwnLayout(false)),
+                        ]
+                        .spacing(8),
+                    );
+                }
                 pane = pane.push(
-                    text(match s.pdf_fit {
+                    text(match l.fit {
                         PdfFit::Actual => {
-                            "Ogni scansione alla sua misura vera, al centro del foglio \
-                             (rimpicciolita solo se non ci sta): stampata al 100% \
-                             misura come l'originale."
+                            "Alla sua misura vera, al centro del foglio (rimpicciolita solo se non ci sta): stampata al 100% misura come l'originale."
                         }
                         PdfFit::Page => {
-                            "Ogni scansione grande quanto il foglio permette, intera, \
-                             dentro il margine: un ritaglio piccolo riempie l'A4."
+                            "Grande quanto il foglio permette, intera, dentro il margine: un ritaglio piccolo riempie l'A4."
                         }
                         PdfFit::Fill => {
-                            "Ogni scansione copre il foglio dentro il margine; quello \
-                             che avanza ai lati si taglia, come nelle stampe delle foto."
+                            "Copre il foglio dentro il margine; quello che avanza si taglia: trascina la pagina sul foglio, a sinistra, per scegliere cosa tenere."
                         }
                     })
                     .size(11),
                 );
                 pane = pane.push(
-                    text(match s.pdf_sheet {
-                        Sheet::Auto => {
-                            "Il foglio si gira da solo per le scansioni orizzontali. \
-                             Una pagina può avere il suo orientamento («Solo la …»)."
-                        }
-                        _ => {
-                            "Tutti i fogli girati così, anche per le scansioni dell'altro \
-                             verso. Una pagina può avere il suo orientamento («Solo la …»)."
-                        }
-                    })
+                    text(
+                        "Il foglio con la pagina sopra è nel visore: in rosso il bordo di quello che finisce sulla carta.",
+                    )
                     .size(11),
                 );
             }
