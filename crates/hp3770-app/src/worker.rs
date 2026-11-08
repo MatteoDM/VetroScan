@@ -160,8 +160,20 @@ impl Worker {
         let cancel = self.cancel.clone();
         let mut output = self.output.clone();
         let chip = self.chip()?;
+        // Never wait for the interface while the image comes in: if the
+        // chip's buffer fills, the carriage stops and goes back, and the
+        // line read across the stop comes out brighter. Only changes of
+        // the percentage are sent, and dropped if the queue is full.
+        let mut last = None;
         session::scan(chip, &HP3770, request, &mut |stage| {
-            let _ = iced::futures::executor::block_on(output.send(Event::Progress(stage)));
+            let key = match stage {
+                Stage::Scanning { done, total } => done * 100 / total.max(1),
+                _ => usize::MAX,
+            };
+            if last != Some(key) || key == usize::MAX {
+                last = Some(key);
+                let _ = output.try_send(Event::Progress(stage));
+            }
             !cancel.load(Ordering::SeqCst)
         })
         .map_err(|e| e.to_string())

@@ -89,6 +89,46 @@ pub struct Image {
 }
 
 impl Image {
+    /// The image turned clockwise by `quarter_turns` × 90°.
+    pub fn rotated(&self, quarter_turns: u8) -> Image {
+        let turns = quarter_turns % 4;
+        if turns == 0 {
+            return self.clone();
+        }
+        // Black and white is turned as 0/255 grey, then packed again.
+        let (channels, data) = match self.format {
+            Format::Rgb => (3, self.data.clone()),
+            Format::Grey => (1, self.data.clone()),
+            Format::Lineart => (1, lineart_to_grey(self)),
+        };
+        let (w, h) = (self.width, self.height);
+        let (nw, nh) = if turns == 2 { (w, h) } else { (h, w) };
+        let mut out = vec![0u8; data.len()];
+        for y in 0..h {
+            for x in 0..w {
+                let (nx, ny) = match turns {
+                    1 => (h - 1 - y, x),
+                    2 => (w - 1 - x, h - 1 - y),
+                    _ => (y, w - 1 - x),
+                };
+                let src = (y * w + x) * channels;
+                let dst = (ny * nw + nx) * channels;
+                out[dst..dst + channels].copy_from_slice(&data[src..src + channels]);
+            }
+        }
+        let data = if self.format == Format::Lineart {
+            convert::to_lineart(&out, nw, 127)
+        } else {
+            out
+        };
+        Image {
+            width: nw,
+            height: nh,
+            data,
+            ..*self
+        }
+    }
+
     /// The image as 8-bit RGB (grey and black and white expanded), for
     /// display.
     pub fn to_rgb(&self) -> Vec<u8> {
@@ -114,6 +154,24 @@ impl Image {
     }
 }
 
+/// Black and white as 8-bit grey, 0 or 255.
+fn lineart_to_grey(image: &Image) -> Vec<u8> {
+    let stride = image.width.div_ceil(8);
+    image
+        .data
+        .chunks_exact(stride)
+        .flat_map(|line| {
+            (0..image.width).map(move |x| {
+                if line[x / 8] & (0x80 >> (x % 8)) != 0 {
+                    255
+                } else {
+                    0
+                }
+            })
+        })
+        .collect()
+}
+
 /// Where a scan is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stage {
@@ -135,7 +193,7 @@ pub enum Stage {
 }
 
 /// What [`scan`] learnt besides the image.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Report {
     /// The lamp was off and had to warm up.
     pub warmed_up: bool,
@@ -143,6 +201,12 @@ pub struct Report {
     pub gains: [u8; 3],
     /// Even offsets of red, green and blue after calibration.
     pub offsets: [u16; 3],
+    /// Most image data seen waiting in the chip, in bytes (see
+    /// [`crate::scan::Scan::peak_buffered`]).
+    pub peak_buffered: usize,
+    /// White shading multipliers of red, green and blue, one per pixel of
+    /// the chip's line (8192 = 1).
+    pub white: [Vec<u16>; 3],
 }
 
 /// Makes the scan `request`.
@@ -178,10 +242,16 @@ pub fn scan<T: Transport>(
         return Err(Error::Cancelled("calibration"));
     }
     let calibration = chip.calibrate(&mut init, profile, &params)?;
-    let report = Report {
+    let mut report = Report {
         warmed_up: !link.lamp_was_on,
         gains: calibration.gain_offset.gain,
         offsets: calibration.gain_offset.even_offset,
+        peak_buffered: 0,
+        white: calibration.white.clone().map(|t| {
+            t.chunks_exact(2)
+                .map(|w| u16::from_le_bytes([w[0], w[1]]))
+                .collect()
+        }),
     };
     let tables = calibration.tables(Some(&gamma));
     let mut job = chip.start_scan(
@@ -205,6 +275,7 @@ pub fn scan<T: Transport>(
             break;
         }
     }
+    report.peak_buffered = job.peak_buffered();
     progress(Stage::Finishing);
     chip.stop_scan(&mut init, profile)?;
     // The chip brings the carriage back by itself below 600 dpi, and not
@@ -317,6 +388,34 @@ mod tests {
         // White from grey 55: pixels 0-7 are 0..23, pixels 8-15 27..50.
         assert_eq!(bw.data, [0, 0]);
         assert_eq!(bw.to_rgb().len(), 8 * 2 * 3);
+    }
+
+    #[test]
+    fn rotation() {
+        // 3 x 2 grey: 1 2 3 / 4 5 6.
+        let img = Image {
+            width: 3,
+            height: 2,
+            dpi: 300,
+            format: Format::Grey,
+            data: vec![1, 2, 3, 4, 5, 6],
+        };
+        let r = img.rotated(1);
+        assert_eq!(
+            (r.width, r.height, r.data.clone()),
+            (2, 3, vec![4, 1, 5, 2, 6, 3])
+        );
+        assert_eq!(img.rotated(2).data, [6, 5, 4, 3, 2, 1]);
+        assert_eq!(img.rotated(3).data, [3, 6, 2, 5, 1, 4]);
+        assert_eq!(r.rotated(3), img);
+        let bw = Image {
+            width: 3,
+            height: 1,
+            dpi: 300,
+            format: Format::Lineart,
+            data: vec![0b1000_0000],
+        };
+        assert_eq!(bw.rotated(1).data, [0b1000_0000, 0, 0]);
     }
 
     #[test]

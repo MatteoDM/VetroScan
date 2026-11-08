@@ -13,7 +13,7 @@ mod worker;
 
 use hp3770_core::convert;
 use hp3770_core::geometry::{Area, GLASS_INCHES, RESOLUTIONS};
-use hp3770_core::session::{self, Image, Report, Request, Stage};
+use hp3770_core::session::{self, Image, Request, Stage};
 use hp3770_core::status::Status;
 use iced::widget::{
     button, checkbox, column, container, pick_list, progress_bar, radio, row, rule, slider, text,
@@ -94,6 +94,59 @@ enum Message {
     Cancel,
     Save,
     SaveTo(Option<PathBuf>),
+    PageShow(usize),
+    PageRotate(usize, bool),
+    PageMove(usize, bool),
+    PageDelete(usize),
+    PageRedo(usize),
+    AcceptRedo,
+    RejectRedo,
+    NewDocument,
+    PdfSize(PdfSize),
+    Export,
+    ExportTo(Option<PathBuf>),
+}
+
+/// Page size of the exported PDF.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PdfSize {
+    Fit,
+    A4,
+    Letter,
+}
+
+impl std::fmt::Display for PdfSize {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Fit => "PDF: pagina come la scansione",
+            Self::A4 => "PDF: A4",
+            Self::Letter => "PDF: Letter",
+        })
+    }
+}
+
+/// A page of the document.
+struct Page {
+    image: Arc<Image>,
+    picture: Picture,
+    thumb: Picture,
+}
+
+impl Page {
+    fn new(image: Arc<Image>) -> Self {
+        let rgb = image.to_rgb();
+        Self {
+            picture: Picture::from_rgb(image.width, image.height, &rgb),
+            thumb: Picture::from_rgb_max(image.width, image.height, &rgb, 240),
+            image,
+        }
+    }
+}
+
+/// A page rescanned, waiting to replace page `index`.
+struct Redo {
+    index: usize,
+    page: Page,
 }
 
 struct App {
@@ -112,8 +165,15 @@ struct App {
     sharpen: bool,
     /// The scan running, and where it is.
     busy: Option<(Purpose, Option<Stage>)>,
-    /// The last page scanned and its picture.
-    page: Option<(Arc<(Image, Report)>, Picture)>,
+    /// The pages of the document.
+    pages: Vec<Page>,
+    /// The page shown in the result tab.
+    current: Option<usize>,
+    /// The page being rescanned.
+    redo: Option<usize>,
+    /// Its new scan, waiting for a choice.
+    redone: Option<Redo>,
+    pdf_size: PdfSize,
     /// Last thing that happened, for the status line.
     note: String,
 }
@@ -136,7 +196,11 @@ impl App {
                 threshold: convert::DEFAULT_THRESHOLD,
                 sharpen: true,
                 busy: None,
-                page: None,
+                pages: Vec::new(),
+                current: None,
+                redo: None,
+                redone: None,
+                pdf_size: PdfSize::Fit,
                 note: "Pronto".into(),
             },
             iced::system::theme().map(Message::SystemTheme),
@@ -270,7 +334,7 @@ impl App {
                 }
             }
             Message::Save => {
-                if self.page.is_some() {
+                if self.shown().is_some() {
                     return Task::perform(
                         async {
                             rfd::AsyncFileDialog::new()
@@ -291,19 +355,20 @@ impl App {
                 }
             }
             Message::SaveTo(Some(path)) => {
-                if let Some((page, _)) = &self.page {
+                if let Some(page) = self.shown() {
+                    let page = page.image.clone();
                     let pdf = path
                         .extension()
                         .is_some_and(|e| e.eq_ignore_ascii_case("pdf"));
                     let result = if pdf {
                         hp3770_export::save_pdf(
                             &path,
-                            std::slice::from_ref(&page.0),
+                            std::slice::from_ref(&*page),
                             hp3770_export::PageSize::Fit,
                             90,
                         )
                     } else {
-                        hp3770_export::save(&path, &page.0)
+                        hp3770_export::save(&path, &page)
                     };
                     self.note = match result {
                         Ok(()) => format!("Salvata in {}", path.display()),
@@ -312,8 +377,138 @@ impl App {
                 }
             }
             Message::SaveTo(None) => {}
+            Message::PageShow(i) => {
+                self.current = Some(i);
+                self.redone = None;
+                self.result_view = View::default();
+                self.tab = Tab::Result;
+            }
+            Message::PageRotate(i, clockwise) => {
+                if let Some(page) = self.pages.get_mut(i) {
+                    let turns = if clockwise { 1 } else { 3 };
+                    *page = Page::new(Arc::new(page.image.rotated(turns)));
+                    self.current = Some(i);
+                    self.result_view = View::default();
+                }
+            }
+            Message::PageMove(i, forward) => {
+                let j = if forward { i + 1 } else { i.wrapping_sub(1) };
+                if j < self.pages.len() {
+                    self.pages.swap(i, j);
+                    self.current = Some(j);
+                }
+            }
+            Message::PageDelete(i) => {
+                if i < self.pages.len() {
+                    self.pages.remove(i);
+                    self.redone = None;
+                    self.current = if self.pages.is_empty() {
+                        None
+                    } else {
+                        Some(i.min(self.pages.len() - 1))
+                    };
+                    self.note = format!("Pagina {} eliminata", i + 1);
+                }
+            }
+            Message::PageRedo(i) => {
+                if self.busy.is_none() && i < self.pages.len() {
+                    self.redo = Some(i);
+                    self.start(Purpose::Page);
+                }
+            }
+            Message::AcceptRedo => {
+                if let Some(redo) = self.redone.take() {
+                    if redo.index < self.pages.len() {
+                        self.pages[redo.index] = redo.page;
+                        self.current = Some(redo.index);
+                        self.note = format!("Pagina {} sostituita", redo.index + 1);
+                    }
+                }
+            }
+            Message::RejectRedo => {
+                if let Some(redo) = self.redone.take() {
+                    self.current = Some(redo.index);
+                    self.note = format!("Pagina {} lasciata com'era", redo.index + 1);
+                }
+            }
+            Message::NewDocument => {
+                self.pages.clear();
+                self.current = None;
+                self.redone = None;
+                self.note = "Nuovo fascicolo".into();
+            }
+            Message::PdfSize(size) => self.pdf_size = size,
+            Message::Export => {
+                if !self.pages.is_empty() {
+                    return Task::perform(
+                        async {
+                            rfd::AsyncFileDialog::new()
+                                .add_filter("PDF", &["pdf"])
+                                .add_filter("TIFF multipagina", &["tif", "tiff"])
+                                .add_filter("ZIP di immagini PNG", &["zip"])
+                                .set_file_name("fascicolo.pdf")
+                                .save_file()
+                                .await
+                                .map(|f| f.path().to_path_buf())
+                        },
+                        Message::ExportTo,
+                    );
+                }
+            }
+            Message::ExportTo(Some(path)) => {
+                let pages: Vec<Image> = self.pages.iter().map(|p| (*p.image).clone()).collect();
+                let ext = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(str::to_ascii_lowercase)
+                    .unwrap_or_default();
+                let result = match ext.as_str() {
+                    "tif" | "tiff" => hp3770_export::save_tiff(&path, &pages),
+                    "zip" => {
+                        let name = path
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("pagina")
+                            .to_string();
+                        hp3770_export::save_zip(
+                            &path,
+                            &name,
+                            &pages,
+                            hp3770_export::ImageFormat::Png,
+                        )
+                    }
+                    _ => hp3770_export::save_pdf(
+                        &path,
+                        &pages,
+                        match self.pdf_size {
+                            PdfSize::Fit => hp3770_export::PageSize::Fit,
+                            PdfSize::A4 => hp3770_export::PageSize::A4,
+                            PdfSize::Letter => hp3770_export::PageSize::Letter,
+                        },
+                        88,
+                    ),
+                };
+                self.note = match result {
+                    Ok(()) => format!(
+                        "Fascicolo di {} pagine esportato in {}",
+                        pages.len(),
+                        path.display()
+                    ),
+                    Err(e) => format!("Esportazione non riuscita: {e}"),
+                };
+            }
+            Message::ExportTo(None) => {}
         }
         Task::none()
+    }
+
+    /// The page the result tab shows: a rescan waiting for a choice, else
+    /// the current page.
+    fn shown(&self) -> Option<&Page> {
+        self.redone
+            .as_ref()
+            .map(|r| &r.page)
+            .or_else(|| self.current.and_then(|i| self.pages.get(i)))
     }
 
     fn current_view(&mut self) -> &mut View {
@@ -340,10 +535,10 @@ impl App {
                 match result {
                     Ok(done) => {
                         let (img, report) = &*done;
-                        let picture = Picture::from_rgb(img.width, img.height, &img.to_rgb());
                         match purpose {
                             Purpose::Preview => {
-                                self.preview = Some(picture);
+                                self.preview =
+                                    Some(Picture::from_rgb(img.width, img.height, &img.to_rgb()));
                                 self.preview_view = View::default();
                                 self.tab = Tab::Preview;
                                 self.note =
@@ -362,13 +557,35 @@ impl App {
                                         ""
                                     }
                                 );
-                                self.page = Some((done.clone(), picture));
+                                let page = Page::new(Arc::new(img.clone()));
+                                match self.redo.take() {
+                                    Some(index) => {
+                                        self.redone = Some(Redo { index, page });
+                                        self.note = format!(
+                                            "Nuova scansione della pagina {}: tienila o lascia la vecchia",
+                                            index + 1
+                                        );
+                                    }
+                                    None => {
+                                        self.pages.push(page);
+                                        self.current = Some(self.pages.len() - 1);
+                                        self.redone = None;
+                                        self.note = format!(
+                                            "Pagina {} acquisita · {}",
+                                            self.pages.len(),
+                                            self.note
+                                        );
+                                    }
+                                }
                                 self.result_view = View::default();
                                 self.tab = Tab::Result;
                             }
                         }
                     }
-                    Err(e) => self.note = format!("Errore: {e}"),
+                    Err(e) => {
+                        self.redo = None;
+                        self.note = format!("Errore: {e}");
+                    }
                 }
                 if let Some(w) = &self.worker {
                     w.send(Command::Status);
@@ -378,6 +595,57 @@ impl App {
                 self.note = format!("Tasto {} premuto", button.name());
             }
         }
+    }
+
+    /// The pages of the document as thumbnails, each with its tools.
+    fn strip(&self) -> Element<'_, Message> {
+        if self.pages.is_empty() {
+            return text("Il fascicolo è vuoto: ogni scansione aggiunge una pagina qui.")
+                .size(13)
+                .into();
+        }
+        let idle = self.busy.is_none();
+        let tool = |label: &'static str, message: Message, enabled: bool| {
+            button(text(label).size(13))
+                .padding([2, 6])
+                .style(button::text)
+                .on_press_maybe(enabled.then_some(message))
+        };
+        let n = self.pages.len();
+        let cards = self.pages.iter().enumerate().map(|(i, page)| {
+            let selected = self.current == Some(i);
+            let thumb = button(iced::widget::image(page.thumb.handle.clone()).height(110))
+                .padding(3)
+                .style(if selected {
+                    button::primary
+                } else {
+                    button::secondary
+                })
+                .on_press(Message::PageShow(i));
+            column![
+                thumb,
+                text(format!("Pagina {}", i + 1)).size(12),
+                row![
+                    tool("◀", Message::PageMove(i, false), i > 0),
+                    tool("↺", Message::PageRotate(i, false), idle),
+                    tool("↻", Message::PageRotate(i, true), idle),
+                    tool("▶", Message::PageMove(i, true), i + 1 < n),
+                ],
+                row![
+                    tool("Rifai", Message::PageRedo(i), idle),
+                    tool("Elimina", Message::PageDelete(i), idle),
+                ],
+            ]
+            .spacing(2)
+            .align_x(Alignment::Center)
+            .into()
+        });
+        iced::widget::scrollable(row(cards).spacing(12).padding([4, 0]))
+            .direction(iced::widget::scrollable::Direction::Horizontal(
+                iced::widget::scrollable::Scrollbar::default(),
+            ))
+            .width(Length::Fill)
+            .into()
     }
 
     fn view(&self) -> Element<'_, Message> {
@@ -423,7 +691,7 @@ impl App {
                 Some(Message::Select),
             ),
             Tab::Result => viewer::viewer(
-                self.page.as_ref().map(|(_, p)| p),
+                self.shown().map(|p| &p.picture),
                 Self::glass(),
                 "Nessuna scansione",
                 self.result_view,
@@ -432,9 +700,24 @@ impl App {
                 None,
             ),
         };
+        let redo_bar: Element<'_, Message> = match &self.redone {
+            Some(r) if self.tab == Tab::Result => row![
+                text(format!("Nuova scansione della pagina {}", r.index + 1)).width(Length::Fill),
+                button(text("Tieni la nuova")).on_press(Message::AcceptRedo),
+                button(text("Lascia la vecchia"))
+                    .style(button::secondary)
+                    .on_press(Message::RejectRedo),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .into(),
+            _ => Space::new().into(),
+        };
         let left = column![
             tools,
+            redo_bar,
             container(view).height(Length::Fill).width(Length::Fill),
+            self.strip(),
             text("Rotella: zoom · tasto destro: sposta · sinistro: seleziona l'area").size(12),
         ]
         .spacing(8)
@@ -553,12 +836,32 @@ impl App {
             .size(13),
             warning,
             action("Anteprima", Message::Preview),
-            action("Scansiona", Message::Scan),
-            button(text("Salva…").width(Length::Fill).center())
+            action("Scansiona (aggiunge una pagina)", Message::Scan),
+            button(text("Salva questa pagina…").width(Length::Fill).center())
                 .width(Length::Fill)
                 .style(button::secondary)
                 .on_press_maybe(
-                    (self.page.is_some() && self.busy.is_none()).then_some(Message::Save)
+                    (self.shown().is_some() && self.busy.is_none()).then_some(Message::Save)
+                ),
+            rule::horizontal(1),
+            text(format!("Fascicolo: {} pagine", self.pages.len())).size(15),
+            pick_list(
+                [PdfSize::Fit, PdfSize::A4, PdfSize::Letter],
+                Some(self.pdf_size),
+                Message::PdfSize
+            )
+            .width(Length::Fill)
+            .text_size(13),
+            button(text("Esporta fascicolo…").width(Length::Fill).center())
+                .width(Length::Fill)
+                .on_press_maybe(
+                    (!self.pages.is_empty() && self.busy.is_none()).then_some(Message::Export)
+                ),
+            button(text("Nuovo fascicolo").width(Length::Fill).center())
+                .width(Length::Fill)
+                .style(button::secondary)
+                .on_press_maybe(
+                    (!self.pages.is_empty() && self.busy.is_none()).then_some(Message::NewDocument)
                 ),
         ]
         .spacing(10)

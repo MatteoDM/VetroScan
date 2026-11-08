@@ -370,6 +370,32 @@ fn scan(
         "calibration      offsets {:?}, gains {:?}",
         report.offsets, report.gains
     );
+    eprintln!(
+        "chip buffer      at most {:.1} MB waiting",
+        report.peak_buffered as f64 / 1e6
+    );
+    // Pixels whose white multiplier is far from their neighbours' (dust on
+    // the white strip, or a weak sensor pixel).
+    for (c, name) in ["red", "green", "blue"].iter().enumerate() {
+        let w = &report.white[c];
+        for x in 0..w.len() {
+            let around: Vec<u16> = (x.saturating_sub(6)..(x + 7).min(w.len()))
+                .filter(|&i| i.abs_diff(x) > 1)
+                .map(|i| w[i])
+                .collect();
+            let mut sorted = around.clone();
+            sorted.sort_unstable();
+            let median = f64::from(sorted[sorted.len() / 2]);
+            let ratio = f64::from(w[x]) / median;
+            if !(0.9..=1.1).contains(&ratio) {
+                eprintln!(
+                    "white shading    {name} pixel {x}: x{:.3} (neighbours x{:.3})",
+                    f64::from(w[x]) / 8192.0,
+                    median / 8192.0
+                );
+            }
+        }
+    }
     save_image(output, image.width, image.height, &image.data, image.format)?;
     println!(
         "scanned          {} x {} pixels in {:.1} s",

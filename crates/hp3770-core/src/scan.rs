@@ -70,6 +70,8 @@ pub struct Scan {
     read: usize,
     /// Bytes left in the current DMA transfer.
     chunk_left: usize,
+    /// Most image data seen waiting in the chip.
+    peak: usize,
 }
 
 impl Scan {
@@ -81,6 +83,13 @@ impl Scan {
     /// Bytes read so far.
     pub fn bytes_read(&self) -> usize {
         self.read
+    }
+
+    /// Most image data seen waiting in the chip while reading, in bytes. If
+    /// the host reads too slowly the chip's buffer fills and the carriage
+    /// has to stop and go back.
+    pub fn peak_buffered(&self) -> usize {
+        self.peak
     }
 
     /// Every byte has been read.
@@ -205,6 +214,7 @@ impl<T: Transport> Chip<T> {
             lines: (params.height + info.extra_lines) as usize,
             read: 0,
             chunk_left: 0,
+            peak: 0,
         })
     }
 
@@ -227,7 +237,8 @@ impl<T: Transport> Chip<T> {
             scan.chunk_left = left.min(CHUNK);
         }
         let piece = scan.chunk_left.min(PIECE);
-        self.wait_scan_data(piece, left < piece + PIECE)?;
+        let waiting = self.wait_scan_data(piece, left < piece + PIECE)?;
+        scan.peak = scan.peak.max(waiting);
         if first {
             self.dma_enable(DmaDirection::Read, IMAGE_CHANNEL, scan.chunk_left as u32, 0)?;
         }
@@ -256,17 +267,17 @@ impl<T: Transport> Chip<T> {
     /// (`Reading_Wait`, colour, 8 bits: `EF16` × 96). With `near_end`, also
     /// stops waiting when only [`LAST_MARGIN`] bytes are missing or the
     /// chip has stopped.
-    fn wait_scan_data(&mut self, size: usize, near_end: bool) -> Result<()> {
+    fn wait_scan_data(&mut self, size: usize, near_end: bool) -> Result<usize> {
         let mut last = usize::MAX;
         let start = Instant::now();
         let mut deadline = start + DATA_TIMEOUT;
         loop {
             let amount = 3 * 32 * self.read_u32(0xef16)? as usize;
             if near_end && (amount + LAST_MARGIN >= size || self.read_byte(0xe800)? & 0x80 == 0) {
-                return Ok(());
+                return Ok(amount);
             }
             if amount >= size {
-                return Ok(());
+                return Ok(amount);
             }
             if amount != last {
                 last = amount;
