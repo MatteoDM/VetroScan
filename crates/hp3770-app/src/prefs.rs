@@ -75,6 +75,9 @@ pub struct StoredMode {
     pub output: String,
     /// "scansione", "a4", "a3", "a5", "letter", "legal", "10x15" or "13x18".
     pub pdf_size: String,
+    /// Which way the sheets are turned: "auto", "verticale" or
+    /// "orizzontale".
+    pub pdf_sheet: String,
     /// Where the scan goes on the sheet: "reale", "adatta" or "riempi".
     pub pdf_fit: String,
     /// Margin of a scan fitted to the sheet, millimetres (absent: the
@@ -98,6 +101,7 @@ impl Default for StoredMode {
             threshold: hp3770_core::convert::DEFAULT_THRESHOLD,
             output: "pdf".into(),
             pdf_size: "scansione".into(),
+            pdf_sheet: "auto".into(),
             pdf_fit: "reale".into(),
             pdf_margin: None,
             auto_save: false,

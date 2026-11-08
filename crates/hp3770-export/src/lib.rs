@@ -17,7 +17,7 @@ use std::fmt;
 use std::io::{Seek, Write};
 use std::path::{Path, PathBuf};
 
-pub use pdf::{Layout, PageSize, Placed, Placement};
+pub use pdf::{Layout, Orientation, PageSize, Placed, Placement};
 pub use raw::{save_deep, save_dng, save_tiff16, Linear16};
 
 /// Error of an export.
@@ -259,6 +259,14 @@ pub fn save_pdf(
 ) -> Result<()> {
     let mut file = std::io::BufWriter::new(std::fs::File::create(path)?);
     pdf::write(&mut file, pages, layout, jpeg_quality)?;
+    file.flush()?;
+    Ok(())
+}
+
+/// Writes a PDF document whose pages each have their own sheet.
+pub fn save_pdf_pages(path: &Path, pages: &[(&Image, Layout)], jpeg_quality: u8) -> Result<()> {
+    let mut file = std::io::BufWriter::new(std::fs::File::create(path)?);
+    pdf::write_pages(&mut file, pages, jpeg_quality)?;
     file.flush()?;
     Ok(())
 }

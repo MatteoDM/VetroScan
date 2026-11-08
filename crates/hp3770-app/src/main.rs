@@ -368,6 +368,67 @@ impl std::fmt::Display for PdfFit {
     }
 }
 
+/// Which way the sheet of a PDF page is turned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Sheet {
+    Auto,
+    Portrait,
+    Landscape,
+}
+
+const SHEETS: [Sheet; 3] = [Sheet::Auto, Sheet::Portrait, Sheet::Landscape];
+
+impl Sheet {
+    fn key(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Portrait => "verticale",
+            Self::Landscape => "orizzontale",
+        }
+    }
+}
+
+impl std::fmt::Display for Sheet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Auto => "Automatico (come la scansione)",
+            Self::Portrait => "Verticale",
+            Self::Landscape => "Orizzontale",
+        })
+    }
+}
+
+impl From<Sheet> for hp3770_export::Orientation {
+    fn from(s: Sheet) -> Self {
+        match s {
+            Sheet::Auto => Self::Auto,
+            Sheet::Portrait => Self::Portrait,
+            Sheet::Landscape => Self::Landscape,
+        }
+    }
+}
+
+/// The sheet of one page: as the document's, or turned its own way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PageSheet(Option<Sheet>);
+
+const PAGE_SHEETS: [PageSheet; 3] = [
+    PageSheet(None),
+    PageSheet(Some(Sheet::Portrait)),
+    PageSheet(Some(Sheet::Landscape)),
+];
+
+impl std::fmt::Display for PageSheet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self.0 {
+            None => "Come il documento",
+            Some(Sheet::Auto) => "Automatico",
+            Some(Sheet::Portrait) => "Verticale",
+            Some(Sheet::Landscape) => "Orizzontale",
+        })
+    }
+}
+
 /// Margins offered for a scan fitted to the sheet, millimetres.
 const PDF_MARGINS: [u8; 5] = [0, 5, 10, 15, 20];
 
@@ -411,6 +472,8 @@ struct Settings {
     adjust: Adjustments,
     output: Output,
     pdf_size: PdfSize,
+    /// Which way the sheets are turned (pages may turn theirs).
+    pdf_sheet: Sheet,
     pdf_fit: PdfFit,
     /// Margin of a scan fitted to the sheet (or filling it), millimetres.
     pdf_margin: u8,
@@ -431,6 +494,7 @@ impl Settings {
             adjust: Adjustments::default(),
             output: Output::Pdf,
             pdf_size: PdfSize::Fit,
+            pdf_sheet: Sheet::Auto,
             pdf_fit: PdfFit::Actual,
             pdf_margin: 10,
             auto_save: false,
@@ -439,10 +503,12 @@ impl Settings {
         }
     }
 
-    /// How the PDF pages are laid out.
-    fn layout(&self) -> hp3770_export::Layout {
+    /// How a PDF page is laid out: on the sheet of the document, turned
+    /// `own` way if the page has one.
+    fn layout(&self, own: Option<Sheet>) -> hp3770_export::Layout {
         hp3770_export::Layout {
             size: self.pdf_size.into(),
+            orientation: own.unwrap_or(self.pdf_sheet).into(),
             placement: match self.pdf_fit {
                 PdfFit::Actual => hp3770_export::Placement::Actual,
                 PdfFit::Page => hp3770_export::Placement::FitPage,
@@ -503,6 +569,7 @@ impl Settings {
             }
             .into(),
             pdf_size: self.pdf_size.key().into(),
+            pdf_sheet: self.pdf_sheet.key().into(),
             pdf_fit: self.pdf_fit.key().into(),
             pdf_margin: Some(self.pdf_margin),
             auto_save: self.auto_save,
@@ -611,6 +678,10 @@ impl Settings {
                 .into_iter()
                 .find(|s| s.key() == m.pdf_size)
                 .unwrap_or(base.pdf_size),
+            pdf_sheet: SHEETS
+                .into_iter()
+                .find(|s| s.key() == m.pdf_sheet)
+                .unwrap_or(base.pdf_sheet),
             pdf_fit: PDF_FITS
                 .into_iter()
                 .find(|f| f.key() == m.pdf_fit)
@@ -1050,6 +1121,8 @@ struct Page {
     transform: Transform,
     /// The colour mode it was scanned in.
     scanned_colour: Colour,
+    /// Its sheet in a PDF turned its own way (none: as the document's).
+    sheet: Option<Sheet>,
 }
 
 impl Page {
@@ -1075,6 +1148,7 @@ impl Page {
             raw16: None,
             transform: Transform::default(),
             scanned_colour: settings.colour,
+            sheet: None,
         }
     }
 
@@ -1479,6 +1553,9 @@ enum Message {
     PdfSize(PdfSize),
     PdfFit(PdfFit),
     PdfMargin(Margin),
+    PdfSheet(Sheet),
+    /// The sheet of the page shown: as the document's, or its own way.
+    PageSheet(PageSheet),
     AutoSave(bool),
     AutoCrop(bool),
     /// Find the originals on the preview again.
@@ -1853,6 +1930,7 @@ impl App {
                 | Message::PageMove(..)
                 | Message::PageDelete(_)
                 | Message::PageDuplicate(_)
+                | Message::PageSheet(_)
                 | Message::AcceptRedo
         )
     }
@@ -2582,7 +2660,15 @@ impl App {
         let folder = path.parent().unwrap_or(std::path::Path::new("."));
         let format = image_format(path, settings.output);
         match writer(settings.output, path, n) {
-            Writer::Pdf => hp3770_export::save_pdf(path, &pages, settings.layout(), 88),
+            // Each page on its sheet: turned its own way if it has one.
+            Writer::Pdf => {
+                let laid: Vec<(&Image, hp3770_export::Layout)> = pages
+                    .iter()
+                    .zip(&self.pages)
+                    .map(|(image, page)| (image, settings.layout(page.sheet)))
+                    .collect();
+                hp3770_export::save_pdf_pages(path, &laid, 88)
+            }
             Writer::Tiff => hp3770_export::save_tiff(path, &pages),
             Writer::Zip => hp3770_export::save_zip(path, &name, &pages, ImageFormat::Png),
             // One image per page, next to the chosen name.
@@ -2950,6 +3036,12 @@ impl App {
             Message::PdfSize(size) => self.settings_mut().pdf_size = size,
             Message::PdfFit(fit) => self.settings_mut().pdf_fit = fit,
             Message::PdfMargin(Margin(mm)) => self.settings_mut().pdf_margin = mm,
+            Message::PdfSheet(sheet) => self.settings_mut().pdf_sheet = sheet,
+            Message::PageSheet(PageSheet(sheet)) => {
+                if let Some(page) = self.current.and_then(|i| self.pages.get_mut(i)) {
+                    page.sheet = sheet;
+                }
+            }
             Message::AutoSave(on) => self.settings_mut().auto_save = on,
             Message::AutoCrop(on) => self.settings_mut().auto_crop = on,
             Message::Detect => {
@@ -4124,6 +4216,11 @@ impl App {
             if !page.transform.is_identity() {
                 label.push_str(" · ✎");
             }
+            match page.sheet {
+                Some(Sheet::Portrait) => label.push_str(" · vert."),
+                Some(Sheet::Landscape) => label.push_str(" · oriz."),
+                _ => {}
+            }
             let edited_here = self.editor().is_some_and(|e| e.index == i);
             list = list.push(
                 column![
@@ -5212,6 +5309,24 @@ impl App {
             ));
             if s.pdf_size != PdfSize::Fit {
                 pane = pane.push(labelled(
+                    "Orientamento",
+                    pick_list(SHEETS, Some(s.pdf_sheet), Message::PdfSheet)
+                        .width(Length::Fill)
+                        .into(),
+                ));
+                // A page turned its own way (a landscape crop on an upright
+                // document, say).
+                if let Some((i, page)) =
+                    self.current.and_then(|i| self.pages.get(i).map(|p| (i, p)))
+                {
+                    pane = pane.push(labelled(
+                        format!("Solo la {}", self.page_name(i)),
+                        pick_list(PAGE_SHEETS, Some(PageSheet(page.sheet)), Message::PageSheet)
+                            .width(Length::Fill)
+                            .into(),
+                    ));
+                }
+                pane = pane.push(labelled(
                     "Sul foglio",
                     pick_list(PDF_FITS, Some(s.pdf_fit), Message::PdfFit)
                         .width(Length::Fill)
@@ -5247,8 +5362,19 @@ impl App {
                     })
                     .size(11),
                 );
-                pane = pane
-                    .push(text("Il foglio si gira da solo per le scansioni orizzontali.").size(11));
+                pane = pane.push(
+                    text(match s.pdf_sheet {
+                        Sheet::Auto => {
+                            "Il foglio si gira da solo per le scansioni orizzontali. \
+                             Una pagina può avere il suo orientamento («Solo la …»)."
+                        }
+                        _ => {
+                            "Tutti i fogli girati così, anche per le scansioni dell'altro \
+                             verso. Una pagina può avere il suo orientamento («Solo la …»)."
+                        }
+                    })
+                    .size(11),
+                );
             }
         }
         pane = pane
@@ -5397,7 +5523,10 @@ fn heading(label: &str) -> iced::widget::Text<'_> {
     text(label).size(16)
 }
 
-fn labelled<'a>(label: &'a str, control: Element<'a, Message>) -> Element<'a, Message> {
+fn labelled<'a>(
+    label: impl iced::widget::text::IntoFragment<'a>,
+    control: Element<'a, Message>,
+) -> Element<'a, Message> {
     row![text(label).size(13).width(100), control]
         .spacing(8)
         .align_y(Alignment::Center)

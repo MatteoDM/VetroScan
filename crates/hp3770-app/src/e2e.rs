@@ -577,6 +577,57 @@ fn a_photo_filling_a_10x15_sheet_is_cut_at_the_margin() {
     assert!(m[3] >= media[3] - 0.5, "covers the height: {m:?}");
 }
 
+/// The page boxes of the PDF saved, page after page.
+fn pdf_boxes(ui: &Ui) -> Vec<(f64, f64)> {
+    let name = ui
+        .saved()
+        .into_iter()
+        .find(|n| n.ends_with(".pdf"))
+        .expect("a PDF");
+    let bytes = std::fs::read(ui.app.folder().join(name)).unwrap();
+    String::from_utf8_lossy(&bytes)
+        .split("/MediaBox [0 0 ")
+        .skip(1)
+        .map(|s| {
+            let v: Vec<f64> = s
+                .split(']')
+                .next()
+                .unwrap()
+                .split_whitespace()
+                .map(|w| w.parse().unwrap())
+                .collect();
+            (v[0], v[1])
+        })
+        .collect()
+}
+
+#[test]
+fn landscape_crops_on_upright_sheets_and_one_page_turned_its_own_way() {
+    use crate::{PageSheet, PdfFit, PdfSize, Sheet};
+    let mut ui = Ui::new();
+    ui.send(Message::Kind(Kind::Photo));
+    ui.click("Anteprima");
+    // The two landscape-ish originals: 4 × 2.8 and 3 × 3 inches.
+    ui.send(Message::DropFound(2));
+    ui.scan(1);
+    assert_eq!(ui.app.pages.len(), 2);
+    ui.send(Message::Output(crate::Output::Pdf));
+    ui.send(Message::PdfSize(PdfSize::A4));
+    ui.send(Message::PdfFit(PdfFit::Page));
+    ui.send(Message::PdfSheet(Sheet::Portrait));
+    // The second page sideways, the first as the document.
+    ui.send(Message::PageShow(1));
+    ui.send(Message::Pane(crate::Pane::Output));
+    assert!(ui.shows("Solo la foto 2"));
+    ui.send(Message::PageSheet(PageSheet(Some(Sheet::Landscape))));
+    assert!(ui.shows("2 · oriz."));
+    ui.send(Message::Save);
+    let boxes = pdf_boxes(&ui);
+    assert_eq!(boxes.len(), 2);
+    assert!(boxes[0].0 < boxes[0].1, "page 1 upright: {boxes:?}");
+    assert!(boxes[1].0 > boxes[1].1, "page 2 sideways: {boxes:?}");
+}
+
 #[test]
 fn the_sheet_chosen_is_remembered() {
     use crate::{Margin, PdfFit, PdfSize};

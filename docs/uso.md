@@ -465,7 +465,12 @@ vero si sceglie poi **Sul foglio**:
 | **Adatta al foglio** | la scansione intera, grande quanto il foglio permette dentro il **Margine** | un ritaglio piccolo (un dettaglio, una foto tessera) ingrandito su un A4 |
 | **Riempi il foglio** | copre il foglio dentro il margine, tagliando quello che avanza ai lati | stampe di foto senza bordi bianchi, su 10 × 15 o 13 × 18 |
 
-Il foglio si gira da solo (orizzontale) per le scansioni più larghe che alte. Per avere
+**Orientamento**: *Automatico* gira il foglio in orizzontale per le scansioni più larghe che
+alte; *Verticale* o *Orizzontale* tengono tutti i fogli così (un ritaglio orizzontale su un
+A4 verticale, per esempio, va in alto, largo quanto il foglio). Una pagina può fare
+eccezione: con la pagina mostrata nel visore, **Solo la pagina N** sceglie *Verticale* o
+*Orizzontale* soltanto per lei, e nella colonna delle pagine compare **vert.** o **oriz.**
+accanto al suo numero. Per avere
 proprio la forma del foglio, ritaglia prima nell'[editor](#modificare-una-scansione-già-fatta)
 con la proporzione *A4 / A3 / A5* o *Foto 10 × 15*: con **Adatta al foglio** il ritaglio
 riempie allora tutto il foglio, margine a parte.

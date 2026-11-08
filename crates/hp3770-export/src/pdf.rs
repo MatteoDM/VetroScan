@@ -67,10 +67,23 @@ pub enum Placement {
     Fill,
 }
 
+/// Which way the sheet is turned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Orientation {
+    /// Upright for scans taller than wide, sideways for the others.
+    #[default]
+    Auto,
+    /// Upright, whatever the scan (a landscape scan across the top).
+    Portrait,
+    /// Sideways, whatever the scan.
+    Landscape,
+}
+
 /// The sheet of the pages and where the scan goes on it.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Layout {
     pub size: PageSize,
+    pub orientation: Orientation,
     pub placement: Placement,
     /// White border kept on every side, millimetres, when the scan is
     /// fitted to the sheet or fills it (not at real size, nor with
@@ -112,11 +125,16 @@ impl Layout {
                 clip: None,
             };
         };
-        // The sheet turned the way the scan is.
-        let (sw, sh) = if (w > h) == (sw > sh) {
-            (sw, sh)
+        // The sheet turned the way the scan is, or as asked.
+        let landscape = match self.orientation {
+            Orientation::Auto => w > h,
+            Orientation::Portrait => false,
+            Orientation::Landscape => true,
+        };
+        let (sw, sh) = if landscape {
+            (sw.max(sh), sw.min(sh))
         } else {
-            (sh, sw)
+            (sw.min(sh), sw.max(sh))
         };
         let (pw, ph) = (sw * MM, sh * MM);
         // The margin, at most a third of the shorter side.
@@ -184,6 +202,17 @@ pub fn write<W: Write>(
     jpeg_quality: u8,
 ) -> Result<()> {
     let layout = layout.into();
+    let pages: Vec<(&Image, Layout)> = pages.iter().map(|p| (p, layout)).collect();
+    write_pages(out, &pages, jpeg_quality)
+}
+
+/// Writes `pages` as a PDF document to `out`, each laid out on its own
+/// sheet (a page turned the other way, say).
+pub fn write_pages<W: Write>(
+    out: &mut W,
+    pages: &[(&Image, Layout)],
+    jpeg_quality: u8,
+) -> Result<()> {
     if pages.is_empty() {
         return Err("no pages".into());
     }
@@ -213,7 +242,7 @@ pub fn write<W: Write>(
         )
         .as_bytes(),
     );
-    for (i, image) in pages.iter().enumerate() {
+    for (i, &(image, layout)) in pages.iter().enumerate() {
         let id = page_id(i);
         let dpi = f64::from(image.dpi.max(1));
         let (iw, ih) = (image.width as f64 / dpi, image.height as f64 / dpi);
@@ -338,6 +367,7 @@ mod tests {
         // than A4's 1.414).
         let layout = Layout {
             size: PageSize::A4,
+            orientation: Orientation::Auto,
             placement: Placement::FitPage,
             margin_mm: 10.0,
         };
@@ -356,10 +386,49 @@ mod tests {
     }
 
     #[test]
+    fn a_landscape_scan_on_a_sheet_kept_upright() {
+        let layout = Layout {
+            size: PageSize::A4,
+            orientation: Orientation::Portrait,
+            placement: Placement::FitPage,
+            margin_mm: 10.0,
+        };
+        let p = layout.place(9.0, 6.0);
+        assert!(p.page.0 < p.page.1, "{p:?}");
+        // As wide as the sheet less the margins, across the top half.
+        assert!(near(p.image[2], 595.276 - 20.0 * MM), "{p:?}");
+        let sideways = Layout {
+            orientation: Orientation::Landscape,
+            ..layout
+        };
+        assert!(sideways.place(6.0, 9.0).page.0 > sideways.place(6.0, 9.0).page.1);
+    }
+
+    #[test]
+    fn each_page_on_its_own_sheet() {
+        // The sample is wider than tall: kept upright on the first page.
+        let upright = Layout {
+            orientation: Orientation::Portrait,
+            ..Layout::from(PageSize::A4)
+        };
+        let sideways = Layout {
+            orientation: Orientation::Landscape,
+            ..upright
+        };
+        let image = sample(Format::Grey);
+        let mut out = Vec::new();
+        write_pages(&mut out, &[(&image, upright), (&image, sideways)], 85).unwrap();
+        let text = String::from_utf8_lossy(&out);
+        assert!(text.contains("/MediaBox [0 0 595.28 841.89]"), "{text}");
+        assert!(text.contains("/MediaBox [0 0 841.89 595.28]"), "{text}");
+    }
+
+    #[test]
     fn filling_a_photo_sheet_cuts_what_overflows() {
         // A square on 10 × 15 cm: covers the sheet, cut at the sides.
         let layout = Layout {
             size: PageSize::Photo10x15,
+            orientation: Orientation::Auto,
             placement: Placement::Fill,
             margin_mm: 0.0,
         };
@@ -374,6 +443,7 @@ mod tests {
     fn a_filled_page_clips_in_the_pdf() {
         let layout = Layout {
             size: PageSize::A4,
+            orientation: Orientation::Auto,
             placement: Placement::Fill,
             margin_mm: 5.0,
         };
