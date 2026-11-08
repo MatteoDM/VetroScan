@@ -228,11 +228,11 @@ impl Worker {
         self.lamp_used = None;
         match scanner.lamp_off() {
             Ok(()) => {
-                log("lampada spenta");
+                log("lamp off");
                 let status = scanner.status().map_err(error_text);
                 self.output.send(Event::Status(status));
             }
-            Err(e) => log(&format!("lampada non spenta: {e}")),
+            Err(e) => log(&format!("lamp not switched off: {e}")),
         }
     }
 
@@ -363,10 +363,10 @@ impl Worker {
             }
             self.last_open = Some(Instant::now());
             if let Err(e) = self.scanner() {
-                log(&format!("scanner non aperto: {e}"));
+                log(&format!("scanner not opened: {e}"));
                 return;
             }
-            log("scanner riaperto");
+            log("scanner opened again");
             let status = self.status();
             self.output.send(Event::Status(status));
             // A button still held when the scanner comes back is the press
@@ -382,7 +382,7 @@ impl Worker {
         let held = match scanner.poll_buttons() {
             Ok(held) => held,
             Err(e) => {
-                log(&format!("lettura tasti non riuscita: {e}"));
+                log(&format!("reading the buttons failed: {e}"));
                 self.scanner = None;
                 return;
             }
@@ -394,7 +394,7 @@ impl Worker {
         }
         // One button at a time: several at once is a bad read.
         if pressed.count_ones() != 1 {
-            log(&format!("lettura scartata: {pressed:02x}"));
+            log(&format!("read discarded: {pressed:02x}"));
             return;
         }
         let index = pressed.trailing_zeros() as usize;
@@ -404,7 +404,7 @@ impl Worker {
             .get(index)
             .map(|b| b.label.clone());
         if let Some(label) = label {
-            log(&format!("tasto {label}"));
+            log(&format!("button {label}"));
             self.output.send(Event::Button(index));
         }
     }

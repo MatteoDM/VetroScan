@@ -1,200 +1,205 @@
-# scanner — driver aperto per HP Scanjet 3770
+# scanner — an open driver for the HP Scanjet 3770
 
-Driver userspace e applicazione per lo scanner **HP Scanjet 3770** (USB `03f0:2505`),
-scritti interamente in Rust, per Linux, macOS e Windows.
+A userspace driver and application for the **HP Scanjet 3770** scanner (USB `03f0:2505`),
+written entirely in Rust, for Linux, macOS and Windows.
 
-Lo scanner usa un ASIC **Realtek RTS8822**, lo stesso pilotato dal backend SANE
-`hp3900`. Il driver è una traduzione in Rust della parte di `hp3900` che serve al
-3770, completata con i parametri estratti dal driver HP originale e verificata
-sulle catture USB del driver HP.
+*In italiano: [README.it.md](README.it.md).*
 
-> Stato: scansioni uguali a quelle del driver HP a colori, in grigio e in bianco e nero,
-> da 200 a 2400 dpi, anche a 16 bit per canale. Avvio, calibrazione e scansione sono
-> verificati byte per byte sulle catture del driver HP. Provato sullo scanner su Windows
-> (con il driver HP installato) e su Linux (Arch, Wayland). Mancano ancora il backend
-> SANE e l'adattatore per trasparenti; su macOS si compila e si pacchettizza a ogni versione,
-> ma non è ancora stato provato con lo scanner.
+The scanner is built around a **Realtek RTS8822** ASIC, the same one the SANE `hp3900`
+backend drives. The driver is a Rust translation of the part of `hp3900` the 3770 needs,
+completed with the parameters extracted from the original HP driver and checked against
+USB captures of the HP driver.
 
-## Installazione
+> Status: scans equal to the HP driver's in colour, grey and black and white, from 200 to
+> 2400 dpi, also at 16 bits per channel. Start-up, calibration and scan are checked byte for
+> byte against the HP driver's captures. Tried with the scanner on Windows (with the HP
+> driver installed) and on Linux (Arch, Wayland). Still missing: a SANE backend and the
+> transparency adapter; on macOS it is built and packaged at every version, but not yet
+> tried with the scanner.
 
-Scarica il file per il tuo sistema dall'[ultima release](https://github.com/MatteoDM/scanner/releases/latest).
-Ogni pacchetto contiene l'app `hp3770-app` e il comando `hp3770`. Le istruzioni complete,
-driver compreso, sistema per sistema (installare, controllare, aggiornare, disinstallare,
-problemi frequenti): **[docs/installazione.md](docs/installazione.md)**.
+The app speaks Italian and English (Preferences → *Language*; by default the system's).
 
-| Sistema | File | Come |
+## Installing
+
+Download the file for your system from the [latest release](https://github.com/MatteoDM/scanner/releases/latest).
+Every package holds the `hp3770-app` application and the `hp3770` command. The full
+instructions, driver included, system by system (install, check, update, uninstall, common
+problems): **[docs/install.md](docs/install.md)**.
+
+| System | File | How |
 |---|---|---|
-| **Windows** (x64) | `hp3770-vX.Y.Z-windows-x86_64-setup.exe` | Avvialo e lascia **Installa solo per me**: va in `%LOCALAPPDATA%\Programs\HP3770` con la voce nel menu Start e in *App installate*, **senza diritti di amministratore**. Usa il driver HP se è installato, altrimenti WinUSB. |
-| Windows, portatile | `hp3770-vX.Y.Z-windows-x86_64-portable.zip` | Estrai dove vuoi e avvia `hp3770-app.exe`; non installa niente. |
-| **macOS** (Apple Silicon / Intel) | `hp3770-vX.Y.Z-macos-arm64.dmg` / `-macos-x86_64.dmg` | Aprilo e trascina **HP Scanjet 3770** in *Applicazioni*. Non ancora provato con lo scanner. |
+| **Windows** (x64) | `hp3770-vX.Y.Z-windows-x86_64-setup.exe` | Run it and keep **Install for me only**: it goes to `%LOCALAPPDATA%\Programs\HP3770` with an entry in the Start menu and in *Installed apps*, **without administrator rights**. It uses the HP driver if installed, WinUSB otherwise. |
+| Windows, portable | `hp3770-vX.Y.Z-windows-x86_64-portable.zip` | Extract anywhere and run `hp3770-app.exe`; nothing is installed. |
+| **macOS** (Apple Silicon / Intel) | `hp3770-vX.Y.Z-macos-arm64.dmg` / `-macos-x86_64.dmg` | Open it and drag **HP Scanjet 3770** to *Applications*. Not yet tried with the scanner. |
 | **Arch / Omarchy** | `hp3770-vX.Y.Z-linux-<arch>.pkg.tar.zst` | `sudo pacman -U hp3770-vX.Y.Z-linux-x86_64.pkg.tar.zst` |
 | **Debian / Ubuntu** | `hp3770-vX.Y.Z-linux-<arch>.deb` | `sudo apt install ./hp3770-vX.Y.Z-linux-x86_64.deb` |
 | **Fedora / openSUSE** | `hp3770-vX.Y.Z-linux-<arch>.rpm` | `sudo dnf install ./hp3770-vX.Y.Z-linux-x86_64.rpm` |
-| **Qualunque Linux** | `hp3770-vX.Y.Z-linux-<arch>.AppImage` | `chmod +x hp3770-*.AppImage` e avvialo; non installa niente. |
+| **Any Linux** | `hp3770-vX.Y.Z-linux-<arch>.AppImage` | `chmod +x hp3770-*.AppImage` and run it; nothing is installed. |
 
-I pacchetti Linux (`x86_64` e `aarch64`) installano anche la regola udev che lascia usare lo
-scanner senza root, e la applicano subito, anche a uno scanner già collegato. L'AppImage non
-può: al primo avvio l'app offre il pulsante **Permetti l'accesso allo scanner**, che la
-installa con la password del computer. Dal codice, su Arch: `yay -S hp3770-git`
-(il PKGBUILD è in [`packaging/aur`](packaging/aur)).
+The Linux packages (`x86_64` and `aarch64`) also install the udev rule that lets the scanner
+be used without root, and apply it at once, even to a scanner already plugged in. The
+AppImage cannot: at the first start the app offers the button **Allow access to the
+scanner**, which installs it with the computer's password. From source, on Arch:
+`yay -S hp3770-git` (the PKGBUILD is in [`packaging/aur`](packaging/aur)).
 
-**Avvisi al primo avvio.** L'installer Windows e l'app macOS non sono firmati con un
-certificato a pagamento: Windows SmartScreen può dire *Windows ha protetto il PC* (clic su
-**Ulteriori informazioni → Esegui comunque**); macOS dice che non può verificare l'app: clic
-su **Fine**, poi *Impostazioni di Sistema → Privacy e sicurezza → Apri comunque*.
+**Warnings at the first start.** The Windows installer and the macOS app are not signed with
+a paid certificate: Windows SmartScreen may say *Windows protected your PC* (click **More
+info → Run anyway**); macOS says it cannot check the app: click **Done**, then *System
+Settings → Privacy & Security → Open Anyway*.
 
-## Usare l'app
+## Using the app
 
-Come si usa l'app, per chi non è tecnico: modi Documento e Foto, anteprima e ritaglio
-automatico, regolazioni, editor delle scansioni, formati di uscita (RAW e 16 bit compresi),
-tasti dello scanner, preferenze, scorciatoie e problemi frequenti:
-**[docs/uso.md](docs/uso.md)**.
+How to use the app, for people who are not technical: Document and Photo modes, preview and
+automatic crop, adjustments, the scan editor, output formats (RAW and 16 bits included),
+the scanner buttons, preferences, shortcuts and common problems:
+**[docs/usage.md](docs/usage.md)**.
 
-Le novità di ogni versione sono in [CHANGELOG.md](CHANGELOG.md).
+What is new in each version is in [CHANGELOG.md](CHANGELOG.md).
 
-## Struttura
+## Layout
 
-| Crate | Cosa contiene |
+| Crate | What it holds |
 | --- | --- |
-| [`scan-imaging`](crates/scan-imaging) | Elaborazione delle immagini uguale per ogni scanner: formati dei pixel, grigio e bianco e nero, nitidezza, ritagli e rotazioni, ricerca delle foto sul vetro |
-| [`scanner-api`](crates/scanner-api) | Il contratto fra l'app e gli scanner: capacità, stato, scansione, tasti, registro dei backend, scanner finto per i test |
-| [`hp3770-core`](crates/hp3770-core) | Protocollo USB dell'RTS8822 (richieste vendor, registri, EEPROM, DMA), identità del dispositivo, pulsanti, trait `Transport` indipendente dalla libreria USB |
-| [`hp3770-capture`](crates/hp3770-capture) | Lettore di catture USBPcap e strumento `hp3770-decode`, che trasforma una cattura in una sequenza leggibile di operazioni sul chip |
-| [`hp3770-usb`](crates/hp3770-usb) | Accesso USB: `nusb` (Linux, macOS, Windows con WinUSB) e `usbscan.sys` (Windows con il driver HP installato, nessun cambio di driver) |
-| [`hp3770-export`](crates/hp3770-export) | Salvataggio in PNG, JPEG, TIFF (anche a 16 bit e multipagina), WebP, AVIF, DNG, PDF a più pagine e ZIP |
-| [`hp3770-cli`](crates/hp3770-cli) | Comando `hp3770` |
-| [`hp3770-app`](crates/hp3770-app) | App desktop `hp3770-app` (iced): documenti e foto, anteprima, regolazioni, tasti dello scanner |
+| [`scan-imaging`](crates/scan-imaging) | Image processing the same for every scanner: pixel formats, grey and black and white, sharpening, crops and rotations, finding the photos on the glass |
+| [`scanner-api`](crates/scanner-api) | The contract between the app and the scanners: capabilities, state, scan, buttons, registry of the backends, a made-up scanner for the tests |
+| [`hp3770-core`](crates/hp3770-core) | The RTS8822's USB protocol (vendor requests, registers, EEPROM, DMA), device identity, buttons, a `Transport` trait independent of the USB library, and the `rts8822` backend of the contract |
+| [`hp3770-capture`](crates/hp3770-capture) | A reader of USBPcap captures and the `hp3770-decode` tool, which turns a capture into a readable sequence of operations on the chip |
+| [`hp3770-usb`](crates/hp3770-usb) | USB access: `nusb` (Linux, macOS, Windows with WinUSB) and `usbscan.sys` (Windows with the HP driver installed, no driver change) |
+| [`hp3770-export`](crates/hp3770-export) | Saving as PNG, JPEG, TIFF (also 16-bit and multi-page), WebP, AVIF, DNG, multi-page PDF and ZIP |
+| [`hp3770-cli`](crates/hp3770-cli) | The `hp3770` command |
+| [`hp3770-app`](crates/hp3770-app) | The `hp3770-app` desktop application (iced): documents and photos, preview, adjustments, scanner buttons, Italian and English |
 
-In arrivo: backend SANE.
+The plan for other scanners is in [docs/architecture-plan.md](docs/architecture-plan.md).
+How to contribute: [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Compilare e provare
+## Building and testing
 
-Serve Rust 1.85 o più recente.
+Rust 1.85 or newer is needed.
 
 ```sh
 cargo build --release
 cargo test
 ```
 
-I test usano le piccole catture in `crates/hp3770-capture/tests/fixtures`. Le catture
-complete delle scansioni (fino a ~27 MB l'una) non sono nel repository: per provare
-anche quelle, indica la cartella che le contiene.
+The tests use the small captures in `crates/hp3770-capture/tests/fixtures`. The full
+captures of the scans (up to ~27 MB each) are not in the repository: to test those too,
+point to the folder that holds them.
 
 ```sh
-HP3770_CAPTURES=/percorso/catture cargo test
+HP3770_CAPTURES=/path/to/captures cargo test
 ```
 
-**Test dell'app (e2e).** `cargo test -p hp3770-app` prova l'app intera senza finestra e
-senza scanner: clicca i pulsanti veri con il simulatore di iced, e uno scanner finto
-(in memoria, con tre originali sul vetro) risponde come quello vero. Coprono le
-domande prima di perdere scansioni, Documento e Foto, Rifai, Ctrl+Z, l'editor e il
-salvataggio in ogni formato. Nessun test tocca le impostazioni, le notifiche, la
-stampante o la cartella Immagini.
+**Tests of the app (e2e).** `cargo test -p hp3770-app` tries the whole app without a window
+and without a scanner: it clicks the real buttons with iced's simulator, and made-up
+scanners (in memory, with three originals on the glass) answer like the real one. They
+cover the questions before losing scans, Document and Photo, Redo, Ctrl+Z, the editor,
+saving in every format, both languages, and scanners that can do more or less than the 3770.
+No test touches the settings, the notifications, the printer or the Pictures folder.
 
-L'app si può provare a mano con lo stesso scanner finto:
+The app can be tried by hand with the same made-up scanner:
 
 ```sh
 HP3770_FAKE_SCANNER=1 cargo run -p hp3770-app
 ```
 
-**Test sullo scanner vero.** Muovono il carrello, quindi partono solo se richiesti, con
-lo scanner collegato e nessun altro programma che lo usa:
+**Tests on the real scanner.** They move the carriage, so they only run when asked, with the
+scanner plugged in and no other program using it:
 
 ```sh
 cargo test -p hp3770-cli --test hardware -- --ignored --test-threads 1
 ```
 
-## Comando `hp3770`
+## The `hp3770` command
 
 ```sh
-cargo run --release --bin hp3770 -- list                     # scanner visti da ogni backend
-cargo run --release --bin hp3770 -- status                   # lampada, carrello, adattatore trasparenti, pulsanti
-cargo run --release --bin hp3770 -- probe -o probe.txt       # registri ed EEPROM, sola lettura
-cargo run --release --bin hp3770 -- buttons                  # stampa i pulsanti premuti (letti dal registro del chip)
-cargo run --release --bin hp3770 -- buttons -m interrupt     # oppure dagli eventi USB del pulsante
-cargo run --release --bin hp3770 -- init                     # inizializza il chip come il driver HP
-cargo run --release --bin hp3770 -- lamp off                 # spegne (o accende, `on`) la lampada del piano
-cargo run --release --bin hp3770 -- park                     # riporta a casa il carrello, se non c'è già
-cargo run --release --bin hp3770 -- scan foglio.png          # A4 a colori, 300 dpi
-cargo run --release --bin hp3770 -- scan foto.png --dpi 1200 --left 80 --top 120 --width 50 --height 50
-cargo run --release --bin hp3770 -- scan testo.png --mode lineart   # anche --mode grey
+cargo run --release --bin hp3770 -- list                     # scanners seen by each backend
+cargo run --release --bin hp3770 -- status                   # lamp, carriage, transparency adapter, buttons
+cargo run --release --bin hp3770 -- probe -o probe.txt       # registers and EEPROM, read only
+cargo run --release --bin hp3770 -- buttons                  # prints the buttons pressed (read from the chip's register)
+cargo run --release --bin hp3770 -- buttons -m interrupt     # or from the button's USB events
+cargo run --release --bin hp3770 -- init                     # initialises the chip like the HP driver
+cargo run --release --bin hp3770 -- lamp off                 # switches the flatbed lamp off (or on, `on`)
+cargo run --release --bin hp3770 -- park                     # brings the carriage home, if it is not there
+cargo run --release --bin hp3770 -- scan sheet.png           # colour A4, 300 dpi
+cargo run --release --bin hp3770 -- scan photo.png --dpi 1200 --left 80 --top 120 --width 50 --height 50
+cargo run --release --bin hp3770 -- scan text.png --mode lineart   # also --mode grey
 ```
 
-`scan` fa tutto quello che fa il driver HP: avvio, riscaldamento della lampada se era spenta,
-calibrazione (offset, guadagno, shading nero e bianco), scansione, ritorno del carrello. L'area
-è in millimetri dall'angolo in alto a sinistra del vetro (di base un A4). L'immagine esce in PNG
-(o PPM/PGM/PBM) con la stessa curva tonale del driver HP; `--linear` salva i dati grezzi del
-chip. Non scrive mai l'EEPROM.
+`scan` does everything the HP driver does: start-up, lamp warm-up if it was off, calibration
+(offset, gain, black and white shading), scan, carriage home. It goes through the same
+scanner contract as the app. The area is in millimetres from the top left corner of the
+glass (an A4 by default). The image comes out as PNG (or PPM/PGM/PBM) with the same tone
+curve as the HP driver; `--linear` saves the chip's raw data. It never writes the EEPROM.
 
-`probe` passa da un filtro che rifiuta ogni scrittura prima che arrivi allo scanner:
-non accende la lampada, non muove il carrello e non tocca l'EEPROM. Con `--backend nusb`
-o `--backend usbscan` si sceglie il backend; di base su Windows si prova prima
-`usbscan.sys`.
+`probe` goes through a filter that refuses every write before it reaches the scanner: it
+does not switch the lamp on, does not move the carriage and does not touch the EEPROM. With
+`--backend nusb` or `--backend usbscan` the backend is chosen; by default Windows tries
+`usbscan.sys` first.
 
-`init` scrive nei registri del chip gli stessi valori che il driver HP scrive a ogni
-pressione di un pulsante (clock USB, tipo di RAM, corrente del motore, reset, pulsanti,
-timer della lampada, PWM della lampada). Non scrive mai l'EEPROM e non muove il carrello.
+`init` writes to the chip's registers the same values the HP driver writes at every button
+press (USB clock, RAM type, motor current, reset, buttons, lamp timer, lamp PWM). It never
+writes the EEPROM and never moves the carriage.
 
-`park` fa `init` e poi, solo se il carrello non è a casa, lo riporta indietro con la stessa
-tabella dei passi e lo stesso blocco di registri che il driver HP usa nelle catture 05, 06
-e 11 (i test li confrontano byte per byte). Se il carrello è già a casa non lo muove.
+`park` runs `init` and then, only if the carriage is not home, brings it back with the same
+step table and register block the HP driver uses in captures 05, 06 and 11 (the tests
+compare them byte for byte). If the carriage is already home it does not move it.
 
-`buttons` di base legge il registro dei pulsanti del chip ogni 50 ms: su Windows il servizio
-immagini (WIA) resta in ascolto degli eventi USB dei pulsanti e se ne prende una parte,
-mentre il registro risponde a chiunque lo legga.
+`buttons` reads the chip's button register every 50 ms by default: on Windows the imaging
+service (WIA) listens to the buttons' USB events and takes some of them, while the
+register answers whoever reads it.
 
 ## Linux
 
-Guida passo per passo per un computer nuovo con Omarchy, anche per chi non ha mai
-usato il terminale: [docs/installazione-linux.md](docs/installazione-linux.md).
+A step-by-step guide for a new computer with Omarchy, also for people who never used the
+terminal: [docs/install-linux.md](docs/install-linux.md).
 
-Il driver parla allo scanner direttamente via USB (`nusb`), senza SANE né moduli del
-kernel. Serve solo che l'utente possa aprire il dispositivo: la regola udev in
-[`packaging/linux`](packaging/linux) lo concede a chi è collegato alla sessione.
+The driver talks to the scanner directly over USB (`nusb`), without SANE or kernel modules.
+The user only needs to be allowed to open the device: the udev rule in
+[`packaging/linux`](packaging/linux) grants it to whoever is logged in to the session.
 
 ```sh
 sudo install -m 644 packaging/linux/70-hp3770.rules /etc/udev/rules.d/
 sudo udevadm control --reload
-# poi scollega e ricollega lo scanner
-cargo run --release --bin hp3770 -- status   # deve rispondere senza sudo
+# then unplug and plug the scanner back in
+cargo run --release --bin hp3770 -- status   # must answer without sudo
 ```
 
-Per avere l'app nel menu delle applicazioni:
+To have the app in the applications menu:
 
 ```sh
-cargo install --path crates/hp3770-app --locked     # in ~/.cargo/bin, che deve essere nel PATH
+cargo install --path crates/hp3770-app --locked     # into ~/.cargo/bin, which must be in the PATH
 install -Dm 644 packaging/linux/hp3770-app.desktop ~/.local/share/applications/hp3770-app.desktop
 install -Dm 644 packaging/linux/hp3770-app.svg ~/.local/share/icons/hicolor/scalable/apps/hp3770-app.svg
 ```
 
-L'app su Linux:
+The app on Linux:
 
-- gira su Wayland e su X11; la finestra si presenta come `hp3770-app`, lo stesso nome
-  del file `.desktop`;
-- per scegliere dove salvare usa il portale del desktop (`xdg-desktop-portal` con un
-  backend, per esempio `xdg-desktop-portal-gtk`);
-- apre le cartelle con `xdg-open` e stampa le fotocopie con `lp` (CUPS);
-- tiene le preferenze in `~/.config/hp3770`;
-- i tasti dello scanner funzionano anche con l'app in secondo piano: li legge dal chip,
-  nessun servizio di sistema se li prende come fa WIA su Windows.
+- runs on Wayland and on X11; the window presents itself as `hp3770-app`, the same name as
+  the `.desktop` file;
+- uses the desktop portal to choose where to save (`xdg-desktop-portal` with a backend, for
+  instance `xdg-desktop-portal-gtk`);
+- opens folders with `xdg-open` and prints photocopies with `lp` (CUPS);
+- keeps its preferences in `~/.config/hp3770`;
+- the scanner buttons work with the app in the background too: it reads them from the chip,
+  no system service takes them as WIA does on Windows.
 
-## Decodificare una cattura
+## Decoding a capture
 
 ```sh
-cargo run --release --bin hp3770-decode -- cattura.pcap          # tutte le operazioni
-cargo run --release --bin hp3770-decode -- --writes cattura.pcap # solo ciò che modifica lo scanner
-cargo run --release --bin hp3770-decode -- --summary *.pcap      # totali per file
-cargo run --release --bin hp3770-decode -- --executions cattura.pcap
-    # registri del chip a ogni avvio (bit 7 di E800): il primo completo, poi le differenze
-cargo run --release --bin hp3770-decode -- --slice 2.48 2.623 piccola.pcap cattura.pcap
-    # ritaglia un intervallo di tempo in una cattura più piccola (per i test)
+cargo run --release --bin hp3770-decode -- capture.pcap          # every operation
+cargo run --release --bin hp3770-decode -- --writes capture.pcap # only what changes the scanner
+cargo run --release --bin hp3770-decode -- --summary *.pcap      # totals per file
+cargo run --release --bin hp3770-decode -- --executions capture.pcap
+    # chip registers at every start (bit 7 of E800): the first in full, then the differences
+cargo run --release --bin hp3770-decode -- --slice 2.48 2.623 small.pcap capture.pcap
+    # cuts a time span into a smaller capture (for the tests)
 ```
 
-Nei test, `hp3770_capture::replay::Replay` fa da finto scanner: risponde con i dati
-della cattura e controlla che il nostro driver faccia esattamente le stesse richieste
-del driver HP, fermandosi alla prima differenza.
+In the tests, `hp3770_capture::replay::Replay` stands in for the scanner: it answers with
+the capture's data and checks that our driver makes exactly the same requests as the HP
+driver, stopping at the first difference.
 
-Esempio di output:
+Example of output:
 
 ```text
     16.275  INTR  ep83 00  (button Scan)
@@ -203,11 +208,11 @@ Esempio di output:
      2.255  DMA   enable read  channel 0004 options 000000 size 512
 ```
 
-Le catture si fanno su Windows con il driver HP installato, usando USBPcap e
-salvando in formato pcap classico (non pcapng). Il protocollo è descritto in
-[docs/protocollo-usb.md](docs/protocollo-usb.md).
+The captures are made on Windows with the HP driver installed, with USBPcap, saved in the
+classic pcap format (not pcapng). The protocol is described in
+[docs/usb-protocol.md](docs/usb-protocol.md).
 
-## Licenza
+## Licence
 
-GPL-2.0-or-later, come il backend SANE `hp3900` da cui deriva la logica del chip.
-Vedi [LICENSE](LICENSE).
+GPL-2.0-or-later, like the SANE `hp3900` backend the chip logic comes from. See
+[LICENSE](LICENSE).

@@ -1,110 +1,109 @@
 ---
 name: release
-description: Pubblica una versione dello scanner HP 3770 — alza la versione del workspace, sposta le novità del CHANGELOG, verifica, fa il commit, crea il tag vX.Y.Z e lo spinge, così il workflow "CI and Release" compila i pacchetti per Linux/Windows/macOS e pubblica la release su GitHub; spiega anche come pacchettizzare in locale con scripts/package.sh e come rimediare a un rilascio fallito. Usala quando si chiede di rilasciare, pubblicare, fare un tag, alzare la versione o creare i pacchetti.
+description: Publishes a version of the HP 3770 scanner — raises the workspace version, moves what is new in the CHANGELOG, checks, commits, creates the vX.Y.Z tag and pushes it, so that the "CI and Release" workflow builds the packages for Linux/Windows/macOS and publishes the release on GitHub; also explains how to package locally with scripts/package.sh and how to recover from a failed release. Use it when asked to release, publish, tag, raise the version or build the packages.
 ---
 
-# Rilasciare lo scanner
+# Releasing the scanner
 
-I pacchetti li fa il workflow `CI and Release` (`.github/workflows/release.yml`). Un rilascio è
-solo un aumento di versione più un tag uguale.
+The packages are made by the `CI and Release` workflow (`.github/workflows/release.yml`). A
+release is just a version bump plus a matching tag.
 
-Pipeline: `test` (Linux, Windows, macOS) e `lint` (Linux: `cargo fmt --all --check`, clippy
-con `-D warnings`) → `prepare` (legge la versione del pacchetto `hp3770-app` con
-`cargo metadata`; si ferma se il tag non è esattamente `v<versione>`) → `build` (5 target:
-linux x86_64/aarch64, windows x86_64, macOS arm64/x86_64; ognuno pacchettizza e poi prova quello
-che ha prodotto) → `release` (solo sui tag `v*`: crea la release su GitHub con le note del
-CHANGELOG, carica i file e `SHA256SUMS.txt`).
+Pipeline: `test` (Linux, Windows, macOS) and `lint` (Linux: `cargo fmt --all --check`, clippy
+with `-D warnings`) → `prepare` (reads the version of the `hp3770-app` package with
+`cargo metadata`; stops if the tag is not exactly `v<version>`) → `build` (5 targets: linux
+x86_64/aarch64, windows x86_64, macOS arm64/x86_64; each packages and then tries what it
+produced) → `release` (only on `v*` tags: creates the GitHub release with the CHANGELOG's
+notes, uploads the files and `SHA256SUMS.txt`).
 
-File di ogni release (ognuno con `hp3770-app` e `hp3770`): Windows `…-windows-x86_64-setup.exe`
-(Inno Setup, `packaging/windows/hp3770.iss`; di base installazione per utente senza
-amministratore) e `…-windows-x86_64-portable.zip`; macOS `…-macos-{arm64,x86_64}.dmg`; Linux
-`…-linux-{x86_64,aarch64}.{deb,rpm,pkg.tar.zst,AppImage}` (nFPM `packaging/linux/nfpm.yaml` +
-appimagetool). deb, rpm e pacman installano la regola udev in `/usr/lib/udev/rules.d` e la
-applicano con `packaging/linux/postinstall.sh`; l'AppImage non può, e l'app offre il pulsante
-per i permessi. Versioni e SHA256 di nfpm, appimagetool e del runtime AppImage sono fissati nel
-passo *Install Linux packaging tools*: si aggiornano insieme (gli SHA256 degli asset GitHub si
-leggono dal campo `digest` di `gh api repos/<owner>/<repo>/releases/tags/<tag>`). Ogni
-pacchetto ha anche `THIRD_PARTY_LICENSES.txt`, scritto da cargo-about (`taiki-e/install-action`,
-versione fissata nel job build) da `packaging/about.toml` e `packaging/about.hbs`; i test dei
-pacchetti controllano che ci sia. Una dipendenza nuova con una licenza che manca in
-`packaging/about.toml` blocca il build: aggiungila lì e in `deny.toml` (workflow
-*Dependencies*, `cargo deny check`), solo se è compatibile con GPL-2.0-or-later. Non cambiare
-mai l'`AppId` in `hp3770.iss`: Windows lo usa per aggiornare e disinstallare. Un tag con `-`
-(es. `v0.2.0-rc.1`) esce come prerelease. `workflow_dispatch` compila i pacchetti senza
-pubblicarli.
+Files of every release (each with `hp3770-app` and `hp3770`): Windows
+`…-windows-x86_64-setup.exe` (Inno Setup, `packaging/windows/hp3770.iss`; by default a
+per-user install without administrator) and `…-windows-x86_64-portable.zip`; macOS
+`…-macos-{arm64,x86_64}.dmg`; Linux `…-linux-{x86_64,aarch64}.{deb,rpm,pkg.tar.zst,AppImage}`
+(nFPM `packaging/linux/nfpm.yaml` + appimagetool). deb, rpm and pacman install the udev rule
+in `/usr/lib/udev/rules.d` and apply it with `packaging/linux/postinstall.sh`; the AppImage
+cannot, and the app offers the button for the permission. Versions and SHA256 of nfpm,
+appimagetool and the AppImage runtime are pinned in the *Install Linux packaging tools*
+step: they are updated together (the SHA256 of GitHub assets are read from the `digest`
+field of `gh api repos/<owner>/<repo>/releases/tags/<tag>`). Every package also has
+`THIRD_PARTY_LICENSES.txt`, written by cargo-about (`taiki-e/install-action`, version pinned
+in the build job) from `packaging/about.toml` and `packaging/about.hbs`; the package tests
+check it is there. A new dependency with a licence missing from `packaging/about.toml`
+blocks the build: add it there and in `deny.toml` (workflow *Dependencies*,
+`cargo deny check`), only if it is compatible with GPL-2.0-or-later. Never change the `AppId`
+in `hp3770.iss`: Windows uses it to update and uninstall. A tag with `-` (e.g.
+`v0.2.0-rc.1`) comes out as a prerelease. `workflow_dispatch` builds the packages without
+publishing them.
 
-Il PKGBUILD AUR `packaging/aur/PKGBUILD` (`hp3770-git`) compila da git e non segue i tag: non
-va toccato a ogni rilascio.
+The AUR PKGBUILD `packaging/aur/PKGBUILD` (`hp3770-git`) builds from git and does not follow
+the tags: it is not touched at every release.
 
-## Passi
+## Steps
 
-1. Parti da `main` pulito e aggiornato (`git status`, `git pull --ff-only`). Guarda l'ultimo
-   tag con `git tag --sort=-v:refname | head -1` e chiedi all'utente quale versione rilasciare
-   se non l'ha detto (patch/minor/major secondo semver). La prima release è `v0.1.0`, la
-   versione già nel `Cargo.toml`: in quel caso non c'è niente da alzare.
-2. Alza `version` sotto `[workspace.package]` nel `Cargo.toml` della radice: tutti i crate la
-   ereditano (`hp3770 --version` la legge da lì). In `CHANGELOG.md` rinomina
-   `## [Unreleased]` in `## [X.Y.Z] - AAAA-MM-GG`, aggiungi sopra un `## [Unreleased]` vuoto e
-   aggiorna i link in fondo (`[Unreleased]` confronta `vX.Y.Z...HEAD`, `[X.Y.Z]` confronta il
-   tag precedente con `vX.Y.Z`; per la prima, `[0.1.0]` punta a
-   `https://github.com/MatteoDM/scanner/releases/tag/v0.1.0`). Controllala con
-   `git log --oneline v<precedente>..HEAD`: ogni modifica visibile all'utente va sotto
-   *Added*, *Changed*, *Removed* o *Fixed*, scritta per chi usa lo scanner; le correzioni di
-   cose mai rilasciate non si elencano. Il job `release` pubblica quella sezione come note e
-   fallisce se manca.
-3. Aggiorna il lockfile e verifica:
+1. Start from a clean, up-to-date `main` (`git status`, `git pull --ff-only`). Look at the
+   last tag with `git tag --sort=-v:refname | head -1` and ask the user which version to
+   release if they did not say (patch/minor/major according to semver).
+2. Raise `version` under `[workspace.package]` in the root `Cargo.toml`: every crate inherits
+   it (`hp3770 --version` reads it from there). In `CHANGELOG.md` rename `## [Unreleased]` to
+   `## [X.Y.Z] - YYYY-MM-DD`, add an empty `## [Unreleased]` above it and update the links at
+   the bottom (`[Unreleased]` compares `vX.Y.Z...HEAD`, `[X.Y.Z]` compares the previous tag
+   with `vX.Y.Z`). Check it against `git log --oneline v<previous>..HEAD`: every change
+   visible to the user goes under *Added*, *Changed*, *Removed* or *Fixed*, written for
+   whoever uses the scanner; fixes of things never released are not listed. The `release`
+   job publishes that section as notes and fails if it is missing.
+3. Update the lockfile and check:
    ```bash
    cargo build --workspace
    cargo test --workspace --locked
    cargo fmt --all --check
    cargo clippy --workspace --all-targets --locked -- -D warnings
    ```
-4. Commit: `Rilascio vX.Y.Z` con `Cargo.toml`, `Cargo.lock` e `CHANGELOG.md`.
-5. Spingi `main` e **fai la prova generale**: *Actions → CI and Release → Run workflow* su
-   `main` (o `gh workflow run release.yml --ref main`). Esegue test, `prepare` e i cinque
-   `build` ma non `release`. Solo una prova tutta verde garantisce che il tag pubblicherà: lo
-   stadio build gira solo su tag o a mano, quindi una CI verde su un push non dice niente sui
-   pacchetti.
-6. **Chiedi all'utente prima di creare il tag**: spingere un tag pubblica una release. Poi:
+4. Commit: `Release vX.Y.Z` with `Cargo.toml`, `Cargo.lock` and `CHANGELOG.md`.
+5. Push `main` and **do the dress rehearsal**: *Actions → CI and Release → Run workflow* on
+   `main` (or `gh workflow run release.yml --ref main`). It runs the tests, `prepare` and the
+   five `build`s but not `release`. Only an all-green rehearsal guarantees that the tag will
+   publish: the build stage runs only on tags or by hand, so a green CI on a push says
+   nothing about the packages.
+6. **Ask the user before creating the tag**: pushing a tag publishes a release. Then:
    ```bash
    git tag vX.Y.Z
    git push origin vX.Y.Z
    ```
-7. Segui la corsa con `gh run list --workflow release.yml --limit 3` / `gh run watch <id>`;
-   alla fine `gh release view vX.Y.Z` deve elencare 12 file (2 Windows, 2 macOS, 4 per
-   architettura Linux) più `SHA256SUMS.txt`.
+7. Follow the run with `gh run list --workflow release.yml --limit 3` / `gh run watch <id>`;
+   at the end `gh release view vX.Y.Z` must list 12 files (2 Windows, 2 macOS, 4 per Linux
+   architecture) plus `SHA256SUMS.txt`.
 
-## Quando un rilascio fallisce
+## When a release fails
 
-- **Versione diversa in `prepare`**: il tag non corrisponde al `Cargo.toml`. Cancella il tag
-  solo con l'ok dell'utente (`git push origin :refs/tags/vX.Y.Z && git tag -d vX.Y.Z`),
-  correggi, rifai il tag.
-- **Test fallito su un sistema**: correggi su `main`, poi sposta il tag sul commit corretto
-  (sempre con l'ok dell'utente). Il job `release` usa `gh release upload --clobber`, quindi
-  rilanciarlo sullo stesso tag sostituisce i file.
-- Non modificare mai il workflow per saltare il job `test`.
+- **Different version in `prepare`**: the tag does not match `Cargo.toml`. Delete the tag
+  only with the user's agreement (`git push origin :refs/tags/vX.Y.Z && git tag -d vX.Y.Z`),
+  fix, tag again.
+- **A test failed on one system**: fix on `main`, then move the tag to the right commit
+  (always with the user's agreement). The `release` job uses `gh release upload --clobber`,
+  so running it again on the same tag replaces the files.
+- Never change the workflow to skip the `test` job.
 
-## Pacchettizzare in locale
+## Packaging locally
 
 ```bash
 scripts/package.sh
 ```
 
-Senza argomenti esegue `cargo build --release --locked --bin hp3770-app --bin hp3770`, prende
-la versione dal `Cargo.toml` (`cargo pkgid -p hp3770-app`) e l'etichetta dalla macchina
-(`linux-x86_64`, `macos-arm64`, …, le stesse della CI). La CI passa i tre argomenti e compila
-prima: `scripts/package.sh <target|""> <etichetta> <versione>`. Su Linux crea `.deb`, `.rpm`,
-`.pkg.tar.zst` e `.AppImage`; servono `nfpm` e `appimagetool` nel `PATH` o nelle variabili
-`NFPM` / `APPIMAGETOOL`, e `APPIMAGE_RUNTIME` se appimagetool non riesce a scaricare il runtime.
-Su macOS crea `HP Scanjet 3770.app` (Info.plist, icona fatta con `sips`/`iconutil`, firma
-ad-hoc, non notarizzata) dentro un `.dmg`. Ogni sistema ha bisogno di cargo-about
-(`cargo install --locked --features cli cargo-about`) per `THIRD_PARTY_LICENSES.txt`
-(`scripts/third_party_licenses.sh`). L'uscita va in `dist/` (ignorata da git). Su Windows,
-`powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package.ps1` crea installer e zip
-portatile; la CI usa lo stesso script con `-Target` e `-Version`.
+Without arguments it runs `cargo build --release --locked --bin hp3770-app --bin hp3770`,
+takes the version from `Cargo.toml` (`cargo pkgid -p hp3770-app`) and the label from the
+machine (`linux-x86_64`, `macos-arm64`, …, the same as the CI). The CI passes the three
+arguments and builds first: `scripts/package.sh <target|""> <label> <version>`. On Linux it
+makes `.deb`, `.rpm`, `.pkg.tar.zst` and `.AppImage`; it needs `nfpm` and `appimagetool` in
+the `PATH` or in the `NFPM` / `APPIMAGETOOL` variables, and `APPIMAGE_RUNTIME` if
+appimagetool cannot download the runtime. On macOS it makes `HP Scanjet 3770.app`
+(Info.plist, icon made with `sips`/`iconutil`, ad-hoc signature, not notarised) inside a
+`.dmg`. Every system needs cargo-about (`cargo install --locked --features cli cargo-about`)
+for `THIRD_PARTY_LICENSES.txt` (`scripts/third_party_licenses.sh`). The output goes to
+`dist/` (ignored by git). On Windows,
+`powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package.ps1` makes the installer
+and the portable zip; the CI uses the same script with `-Target` and `-Version`.
 
-Le icone in `packaging/icons` (PNG e `.ico`) sono generate da `packaging/linux/hp3770-app.svg`:
-se cambi l'SVG, rigenerale.
+The icons in `packaging/icons` (PNG and `.ico`) are generated from
+`packaging/linux/hp3770-app.svg`: if you change the SVG, generate them again.
 ```bash
 for s in 32 128 256 512 1024; do rsvg-convert -w $s -h $s packaging/linux/hp3770-app.svg -o packaging/icons/hp3770-app-$s.png; done
 magick packaging/icons/hp3770-app-256.png -define icon:auto-resize=256,64,48,32,16 packaging/icons/hp3770-app.ico

@@ -1,178 +1,183 @@
-# Novità
+# Changelog
 
-Tutte le modifiche che contano per chi usa lo scanner, versione per versione.
+Every change that matters to whoever uses the scanner, version by version.
 
-Il formato segue [Keep a Changelog](https://keepachangelog.com/it-IT/1.1.0/) e i numeri di
-versione il [Versionamento Semantico](https://semver.org/lang/it/).
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the version
+numbers [Semantic Versioning](https://semver.org/).
 
-Ogni modifica visibile a chi usa l'app o il comando `hp3770` va sotto `[Unreleased]` nello
-stesso commit che la fa, in una tra *Added*, *Changed*, *Deprecated*, *Removed*, *Fixed* e
-*Security* (i nomi restano in inglese: li legge il flusso di rilascio). Al rilascio la sezione
-diventa `## [X.Y.Z] - AAAA-MM-GG` e si aggiornano i link in fondo: il workflow di rilascio
-pubblica la sezione con il numero del tag come note della release su GitHub, e si ferma se
-manca.
+Every change visible to whoever uses the app or the `hp3770` command goes under
+`[Unreleased]` in the same commit that makes it, in one of *Added*, *Changed*, *Deprecated*,
+*Removed*, *Fixed* and *Security*. At release time the section becomes
+`## [X.Y.Z] - YYYY-MM-DD` and the links at the bottom are updated: the release workflow
+publishes the section with the tag's number as the notes of the GitHub release, and stops if
+it is missing.
+
+The sections up to 0.2.0 were first written in Italian, as were their release notes on
+GitHub; here they are in English.
 
 ## [Unreleased]
 
 ### Added
-- **L'app in inglese**: nelle Preferenze, «Lingua» sceglie fra *Automatica* (inglese se il
-  sistema è in inglese, italiano altrimenti), *Italiano* ed *English*. Il cambio vale subito,
-  senza riavviare; i numeri seguono la lingua (2,5 in italiano, 2.5 in inglese).
+- **The app in English**: in the Preferences, «Language» chooses between *Automatic*
+  (English if the system is in English, Italian otherwise), *Italiano* and *English*. The
+  change applies at once, without restarting; numbers follow the language (2.5 in English,
+  2,5 in Italian).
 
 ### Changed
-- Il modo «Pellicola» (disabilitato) compare solo con uno scanner che ha l'adattatore per
-  diapositive e negativi: l'HP 3770 non ce l'ha.
+- The «Film» mode (disabled) only appears with a scanner that has the adapter for slides and
+  negatives: the HP 3770 does not.
+- The project's documentation is in English (README, guides, changelog); a short Italian
+  README is in `README.it.md`. The guides have English names: `docs/install.md`,
+  `docs/install-linux.md`, `docs/usage.md`, `docs/usb-protocol.md`.
 
 ## [0.2.0] - 2026-11-08
 
 ### Added
-- La **versione** dell'app, piccola, in alto a destra del nome.
-- Con più scanner collegati, nelle **Preferenze** si sceglie quale usare.
+- The app's **version**, small, at the top right of its name.
+- With several scanners connected, the **Preferences** choose which one to use.
 
 ### Changed
-- L'app mostra solo quello che lo scanner in uso sa fare: risoluzioni, vetro, profondità a 16
-  bit, tasti e lampada vengono dallo scanner, non più da valori fissi dell'HP 3770. Con l'HP
-  3770 non cambia niente.
-- Le azioni dei **tasti dello scanner** si ricordano per modello di scanner; quelle già scelte
-  per l'HP 3770 restano.
-- **Ogni pagina ha le sue regolazioni**: nel documento «Solo questa pagina» è spuntata fin
-  dalla scansione, così cambiare colori o toni di una pagina non cambia le altre. Con
-  **Applica a tutte le pagine** l'aspetto della pagina mostrata passa a tutte, all'anteprima
-  e alle prossime scansioni; togliendo la spunta una pagina torna alle regolazioni comuni.
+- The app shows only what the scanner in use can do: resolutions, glass, 16-bit depth,
+  buttons and lamp come from the scanner, no longer from fixed values of the HP 3770. With
+  the HP 3770 nothing changes.
+- The actions of the **scanner buttons** are remembered for each model of scanner; those
+  already chosen for the HP 3770 stay.
+- **Each page has its own adjustments**: in the document «This page only» is ticked from the
+  scan on, so changing colours or tones of a page does not change the others. With **Apply
+  to all pages** the look of the page shown goes to all of them, to the preview and to the
+  next scans; unticking it makes a page go back to the common adjustments.
 
 ### Fixed
-- Anteprima del foglio nel PDF: il bordo rosso del taglio e la parte oscurata restano sopra la
-  pagina anche dove questa sfora il foglio, invece di finirle sotto.
+- Sheet preview of the PDF: the red edge of the cut and the dimmed part stay on top of the
+  page even where it overflows the sheet, instead of ending up under it.
 
 ## [0.1.2] - 2026-11-08
 
 ### Added
-- **PDF, una pagina diversa dalle altre**: orientamento, posizione sul foglio e margine per
-  pagina («Impaginazione propria»), con **Applica a tutte le pagine** e **Come le altre**.
-- **Il foglio nel visore**: con il pannello Uscita aperto, la pagina sul suo foglio com'è nel
-  PDF, il margine tratteggiato e in rosso il bordo di quello che finisce sulla carta; con
-  «Riempi il foglio» si trascina la pagina per scegliere cosa tenere.
+- **PDF, a page different from the others**: orientation, position on the sheet and margin
+  per page («Own layout»), with **Apply to all pages** and **Like the others**.
+- **The sheet in the viewer**: with the Output panel open, the page on its sheet as it is in
+  the PDF, the margin dashed and in red the edge of what ends up on paper; with «Fill the
+  sheet» the page is dragged to choose what to keep.
 
 ### Fixed
-- PDF a dimensione reale con un margine impostato: una pagina grande quanto il foglio non
-  viene più tagliata al margine (a dimensione reale il margine non vale).
+- PDF at actual size with a margin set: a page as large as the sheet is no longer cut at the
+  margin (at actual size the margin does not apply).
 
 ### Changed
-- Riaprendo l'app le **regolazioni** (colori, toni, curva, nitidezza, soglia del bianco e
-  nero) ripartono da zero invece di tornare quelle della volta prima; risoluzione, colore,
-  formato, PDF e tasti restano come lasciati. Un aspetto da riusare si salva come preset.
+- When the app opens again the **adjustments** (colours, tones, curve, sharpness, black and
+  white threshold) start from zero instead of coming back from the last time; resolution,
+  colour, format, PDF and buttons stay as left. A look to reuse is saved as a preset.
 
 ## [0.1.1] - 2026-11-08
 
 ### Added
-- **Lampada**: l'app la spegne dopo un tempo senza scansioni scelto nelle Preferenze (da
-  «appena finita la scansione» a 13 minuti, di base 2) e sempre chiudendosi, invece di
-  lasciarla accesa 13 minuti; il timer dello scanner resta come sicurezza.
+- **Lamp**: the app switches it off after a time without scans chosen in the Preferences
+  (from «as soon as the scan is over» to 13 minutes, 2 by default) and always when closing,
+  instead of leaving it on for 13 minutes; the scanner's timer stays as a safety net.
 
 ### Fixed
-- Ritaglio automatico: stampe spesse a pochi millimetri l'una dall'altra (il coperchio non
-  scende fra loro e lascia un'ombra grigia) venivano prese per un solo originale grande quanto
-  il vetro; ora l'ombra del coperchio non conta come originale, e ognuna esce da sola e senza
-  la fascia d'ombra intorno. Un foglio bianco si trova ancora dalla linea scura del suo bordo.
-- L'ordine degli originali trovati non mette più una cartolina inclinata dopo le foto della
-  riga sotto, in cui sporge appena.
+- Automatic crop: thick prints a few millimetres apart (the lid does not come down between
+  them and leaves a grey shadow) were taken for a single original as large as the glass; now
+  the lid's shadow does not count as an original, and each one comes out on its own without
+  the band of shadow around it. A white sheet is still found from the dark line of its edge.
+- The order of the originals found no longer puts a tilted postcard after the photos of the
+  row below, into which it barely sticks out.
 
 ## [0.1.0] - 2026-11-08
 
-Prima versione.
+First version.
 
 ### Added
-- **App desktop** `hp3770-app` per Linux e Windows (su macOS si compila, ma non è ancora
-  stata provata con lo scanner), con due modi di lavoro:
-  - **Documento**: una o più pagine, salvate in PDF, TIFF multipagina o un'immagine per
-    pagina;
-  - **Foto**: un'immagine per scansione, anche in RAW (DNG e TIFF a 16 bit lineare, con i
-    campioni del chip intatti e le alte luci recuperabili).
-- Anteprima del vetro con selezione dell'area (maniglie, spostamento, zoom) e ritaglio
-  automatico degli originali appoggiati sul vetro.
-- Regolazioni dal vivo che non toccano i dati dello scanner: esposizione, contrasto, curva a
-  punti, riduzione del rumore, descreening, soglia adattiva per il bianco e nero; Ctrl+Z,
-  doppio clic per tornare al valore predefinito, fino a tre preset salvati e preset di
-  fabbrica.
-- Scansione a colori, in grigio e in bianco e nero da 200 a 2400 dpi, anche a 16 bit per
-  canale, con la stessa calibrazione e la stessa curva tonale del driver HP.
-- I tre **tasti dello scanner** (Scan, Copy, Instant Share) funzionano con l'app, anche in
-  secondo piano, e si configurano per modo; Copy stampa una fotocopia.
-- **Editor delle scansioni già fatte**, in Documento, Foto e nei documenti di più pagine: si
-  apre con «Modifica» sotto la miniatura, con un doppio clic su di essa, con «Modifica…» sul
-  visore o con il tasto E. Le modifiche si vedono subito e ripartono sempre dai campioni dello
-  scanner, quindi non rovinano nulla finché non si salva; «Ripristina originale» torna alla
-  scansione com'era. Annulla e Ripeti propri (Ctrl+Z, Ctrl+Y), «Applica» (Invio) o «Scarta»
-  (Esc), «Prima/Dopo» confronta con com'era all'apertura.
-  - **Colore**: di nuovo tutte le regolazioni (bilanciamento del bianco e contagocce, esposizione,
-    contrasto, luminosità, livelli e gamma, curva, saturazione, vividezza, nitidezza, preset) e
-    il passaggio a grigio o bianco e nero;
-  - **Ritaglia**: rotazione di 90° e 180°, specchiatura e capovolgimento, raddrizzatura fine
-    (±45° a passi di 0,1°) con griglia dei terzi e taglio automatico degli angoli vuoti,
-    ritaglio con le maniglie e proporzioni fisse (1:1, 4:3, 3:2, 16:9, A4, 10 × 15, come
-    l'originale) diritte o coricate;
-  - **Dimensioni**: in pixel, percentuale, centimetri o pollici, con i dpi e le proporzioni
-    bloccabili, ricampionamento Lanczos; vale anche per i file a 16 bit e RAW.
-- Tema chiaro, scuro o di sistema; preferenze salvate.
-- **Guida d'uso** dell'app per chi non è tecnico, per Linux, Windows e macOS:
-  [docs/uso.md](docs/uso.md), collegata dal README e dalle guide di installazione.
-- Comando **`hp3770`**: `list`, `status`, `probe`, `buttons`, `init`, `lamp`, `park`,
+- **Desktop app** `hp3770-app` for Linux and Windows (on macOS it builds, but it has not yet
+  been tried with the scanner), with two ways of working:
+  - **Document**: one or more pages, saved as PDF, multi-page TIFF or one image per page;
+  - **Photo**: one image per scan, also as RAW (DNG and linear 16-bit TIFF, with the chip's
+    samples intact and the highlights recoverable).
+- Preview of the glass with selection of the area (handles, moving, zoom) and automatic crop
+  of the originals lying on the glass.
+- Live adjustments that do not touch the scanner's data: exposure, contrast, point curve,
+  noise reduction, descreening, adaptive threshold for black and white; Ctrl+Z, double-click
+  to go back to the default value, up to three saved presets and factory presets.
+- Scans in colour, grey and black and white from 200 to 2400 dpi, also at 16 bits per
+  channel, with the same calibration and the same tone curve as the HP driver.
+- The three **scanner buttons** (Scan, Copy, Instant Share) work with the app, in the
+  background too, and are set per mode; Copy prints a photocopy.
+- **Editor of scans already made**, in Document, Photo and in documents of several pages: it
+  opens with «Edit» under the thumbnail, with a double-click on it, with «Edit…» on the viewer
+  or with the E key. Changes show at once and always start from the scanner's samples, so they
+  spoil nothing until you save; «Back to the original» goes back to the scan as it was. Its
+  own Undo and Redo (Ctrl+Z, Ctrl+Y), «Apply» (Enter) or «Discard» (Esc), «Before/After»
+  compares with how it was when opened.
+  - **Colour**: all the adjustments again (white balance and eyedropper, exposure, contrast,
+    brightness, levels and gamma, curve, saturation, vibrance, sharpness, presets) and the
+    switch to grey or black and white;
+  - **Crop**: rotation by 90° and 180°, mirroring and flipping, fine straightening (±45° in
+    steps of 0.1°) with a rule-of-thirds grid and automatic cut of the empty corners, crop
+    with handles and fixed proportions (1:1, 4:3, 3:2, 16:9, A4, 10 × 15, like the original)
+    upright or lying;
+  - **Size**: in pixels, percent, centimetres or inches, with dpi and proportions that can be
+    locked, Lanczos resampling; it applies to 16-bit and RAW files too.
+- Light, dark or system theme; preferences saved.
+- A **usage guide** of the app for people who are not technical, for Linux, Windows and
+  macOS (now [docs/usage.md](docs/usage.md)), linked from the README and the installation
+  guides.
+- The **`hp3770`** command: `list`, `status`, `probe`, `buttons`, `init`, `lamp`, `park`,
   `scan`.
-- Linux: regola udev che lascia usare lo scanner senza root, voce nel menu delle
-  applicazioni con la sua icona, e nell'app il pulsante **Permetti l'accesso allo scanner**
-  quando la regola manca.
-- Windows: funziona con il driver HP già installato (`usbscan.sys`), senza cambiare driver,
-  oppure con WinUSB.
-- Prima di un'azione che butterebbe via scansioni non salvate (passare da Documento a Foto,
-  Nuovo documento, una nuova foto, Elimina, chiudere la finestra) l'app chiede: Annulla,
-  **Salva…** (salva e poi continua) o l'azione.
-- **Duplica** una pagina (anche Ctrl+D): la copia usa la stessa scansione ma si ritaglia, si
-  gira e si regola per conto suo, per tenere separate più foto acquisite insieme.
-- Le miniature delle pagine si **trascinano** per cambiarne l'ordine.
-- **PDF su carta**: foglio A3, A4, A5, Letter, Legal, 10 × 15 o 13 × 18 cm (o come la
-  scansione), orientamento automatico, verticale o orizzontale (anche per una sola pagina),
-  scansione a dimensione reale, adattata al foglio o a pieno foglio, margine. Il PDF c'è
-  anche in modo Foto, per stampare.
-- **Dimensione del PDF**: qualità dal 30 al 100%, dimensione stimata prima di salvare e un
-  limite in MB che l'app rispetta alleggerendo una pagina alla volta, quella che fa
-  risparmiare di più.
-- Icona nuova, anche nella finestra e nell'eseguibile Windows.
-- Pacchetti per ogni sistema, a ogni versione: installer e zip portatile per Windows, `.dmg`
-  per macOS, `.deb`, `.rpm`, pacchetto Arch e AppImage per Linux (x86_64 e aarch64). I
-  pacchetti `.deb`, `.rpm` e Arch installano anche la regola udev.
+- Linux: a udev rule that lets the scanner be used without root, an entry in the
+  applications menu with its icon, and in the app the button **Allow access to the scanner**
+  when the rule is missing.
+- Windows: works with the HP driver already installed (`usbscan.sys`), without changing
+  driver, or with WinUSB.
+- Before an action that would throw away scans not saved (going from Document to Photo, New
+  document, a new photo, Delete, closing the window) the app asks: Cancel, **Save…** (saves
+  and then goes on) or the action.
+- **Duplicate** a page (also Ctrl+D): the copy uses the same scan but is cropped, turned and
+  adjusted on its own, to keep separate several photos acquired together.
+- The thumbnails of the pages are **dragged** to change their order.
+- **PDF on paper**: A3, A4, A5, Letter, Legal, 10 × 15 or 13 × 18 cm sheet (or like the
+  scan), automatic, portrait or landscape orientation (also for a single page), scan at
+  actual size, fitted to the sheet or filling it, margin. The PDF is also in Photo mode, to
+  print.
+- **Size of the PDF**: quality from 30 to 100%, size estimated before saving and a limit in
+  MB the app keeps to by lightening one page at a time, the one that saves the most.
+- New icon, also in the window and in the Windows executable.
+- Packages for every system, at every version: installer and portable zip for Windows, `.dmg`
+  for macOS, `.deb`, `.rpm`, Arch package and AppImage for Linux (x86_64 and aarch64). The
+  `.deb`, `.rpm` and Arch packages also install the udev rule.
 
 ### Fixed
-- Due salvataggi nello stesso secondo non si sovrascrivono più: il secondo prende « (2)».
-- «Rifai»: il riquadro di avanzamento diceva «Scansione pagina N+1» (la prossima pagina nuova)
-  invece della pagina rifatta; ora dice «Nuova scansione della pagina N» e, finita la
-  scansione, mostra quella pagina anche nel pannello «Regola».
-- In Foto i messaggi di «Rifai», «Tieni la nuova», «Lascia la vecchia» ed «Elimina» parlano di
-  foto e non di pagine; il salvataggio non dice più «1 pagine».
-- «Annulla» durante una scansione o un'anteprima non è più un errore: niente avviso
-  «Scansione non riuscita», la barra dice «Scansione annullata».
-- Un originale riconosciuto vicino al bordo destro o in fondo al vetro non fa più fallire la
-  scansione o il «Rifai» con «area … outside the glass»: l'area chiesta resta sul vetro.
-- Il formato «TIFF» con più pagine o più foto salva un file per pagina, come PNG e JPEG; il
-  TIFF unico resta di «TIFF multipagina». JPEG e AVIF tengono la qualità del modo.
-- Ctrl+Z dopo il cambio fra Documento e Foto non mette più le impostazioni di un modo
-  nell'altro; Ctrl+Z sulle regolazioni proprie di una pagina torna su quella pagina, non su
-  quella mostrata in quel momento.
-- Cambiando modo, le pagine che seguono le regolazioni comuni si ridisegnano con quelle del
-  nuovo modo (prima restavano con le vecchie fino alla modifica successiva); lo stesso dopo
-  «Ripristina impostazioni di fabbrica».
-- Spostare o eliminare pagine mentre si ridisegnano in background non mette più la miniatura
-  di una pagina su un'altra; con una nuova scansione in attesa di scelta, spostare le pagine
-  non fa più sostituire quella sbagliata con «Tieni la nuova».
-- Durante una scansione non si cambiano più modo né ordine delle pagine (la scansione finiva
-  nel posto sbagliato).
-- Con l'editor aperto, ruotare un'altra pagina e poi cliccare la miniatura di quella in
-  modifica la mostra di nuovo (prima non succedeva niente).
-- La nota sotto le pagine nomina il tasto dello scanner che aggiunge davvero una pagina (o
-  scansiona una foto), come scelto nelle Preferenze, e sparisce se nessuno lo fa.
-- Un preset salvato con il nome di un preset di fabbrica non si poteva più applicare: ora il
-  nome viene rifiutato.
-- Testi con una fila di spazi in mezzo (nota sul RAW, sui 16 bit e sui tasti in Windows); il
-  pulsante della cartella predefinita usa il separatore del sistema.
+- Two saves in the same second no longer overwrite each other: the second gets « (2)».
+- «Redo»: the progress box said «Scanning page N+1» (the next new page) instead of the page
+  redone; now it says «New scan of page N» and, when the scan is over, shows that page in the
+  «Adjust» panel too.
+- In Photo the messages of «Redo», «Keep the new one», «Keep the old one» and «Delete» talk
+  about photos and not pages; saving no longer says «1 pages».
+- «Cancel» during a scan or a preview is no longer an error: no «Scan failed» warning, the bar
+  says «Scan cancelled».
+- An original found near the right edge or at the bottom of the glass no longer makes the
+  scan or «Redo» fail with «area … outside the glass»: the area asked for stays on the glass.
+- The «TIFF» format with several pages or photos saves one file per page, like PNG and JPEG;
+  the single TIFF stays with «Multi-page TIFF». JPEG and AVIF keep the mode's quality.
+- Ctrl+Z after switching between Document and Photo no longer puts the settings of one mode in
+  the other; Ctrl+Z on a page's own adjustments goes back on that page, not on the one shown
+  at that moment.
+- When changing mode, the pages that follow the common adjustments are redrawn with those of
+  the new mode (before they stayed with the old ones until the next change); the same after
+  «Restore factory settings».
+- Moving or deleting pages while they are redrawn in the background no longer puts the
+  thumbnail of a page on another; with a new scan waiting for a choice, moving the pages no
+  longer makes «Keep the new one» replace the wrong one.
+- During a scan mode and order of the pages can no longer be changed (the scan ended up in
+  the wrong place).
+- With the editor open, turning another page and then clicking the thumbnail of the one being
+  edited shows it again (before nothing happened).
+- The note under the pages names the scanner button that really adds a page (or scans a
+  photo), as chosen in the Preferences, and disappears if none does.
+- A preset saved with the name of a factory preset could no longer be applied: now the name is
+  refused.
+- Texts with a run of spaces in the middle (note on RAW, on 16 bits and on the buttons in
+  Windows); the button of the default folder uses the system's separator.
 
 [Unreleased]: https://github.com/MatteoDM/scanner/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/MatteoDM/scanner/compare/v0.1.2...v0.2.0
