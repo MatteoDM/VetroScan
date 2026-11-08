@@ -167,9 +167,10 @@ pub fn identity_gamma() -> Vec<u8> {
     (0..768).map(|i| i as u8).collect()
 }
 
-/// Tone curve the HP driver applies on the host with its default
-/// settings, as an 8-bit lookup table from the chip's linear samples:
-/// `255 × (x / white)^(1 / gamma)`, 255 from `white` up.
+/// Gamma of the tone curve the HP driver applies on the host with its
+/// default settings (see [`crate::profile::Profile::tone`]):
+/// `255 × (x / white)^(1 / gamma)` of the chip's linear samples, 255 from
+/// `white` up.
 ///
 /// Fitted on the same 5 × 5 cm scanned by both drivers (2026-11-07): with
 /// `white` = 196 (the white reference 245 × the gain target 80 %) and
@@ -177,20 +178,15 @@ pub fn identity_gamma() -> Vec<u8> {
 /// most of the rest is the HP driver's sharpening), against 24 for a plain
 /// gamma 2.2. The HP driver's own whites are 196, 186 and 184 for red,
 /// green and blue on that sheet (7.8 levels), which tints the paper blue.
-pub fn host_tone(white: f64, gamma: f64) -> [u8; 256] {
-    std::array::from_fn(|i| {
-        let x = (i as f64 / white).min(1.0);
-        (255.0 * x.powf(1.0 / gamma)).round() as u8
-    })
-}
+pub const HOST_GAMMA: f64 = 2.2;
 
 /// White levels of the HP driver's colour images, red, green and blue (see
-/// [`host_tone`]): fitted on the same sheet, they leave the paper slightly
+/// [`HOST_GAMMA`]): fitted on the same sheet, they leave the paper slightly
 /// blue, as the HP driver does.
 pub const HP_WHITE: [f64; 3] = [196.0, 186.0, 184.0];
 
-/// White level of [`host_tone`] for a profile: where the gain calibration
-/// puts the white strip.
+/// White level of the host tone curve of grey images for a profile: where
+/// the gain calibration puts the white strip.
 pub fn host_white(profile: &crate::profile::Profile) -> f64 {
     let c = &profile.calibration;
     f64::from(c.white_ref[0]) * f64::from(c.gain_target_percent) / 100.0
@@ -272,7 +268,7 @@ mod tests {
         assert_eq!(&g[254..258], &[254, 255, 0, 1]);
         let white = host_white(&crate::profile::HP3770);
         assert_eq!(white, 196.0);
-        let h = host_tone(white, 2.2);
+        let h = crate::profile::HP3770.tone().table(white);
         assert_eq!((h[0], h[196], h[255]), (0, 255, 255));
         // Half the white: 255 x 0.5^(1/2.2).
         assert_eq!(h[98], 186);

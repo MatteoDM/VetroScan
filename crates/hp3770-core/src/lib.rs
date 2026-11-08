@@ -15,7 +15,6 @@
 //! implemented by a real USB backend in another crate, and by a replay of
 //! recorded captures in tests.
 
-pub mod adjust;
 pub mod arrange;
 pub mod calibration;
 pub mod device;
@@ -38,4 +37,4 @@ pub mod transport;
 pub use error::{Error, Result};
 
 // Moved to `scan-imaging`; re-exported while the rest of the workspace moves.
-pub use scan_imaging::{convert, detect, transform};
+pub use scan_imaging::{adjust, convert, detect, transform};

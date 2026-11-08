@@ -84,6 +84,7 @@ fn fnv(bytes: impl IntoIterator<Item = u8>) -> u64 {
 
 /// (case, bytes, hash) of every rendering of the scan.
 fn renderings() -> Vec<(String, usize, u64)> {
+    let tone = HP3770.tone();
     let rgb16 = scan16();
     let rgb8: Vec<u8> = rgb16.iter().map(|&v| (v >> 8) as u8).collect();
     let adjustments = [
@@ -111,7 +112,7 @@ fn renderings() -> Vec<(String, usize, u64)> {
             }
             for linear in [false, true] {
                 let case = |f: &str| format!("{f}/{a_name}/{m_name}/linear={linear}");
-                let eight = adjust::render(&rgb8, WIDTH, HEIGHT, 300, mode, a, linear, &HP3770);
+                let eight = adjust::render(&rgb8, WIDTH, HEIGHT, 300, mode, a, linear, &tone);
                 out.push((case("render"), eight.data.len(), fnv(eight.data)));
                 let sixteen = adjust::render_samples(
                     Samples::Sixteen(&rgb16),
@@ -121,11 +122,11 @@ fn renderings() -> Vec<(String, usize, u64)> {
                     mode,
                     a,
                     linear,
-                    &HP3770,
+                    &tone,
                 );
                 out.push((case("samples16"), sixteen.data.len(), fnv(sixteen.data)));
                 if let Some(deep) =
-                    adjust::render16(&rgb16, WIDTH, HEIGHT, 300, mode, a, linear, &HP3770)
+                    adjust::render16(&rgb16, WIDTH, HEIGHT, 300, mode, a, linear, &tone)
                 {
                     let bytes = deep.iter().flat_map(|v| v.to_le_bytes());
                     out.push((case("render16"), deep.len() * 2, fnv(bytes)));

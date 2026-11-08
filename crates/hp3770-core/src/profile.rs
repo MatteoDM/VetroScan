@@ -14,7 +14,9 @@
 //! captures, where the first configuration of the file says 0, 0, 0 and
 //! 127, 128. "Configuration" below means that one.
 
+use crate::adjust::Tone;
 use crate::calibration::CalibrationConfig;
+use crate::geometry;
 use crate::motor::{MotorMove, StepType};
 use crate::motor_curves;
 
@@ -95,6 +97,19 @@ pub struct Profile {
     pub calibration: CalibrationConfig,
     /// Sensor and motor.
     pub platform: Platform,
+}
+
+impl Profile {
+    /// The tone curve the host applies to this scanner's linear samples:
+    /// the HP driver's (see [`geometry::HOST_GAMMA`]), white where the gain
+    /// calibration puts the white strip for grey images.
+    pub fn tone(&self) -> Tone {
+        Tone {
+            white: geometry::HP_WHITE,
+            grey_white: geometry::host_white(self),
+            gamma: geometry::HOST_GAMMA,
+        }
+    }
 }
 
 /// HP Scanjet 3770.

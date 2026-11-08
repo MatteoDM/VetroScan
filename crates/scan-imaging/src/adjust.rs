@@ -13,9 +13,40 @@
 //! same result on the preview and on the scan at full resolution.
 
 use crate::convert;
-use crate::geometry;
-use crate::profile::Profile;
-use crate::session::{Format, Image, Mode};
+use crate::{Format, Image, Mode};
+
+/// The tone curve a scanner wants on the host, from its linear samples to
+/// the output: `255 × (x / white)^(1 / gamma)`, 255 from `white` up. Every
+/// scanner gives its own; the white levels are in 8-bit units of the linear
+/// samples.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Tone {
+    /// White levels of colour images, red, green and blue.
+    pub white: [f64; 3],
+    /// White level of grey and black-and-white images, taken after the
+    /// three channels are added up.
+    pub grey_white: f64,
+    /// Gamma of the curve.
+    pub gamma: f64,
+}
+
+impl Tone {
+    /// The curve of grey images: [`Tone::grey_white`] on every channel.
+    pub fn grey(&self) -> Tone {
+        Tone {
+            white: [self.grey_white; 3],
+            ..*self
+        }
+    }
+
+    /// The 8-bit lookup table of the curve for a white level.
+    pub fn table(&self, white: f64) -> [u8; 256] {
+        std::array::from_fn(|i| {
+            let x = (i as f64 / white).min(1.0);
+            (255.0 * x.powf(1.0 / self.gamma)).round() as u8
+        })
+    }
+}
 
 /// The adjustments of an image. [`Adjustments::default`] gives the HP
 /// driver's result.
@@ -249,8 +280,8 @@ impl Adjustments {
     /// The per-channel tables: linear chip sample to output level, through
     /// white balance, `tone` (the host tone curve of the channel), levels,
     /// brightness and contrast. `linear` leaves out the tone curve.
-    pub fn tables(&self, white: [f64; 3], linear: bool) -> [[u8; 256]; 3] {
-        let level = self.levels(white, linear);
+    pub fn tables(&self, tone: &Tone, linear: bool) -> [[u8; 256]; 3] {
+        let level = self.levels(*tone, linear);
         std::array::from_fn(|c| std::array::from_fn(|i| level(c, i as f32)))
     }
 
@@ -258,21 +289,21 @@ impl Adjustments {
     /// 16 bits shifted down by 4): the shadows, which the tone curve
     /// stretches most, keep their gradation instead of the steps of 8-bit
     /// samples.
-    pub fn tables_fine(&self, white: [f64; 3], linear: bool) -> [Vec<u8>; 3] {
-        let level = self.levels(white, linear);
+    pub fn tables_fine(&self, tone: &Tone, linear: bool) -> [Vec<u8>; 3] {
+        let level = self.levels(*tone, linear);
         std::array::from_fn(|c| (0..4096).map(|i| level(c, i as f32 / 16.0)).collect())
     }
 
     /// The output level of channel `c` for a linear sample `i` in 8-bit
     /// units (fractions allowed).
-    fn levels(&self, white: [f64; 3], linear: bool) -> impl Fn(usize, f32) -> u8 + '_ {
-        let level = self.levels_exact(white, linear);
+    fn levels(&self, tone: Tone, linear: bool) -> impl Fn(usize, f32) -> u8 + '_ {
+        let level = self.levels_exact(tone, linear);
         move |c, i| (level(c, i) * 255.0).round().clamp(0.0, 255.0) as u8
     }
 
     /// The tables for 12-bit samples with 16-bit output levels.
-    pub fn tables_fine16(&self, white: [f64; 3], linear: bool) -> [Vec<u16>; 3] {
-        let level = self.levels_exact(white, linear);
+    pub fn tables_fine16(&self, tone: &Tone, linear: bool) -> [Vec<u16>; 3] {
+        let level = self.levels_exact(*tone, linear);
         std::array::from_fn(|c| {
             (0..4096)
                 .map(|i| {
@@ -286,7 +317,7 @@ impl Adjustments {
 
     /// The output (0-1) of channel `c` for a linear sample `i` in 8-bit
     /// units.
-    fn levels_exact(&self, white: [f64; 3], linear: bool) -> impl Fn(usize, f32) -> f32 + '_ {
+    fn levels_exact(&self, tone: Tone, linear: bool) -> impl Fn(usize, f32) -> f32 + '_ {
         let gains = self.gains();
         let black = self.black.clamp(0.0, 254.0);
         let white_point = self.white.clamp(black + 1.0, 255.0);
@@ -303,7 +334,10 @@ impl Adjustments {
             let v = if linear {
                 x
             } else {
-                255.0 * (f64::from(x) / white[c]).min(1.0).powf(1.0 / 2.2) as f32
+                255.0
+                    * (f64::from(x) / tone.white[c])
+                        .min(1.0)
+                        .powf(1.0 / tone.gamma) as f32
             };
             let v = ((v - black) / (white_point - black)).clamp(0.0, 1.0);
             let v = tone_regions(v, highlights, shadows, whites, blacks);
@@ -563,8 +597,9 @@ pub fn saturate(rgb: &mut [u8], amount: f32) {
 }
 
 /// The finished image from the chip's linear 8-bit RGB samples
-/// (`width` × `height`), with `adjustments` in `mode`. `linear` keeps the
-/// chip's light levels (no tone curve: for further processing).
+/// (`width` × `height`), with `adjustments` in `mode`, through the
+/// scanner's `tone` curve. `linear` keeps the chip's light levels (no tone
+/// curve: for further processing).
 #[allow(clippy::too_many_arguments)]
 pub fn render(
     rgb: &[u8],
@@ -574,7 +609,7 @@ pub fn render(
     mode: Mode,
     adjustments: &Adjustments,
     linear: bool,
-    profile: &Profile,
+    tone: &Tone,
 ) -> Image {
     render_samples(
         Samples::Eight(rgb),
@@ -584,7 +619,7 @@ pub fn render(
         mode,
         adjustments,
         linear,
-        profile,
+        tone,
     )
 }
 
@@ -606,20 +641,20 @@ pub fn render_samples(
     mode: Mode,
     adjustments: &Adjustments,
     linear: bool,
-    profile: &Profile,
+    tone: &Tone,
 ) -> Image {
     let (format, data) = match mode {
         Mode::Colour => {
             let mut out: Vec<u8> = match samples {
                 Samples::Eight(rgb) => {
-                    let tables = adjustments.tables(geometry::HP_WHITE, linear);
+                    let tables = adjustments.tables(tone, linear);
                     rgb.iter()
                         .enumerate()
                         .map(|(i, &v)| tables[i % 3][usize::from(v)])
                         .collect()
                 }
                 Samples::Sixteen(rgb) => {
-                    let tables = adjustments.tables_fine(geometry::HP_WHITE, linear);
+                    let tables = adjustments.tables_fine(tone, linear);
                     rgb.iter()
                         .enumerate()
                         .map(|(i, &v)| tables[i % 3][usize::from(v >> 4)])
@@ -637,7 +672,6 @@ pub fn render_samples(
             // White balance on the linear light, then one grey level
             // through the tone tables (without the balance again).
             let gains = adjustments.gains();
-            let white = geometry::host_white(profile);
             // One grey level: the overall curve only.
             let tables = Adjustments {
                 temperature: 0.0,
@@ -650,7 +684,7 @@ pub fn render_samples(
                 ],
                 ..*adjustments
             }
-            .tables_fine([white; 3], linear);
+            .tables_fine(&tone.grey(), linear);
             let grey_of = |p: [f32; 3]| {
                 let sum: f32 = (0..3).map(|c| p[c] * gains[c]).sum();
                 let level = (sum / 3.0 * 16.0).round().clamp(0.0, 4095.0) as usize;
@@ -705,7 +739,7 @@ pub fn render16(
     mode: Mode,
     adjustments: &Adjustments,
     linear: bool,
-    profile: &Profile,
+    tone: &Tone,
 ) -> Option<Vec<u16>> {
     let finished = render_samples(
         Samples::Sixteen(samples),
@@ -715,11 +749,11 @@ pub fn render16(
         mode,
         adjustments,
         linear,
-        profile,
+        tone,
     );
     let tone16: Vec<u16> = match mode {
         Mode::Colour => {
-            let t = adjustments.tables_fine16(geometry::HP_WHITE, linear);
+            let t = adjustments.tables_fine16(tone, linear);
             samples
                 .iter()
                 .enumerate()
@@ -728,7 +762,6 @@ pub fn render16(
         }
         Mode::Grey => {
             let gains = adjustments.gains();
-            let white = geometry::host_white(profile);
             let t = Adjustments {
                 temperature: 0.0,
                 tint: 0.0,
@@ -740,7 +773,7 @@ pub fn render16(
                 ],
                 ..*adjustments
             }
-            .tables_fine16([white; 3], linear);
+            .tables_fine16(&tone.grey(), linear);
             samples
                 .chunks_exact(3)
                 .map(|p| {
@@ -770,9 +803,15 @@ pub fn render16(
 mod tests {
     use super::*;
 
+    /// A scanner's tone curve, with a different white per channel.
+    const TONE: Tone = Tone {
+        white: [196.0, 186.0, 184.0],
+        grey_white: 196.0,
+        gamma: 2.2,
+    };
+
     #[test]
     fn render16_follows_render_and_is_smooth() {
-        use crate::profile::HP3770;
         // A slow ramp in the shadows.
         let n = 2000;
         let rgb16: Vec<u16> = (0..n).flat_map(|i| [(i * 3) as u16; 3]).collect();
@@ -780,7 +819,7 @@ mod tests {
             shadows: 60.0,
             ..Adjustments::default()
         };
-        let out = render16(&rgb16, n, 1, 300, Mode::Colour, &a, false, &HP3770).unwrap();
+        let out = render16(&rgb16, n, 1, 300, Mode::Colour, &a, false, &TONE).unwrap();
         let eight = render_samples(
             Samples::Sixteen(&rgb16),
             n,
@@ -789,7 +828,7 @@ mod tests {
             Mode::Colour,
             &a,
             false,
-            &HP3770,
+            &TONE,
         );
         for (x, y) in out.iter().zip(&eight.data) {
             assert!((f32::from(*x) / 257.0 - f32::from(*y)).abs() <= 1.0);
@@ -806,12 +845,11 @@ mod tests {
 
     #[test]
     fn sixteen_bits_match_eight_and_keep_the_shadows() {
-        use crate::profile::HP3770;
         let rgb8: Vec<u8> = (0..=255u8).flat_map(|v| [v, v, v]).collect();
         let rgb16: Vec<u16> = rgb8.iter().map(|&v| u16::from(v) << 8).collect();
         let a = Adjustments::default();
         for mode in [Mode::Colour, Mode::Grey] {
-            let eight = render(&rgb8, 256, 1, 300, mode, &a, false, &HP3770);
+            let eight = render(&rgb8, 256, 1, 300, mode, &a, false, &TONE);
             let sixteen = render_samples(
                 Samples::Sixteen(&rgb16),
                 256,
@@ -820,7 +858,7 @@ mod tests {
                 mode,
                 &a,
                 false,
-                &HP3770,
+                &TONE,
             );
             for (x, y) in eight.data.iter().zip(&sixteen.data) {
                 assert!(x.abs_diff(*y) <= 1, "{mode:?}: {x} {y}");
@@ -841,11 +879,11 @@ mod tests {
             Mode::Colour,
             &a,
             false,
-            &HP3770,
+            &TONE,
         );
         let levels: std::collections::BTreeSet<u8> = out.data.iter().copied().collect();
         let dark8: Vec<u8> = (0..20u8).flat_map(|v| [v; 3]).collect();
-        let out8 = render(&dark8, 20, 1, 300, Mode::Colour, &a, false, &HP3770);
+        let out8 = render(&dark8, 20, 1, 300, Mode::Colour, &a, false, &TONE);
         let levels8: std::collections::BTreeSet<u8> = out8.data.iter().copied().collect();
         assert!(
             levels.len() > 3 * levels8.len() / 2,
@@ -856,13 +894,12 @@ mod tests {
     }
 
     #[test]
-    fn defaults_are_the_hp_result() {
-        // The defaults must give what session::process gave before.
-        let t = Adjustments::default().tables(geometry::HP_WHITE, false);
-        for (table, white) in t.iter().zip(geometry::HP_WHITE) {
-            assert_eq!(*table, geometry::host_tone(white, 2.2), "white {white}");
+    fn defaults_are_the_tone_curve() {
+        let t = Adjustments::default().tables(&TONE, false);
+        for (table, white) in t.iter().zip(TONE.white) {
+            assert_eq!(*table, TONE.table(white), "white {white}");
         }
-        let linear = Adjustments::default().tables(geometry::HP_WHITE, true);
+        let linear = Adjustments::default().tables(&TONE, true);
         assert!(linear[0]
             .iter()
             .enumerate()
@@ -888,7 +925,7 @@ mod tests {
             white: 200.0,
             ..Adjustments::default()
         };
-        let t = a.tables([255.0; 3], true);
+        let t = a.tables(&TONE, true);
         assert_eq!(
             (t[0][50], t[0][125], t[0][200], t[0][230]),
             (0, 128, 255, 255)
@@ -928,7 +965,7 @@ mod tests {
             exposure: 1.0,
             ..Adjustments::default()
         };
-        assert_eq!(a.tables([255.0; 3], true)[0][60], 120);
+        assert_eq!(a.tables(&TONE, true)[0][60], 120);
     }
 
     #[test]

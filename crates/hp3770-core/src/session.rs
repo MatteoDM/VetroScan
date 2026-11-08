@@ -263,7 +263,7 @@ pub fn process(
         request.mode,
         &request.adjust,
         request.linear,
-        profile,
+        &profile.tone(),
     )
 }
 

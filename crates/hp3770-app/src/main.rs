@@ -1171,7 +1171,7 @@ fn render(raw: &Image, settings: &Settings, adjust: &Adjustments) -> Image {
         settings.mode(),
         adjust,
         false,
-        &HP3770,
+        &HP3770.tone(),
     )
 }
 
@@ -1423,7 +1423,7 @@ impl Page {
                 settings.mode(),
                 &settings.adjust,
                 false,
-                &HP3770,
+                &HP3770.tone(),
             ),
             None => render(&full, &settings, &settings.adjust),
         }
@@ -3096,7 +3096,7 @@ impl App {
                     settings.mode(),
                     &settings.adjust,
                     false,
-                    &HP3770,
+                    &HP3770.tone(),
                 )
             });
             let (data, channels, w, h, dpi) = match deep {
