@@ -161,6 +161,7 @@ pub fn viewer<'a, Message: Clone + 'a>(
     on_view: fn(View) -> Message,
     on_select: Option<fn(Option<Selection>) -> Message>,
     on_pick: Option<fn(Point) -> Message>,
+    mm_per_pixel: f32,
 ) -> Element<'a, Message> {
     let size = picture.map_or(placeholder, |p| p.size);
     let below = Canvas::new(ImageLayer {
@@ -178,6 +179,7 @@ pub fn viewer<'a, Message: Clone + 'a>(
         on_view,
         on_select,
         on_pick,
+        mm_per_pixel,
     })
     .width(Length::Fill)
     .height(Length::Fill);
@@ -238,6 +240,8 @@ struct Overlay<Message> {
     /// When set, a left click picks the image point under the pointer (the
     /// eyedropper) instead of drawing a selection.
     on_pick: Option<fn(Point) -> Message>,
+    /// Millimetres per image pixel, for the size label (0: no label).
+    mm_per_pixel: f32,
 }
 
 /// What a drag is doing.
@@ -249,9 +253,62 @@ pub enum Drag {
     Select(Point),
     /// Panning: canvas point where it started and centre then.
     Pan(Point, Point),
+    /// Moving or resizing the selection: which grip, the selection and the
+    /// image point at the start.
+    Edit(Grip, Selection, Point),
+}
+
+/// Where the selection is taken: one of its eight handles, or inside.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Grip {
+    Move,
+    /// Edges taken: left, top, right, bottom.
+    Edges(bool, bool, bool, bool),
+}
+
+/// Size of a handle on screen.
+const HANDLE: f32 = 9.0;
+
+/// The handles of a selection on screen: position and grip.
+fn handles(r: Rectangle) -> [(Point, Grip); 8] {
+    let (l, t, rr, b) = (r.x, r.y, r.x + r.width, r.y + r.height);
+    let (cx, cy) = (r.x + r.width / 2.0, r.y + r.height / 2.0);
+    [
+        (Point::new(l, t), Grip::Edges(true, true, false, false)),
+        (Point::new(cx, t), Grip::Edges(false, true, false, false)),
+        (Point::new(rr, t), Grip::Edges(false, true, true, false)),
+        (Point::new(rr, cy), Grip::Edges(false, false, true, false)),
+        (Point::new(rr, b), Grip::Edges(false, false, true, true)),
+        (Point::new(cx, b), Grip::Edges(false, false, false, true)),
+        (Point::new(l, b), Grip::Edges(true, false, false, true)),
+        (Point::new(l, cy), Grip::Edges(true, false, false, false)),
+    ]
 }
 
 impl<Message> Overlay<Message> {
+    /// The selection on screen.
+    fn selection_rect(&self, bounds: Size) -> Option<Rectangle> {
+        let s = self.selection?;
+        let (rect, scale) = self.view.placement(bounds, self.size);
+        Some(Rectangle {
+            x: rect.x + s.x * scale,
+            y: rect.y + s.y * scale,
+            width: s.width * scale,
+            height: s.height * scale,
+        })
+    }
+
+    /// Which part of the selection is under a canvas point.
+    fn grip_at(&self, bounds: Size, p: Point) -> Option<Grip> {
+        let r = self.selection_rect(bounds)?;
+        for (at, grip) in handles(r) {
+            if (p.x - at.x).abs() <= HANDLE && (p.y - at.y).abs() <= HANDLE {
+                return Some(grip);
+            }
+        }
+        r.contains(p).then_some(Grip::Move)
+    }
+
     fn image_point(&self, bounds: Size, p: Point) -> Point {
         let (rect, scale) = self.view.placement(bounds, self.size);
         Point::new((p.x - rect.x) / scale, (p.y - rect.y) / scale)
@@ -319,6 +376,12 @@ impl<Message> canvas::Program<Message> for Overlay<Message> {
                             return None;
                         }
                         let start = self.image_point(size, p);
+                        if let (Some(grip), Some(selection)) =
+                            (self.grip_at(size, p), self.selection)
+                        {
+                            *drag = Drag::Edit(grip, selection, start);
+                            return Some(Action::capture());
+                        }
                         let start = Point::new(
                             start.x.clamp(0.0, self.size.width),
                             start.y.clamp(0.0, self.size.height),
@@ -344,6 +407,41 @@ impl<Message> canvas::Program<Message> for Overlay<Message> {
                     let on_select = self.on_select?;
                     Some(Action::publish(on_select(Some(Selection::from_corners(
                         start, end,
+                    )))))
+                }
+                Drag::Edit(grip, s, from) => {
+                    let on_select = self.on_select?;
+                    let p = self.image_point(size, at?);
+                    let (dx, dy) = (p.x - from.x, p.y - from.y);
+                    let (w, h) = (self.size.width, self.size.height);
+                    let (mut l, mut t, mut r, mut b) = (s.x, s.y, s.x + s.width, s.y + s.height);
+                    match grip {
+                        Grip::Move => {
+                            let dx = dx.clamp(-l, w - r);
+                            let dy = dy.clamp(-t, h - b);
+                            l += dx;
+                            r += dx;
+                            t += dy;
+                            b += dy;
+                        }
+                        Grip::Edges(el, et, er, eb) => {
+                            if el {
+                                l = (l + dx).clamp(0.0, w);
+                            }
+                            if et {
+                                t = (t + dy).clamp(0.0, h);
+                            }
+                            if er {
+                                r = (r + dx).clamp(0.0, w);
+                            }
+                            if eb {
+                                b = (b + dy).clamp(0.0, h);
+                            }
+                        }
+                    }
+                    Some(Action::publish(on_select(Some(Selection::from_corners(
+                        Point::new(l, t),
+                        Point::new(r, b),
                     )))))
                 }
                 Drag::Pan(from, center) => {
@@ -411,6 +509,37 @@ impl<Message> canvas::Program<Message> for Overlay<Message> {
                 &Path::rectangle(top_left, size),
                 Stroke::default().with_width(2.0).with_color(primary),
             );
+            if self.on_select.is_some() {
+                let r = Rectangle::new(top_left, size);
+                for (at, _) in handles(r) {
+                    let corner = Point::new(at.x - HANDLE / 2.0, at.y - HANDLE / 2.0);
+                    frame.fill_rectangle(corner, Size::new(HANDLE, HANDLE), Color::WHITE);
+                    frame.stroke(
+                        &Path::rectangle(corner, Size::new(HANDLE, HANDLE)),
+                        Stroke::default().with_width(1.5).with_color(primary),
+                    );
+                }
+                if self.mm_per_pixel > 0.0 {
+                    let label = format!(
+                        "{:.0} × {:.0} mm",
+                        s.width * self.mm_per_pixel,
+                        s.height * self.mm_per_pixel
+                    );
+                    let at = Point::new(top_left.x, (top_left.y - 26.0).max(0.0));
+                    frame.fill_rectangle(
+                        at,
+                        Size::new(8.0 + 7.5 * label.len() as f32, 20.0),
+                        primary,
+                    );
+                    frame.fill_text(canvas::Text {
+                        content: label,
+                        position: Point::new(at.x + 6.0, at.y + 3.0),
+                        color: Color::WHITE,
+                        size: 13.0.into(),
+                        ..canvas::Text::default()
+                    });
+                }
+            }
         }
         vec![frame.into_geometry()]
     }
@@ -424,7 +553,26 @@ impl<Message> canvas::Program<Message> for Overlay<Message> {
         match drag {
             Drag::Pan(..) => mouse::Interaction::Grabbing,
             Drag::Select(_) => mouse::Interaction::Crosshair,
+            Drag::Edit(Grip::Move, ..) => mouse::Interaction::Grabbing,
+            Drag::Edit(..) => mouse::Interaction::Crosshair,
             Drag::None => match cursor.position_in(bounds) {
+                Some(p) if self.on_select.is_some() && self.on_pick.is_none() => {
+                    match self.grip_at(bounds.size(), p) {
+                        Some(Grip::Move) => mouse::Interaction::Grab,
+                        Some(Grip::Edges(l, t, r, b)) => match (l || r, t || b) {
+                            (true, true) => {
+                                if (l && t) || (r && b) {
+                                    mouse::Interaction::ResizingDiagonallyDown
+                                } else {
+                                    mouse::Interaction::ResizingDiagonallyUp
+                                }
+                            }
+                            (true, false) => mouse::Interaction::ResizingHorizontally,
+                            _ => mouse::Interaction::ResizingVertically,
+                        },
+                        None => mouse::Interaction::Crosshair,
+                    }
+                }
                 Some(_) if self.on_pick.is_some() || self.on_select.is_some() => {
                     mouse::Interaction::Crosshair
                 }
