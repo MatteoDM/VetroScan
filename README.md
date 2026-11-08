@@ -103,7 +103,7 @@ No test touches the settings, the notifications, the printer or the Pictures fol
 The app can be tried by hand with the same made-up scanner:
 
 ```sh
-HP3770_FAKE_SCANNER=1 cargo run -p vetroscan
+VETROSCAN_FAKE_SCANNER=1 cargo run -p vetroscan
 ```
 
 **Tests on the real scanner.** They move the carriage, so they only run when asked, with the

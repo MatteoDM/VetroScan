@@ -39,6 +39,12 @@ pub struct Linear16 {
     /// The level of the paper white in `data`, per channel (above 0, at
     /// most 65535): what the calibration aims at.
     pub white: [f64; 3],
+    /// Who made the scanner ("HP"), for the file's metadata.
+    pub make: String,
+    /// The scanner's model ("Scanjet 3770").
+    pub model: String,
+    /// The program that wrote the file, with its version.
+    pub software: String,
 }
 
 impl Linear16 {
@@ -46,7 +52,7 @@ impl Linear16 {
     /// per channel. Widened to 16 bits (255 to 65535), nothing else.
     pub fn from_linear8(image: &Image, white: [f64; 3]) -> Result<Self> {
         if image.format != Format::Rgb {
-            return Err("il RAW è solo a colori".into());
+            return Err("RAW is colour only".into());
         }
         Ok(Self {
             width: image.width,
@@ -54,6 +60,7 @@ impl Linear16 {
             dpi: image.dpi,
             data: image.data.iter().map(|&v| u16::from(v) * 257).collect(),
             white: white.map(|w| w * 257.0),
+            ..Self::new(0, 0, 0, Vec::new())
         })
     }
 
@@ -72,6 +79,7 @@ impl Linear16 {
             dpi,
             data: samples.to_vec(),
             white,
+            ..Self::new(0, 0, 0, Vec::new())
         }
     }
 
@@ -84,6 +92,29 @@ impl Linear16 {
             dpi,
             data,
             white: [65535.0; 3],
+            make: String::new(),
+            model: String::new(),
+            software: String::new(),
+        }
+    }
+
+    /// The same samples, said to come from `make`'s `model` and written by
+    /// `software` (the file's metadata).
+    pub fn with_source(self, make: &str, model: &str, software: &str) -> Self {
+        Self {
+            make: make.into(),
+            model: model.into(),
+            software: software.into(),
+            ..self
+        }
+    }
+
+    /// The scanner's whole name ("HP Scanjet 3770"), or "Scanner".
+    fn device(&self) -> String {
+        let name = format!("{} {}", self.make, self.model);
+        match name.trim() {
+            "" => "Scanner".into(),
+            name => name.into(),
         }
     }
 
@@ -184,11 +215,12 @@ fn write_tiff(
     path: &Path,
     image: Deep<'_>,
     photometric: u16,
+    software: &str,
     mut tags: Vec<(u16, Value)>,
 ) -> Result<()> {
     let (w, h, ch) = (image.width, image.height, image.channels);
     if w == 0 || h == 0 || image.data.len() != w * h * ch {
-        return Err("immagine vuota o incoerente".into());
+        return Err("empty or inconsistent image".into());
     }
     let line_bytes = w * ch * 2;
     // Strips of about 256 KB.
@@ -201,7 +233,7 @@ fn write_tiff(
     let data_start = 8u32;
     let data_len = (h * line_bytes) as u64;
     if data_len > u64::from(u32::MAX) - (1 << 20) {
-        return Err("immagine troppo grande per un TIFF (oltre 4 GB)".into());
+        return Err("image too large for a TIFF (over 4 GB)".into());
     }
     let mut offsets = Vec::with_capacity(strips);
     let mut at = data_start;
@@ -224,8 +256,10 @@ fn write_tiff(
         (283, Value::Rational(vec![(u32::from(image.dpi), 1)])),
         (284, Value::Short(vec![1])),
         (296, Value::Short(vec![2])),
-        (305, Value::Ascii("HP Scanjet 3770 (driver libero)".into())),
     ]);
+    if !software.is_empty() {
+        tags.push((305, Value::Ascii(software.into())));
+    }
     tags.sort_by_key(|(t, _)| *t);
 
     let mut file = std::io::BufWriter::new(std::fs::File::create(path)?);
@@ -372,6 +406,7 @@ pub fn save_tiff16(path: &Path, image: &Linear16) -> Result<()> {
         path,
         image.into(),
         2,
+        &image.software,
         vec![(34675, Value::Undefined(linear_srgb_icc()))],
     )
 }
@@ -392,11 +427,11 @@ pub fn save_dng(path: &Path, image: &Linear16) -> Result<()> {
     let (neutral, exposure) = dng_white(image);
     let tags = vec![
         (254, Value::Long(vec![0])),
-        (271, Value::Ascii("Hewlett-Packard".into())),
-        (272, Value::Ascii("Scanjet 3770".into())),
+        (271, Value::Ascii(image.make.clone())),
+        (272, Value::Ascii(image.model.clone())),
         (50706, Value::Byte(vec![1, 4, 0, 0])),
         (50707, Value::Byte(vec![1, 1, 0, 0])),
-        (50708, Value::Ascii("HP Scanjet 3770".into())),
+        (50708, Value::Ascii(image.device())),
         (50717, Value::Long(vec![65535, 65535, 65535])),
         (
             50721,
@@ -406,7 +441,7 @@ pub fn save_dng(path: &Path, image: &Linear16) -> Result<()> {
         (50730, Value::SRational(vec![srational(exposure)])),
         (50778, Value::Short(vec![21])),
     ];
-    write_tiff(path, image.into(), 34892, tags)
+    write_tiff(path, image.into(), 34892, &image.software, tags)
 }
 
 /// Saves a finished 16-bit image (sRGB tones, `channels` 3 or 1) as a TIFF
@@ -418,6 +453,7 @@ pub fn save_deep(
     channels: usize,
     dpi: u16,
     data: &[u16],
+    software: &str,
 ) -> Result<()> {
     let ext = path
         .extension()
@@ -433,7 +469,7 @@ pub fn save_deep(
             data,
         };
         let photometric = if channels == 1 { 1 } else { 2 };
-        return write_tiff(path, image, photometric, Vec::new());
+        return write_tiff(path, image, photometric, software, Vec::new());
     }
     let file = std::io::BufWriter::new(std::fs::File::create(path)?);
     let mut encoder = png::Encoder::new(file, u32::try_from(width)?, u32::try_from(height)?);
@@ -469,7 +505,7 @@ mod tests {
 
     #[test]
     fn tiff16_reads_back() {
-        let dir = std::env::temp_dir().join("hp3770-raw-test");
+        let dir = std::env::temp_dir().join("vetroscan-raw-test");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("t.tif");
         let image = sample();
@@ -512,12 +548,16 @@ mod tests {
 
     #[test]
     fn dng_has_its_tags() {
-        let dir = std::env::temp_dir().join("hp3770-raw-test");
+        let dir = std::env::temp_dir().join("vetroscan-raw-test");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("t.dng");
-        let image = sample();
+        let image = sample().with_source("Test", "Flatbed A3", "VetroScan 9.9");
         save_dng(&path, &image).unwrap();
         let file = std::fs::read(&path).unwrap();
+        // The scanner and the program are the ones given, not fixed ones.
+        let has = |text: &str| file.windows(text.len()).any(|w| w == text.as_bytes());
+        assert!(has("Test Flatbed A3") && has("VetroScan 9.9"));
+        assert!(!has("Scanjet"));
         let tags = directory(&file);
         // Sorted, as TIFF requires.
         assert!(tags.windows(2).all(|w| w[0].0 < w[1].0));
@@ -533,12 +573,12 @@ mod tests {
 
     #[test]
     fn deep_png_and_tiff_read_back() {
-        let dir = std::env::temp_dir().join("hp3770-raw-test");
+        let dir = std::env::temp_dir().join("vetroscan-raw-test");
         std::fs::create_dir_all(&dir).unwrap();
         let data: Vec<u16> = (0..9 * 5).map(|i| (i * 1000) as u16).collect();
         for name in ["g.png", "g.tif"] {
             let path = dir.join(name);
-            save_deep(&path, 9, 5, 1, 300, &data).unwrap();
+            save_deep(&path, 9, 5, 1, 300, &data, "test").unwrap();
             assert_eq!(read_deep(&path), data, "{name}");
         }
     }
@@ -592,7 +632,7 @@ mod tests {
 
     #[test]
     fn dng_keeps_highlights_above_paper() {
-        let dir = std::env::temp_dir().join("hp3770-raw-test");
+        let dir = std::env::temp_dir().join("vetroscan-raw-test");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("h.dng");
         let image = chip();
@@ -624,7 +664,7 @@ mod tests {
 
     #[test]
     fn tiff16_keeps_highlights_above_paper() {
-        let dir = std::env::temp_dir().join("hp3770-raw-test");
+        let dir = std::env::temp_dir().join("vetroscan-raw-test");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("h.tif");
         let image = chip();

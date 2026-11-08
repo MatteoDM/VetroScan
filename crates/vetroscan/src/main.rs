@@ -58,6 +58,11 @@ use worker::{Command, Event, Handle, Purpose};
 /// has).
 const PREVIEW_DPI: u16 = 200;
 
+/// The app's name and version, as written in the files it saves.
+fn software() -> String {
+    format!("{APP_NAME} {}", env!("CARGO_PKG_VERSION"))
+}
+
 /// The app's name, as shown (title, bar, notifications). Until v0.2 it
 /// was "HP Scanjet 3770", the name of the one scanner it knew.
 const APP_NAME: &str = "VetroScan"; // not translated: a name
@@ -1125,15 +1130,18 @@ struct Raw {
     proxy: Arc<Image>,
     /// The tone curve of the scanner that made the samples.
     tone: Tone,
+    /// Who made that scanner and its model, for the metadata of RAW files.
+    scanner: Arc<(String, String)>,
 }
 
 impl Raw {
-    fn new(image: Image, tone: Tone) -> Self {
+    fn new(image: Image, caps: &Capabilities) -> Self {
         let proxy = shrink(&image, PROXY);
         Self {
             full: Arc::new(image),
             proxy: Arc::new(proxy),
-            tone,
+            tone: caps.tone,
+            scanner: Arc::new((caps.manufacturer.clone(), caps.model.clone())),
         }
     }
 
@@ -3324,7 +3332,7 @@ impl App {
                     (data, channels, image.width, image.height, image.dpi)
                 }
             };
-            vetroscan_export::save_deep(&target, w, h, channels, dpi, &data)
+            vetroscan_export::save_deep(&target, w, h, channels, dpi, &data, &software())
                 .map_err(|e| e.to_string())?;
         }
         Ok(if n == 1 {
@@ -3369,6 +3377,8 @@ impl App {
                 None => vetroscan_export::Linear16::from_linear8(&full, page.raw.tone.white)
                     .map_err(|e| e.to_string())?,
             };
+            let (make, model) = &*page.raw.scanner;
+            let raw = raw.with_source(make, model, &software());
             match format {
                 RawFormat::Tiff16 => vetroscan_export::save_tiff16(&target, &raw),
                 RawFormat::Dng => vetroscan_export::save_dng(&target, &raw),
@@ -4402,7 +4412,7 @@ impl App {
             Purpose::Preview => {
                 self.close_editor(true);
                 // The preview is worked in pixels of PREVIEW_DPI.
-                let raw = Raw::new(at_dpi(image, PREVIEW_DPI), self.caps.tone);
+                let raw = Raw::new(at_dpi(image, PREVIEW_DPI), &self.caps);
                 let settings = *self.settings();
                 let shown = render(&raw.proxy, &settings, &settings.adjust, &raw.tone);
                 let picture = Picture::from_rgb(shown.width, shown.height, &shown.to_rgb());
@@ -4439,7 +4449,7 @@ impl App {
         self.unsaved = true;
         self.pdf_rev += 1;
         let (w, h, dpi) = (image.width, image.height, image.dpi);
-        let mut page = Page::new(Raw::new(image, self.caps.tone), *self.settings());
+        let mut page = Page::new(Raw::new(image, &self.caps), *self.settings());
         // "Solo questa pagina" from the start: every page keeps the look it
         // was scanned with, and changing one does not change the others.
         if self.kind == Kind::Document {
@@ -4975,13 +4985,13 @@ impl App {
             });
             let mut label = format!("{}", i + 1);
             if page.own.is_some() {
-                label.push_str(" · propria");
+                label.push_str(tr(" · propria"));
             }
             if !page.transform.is_identity() {
                 label.push_str(" · ✎");
             }
             if page.layout.is_some() {
-                label.push_str(" · foglio");
+                label.push_str(tr(" · foglio"));
             }
             let edited_here = self.editor().is_some_and(|e| e.index == i);
             list = list.push(

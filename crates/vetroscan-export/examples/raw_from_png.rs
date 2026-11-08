@@ -48,6 +48,7 @@ fn main() -> vetroscan_export::Result<()> {
         };
         vetroscan_export::Linear16::from_linear8(&image, HP_WHITE)?
     };
+    let raw = raw.with_source("HP", "Scanjet 3770", "raw_from_png");
     vetroscan_export::save_dng(format!("{output}.dng").as_ref(), &raw)?;
     vetroscan_export::save_tiff16(format!("{output}.tif").as_ref(), &raw)?;
     println!("scritti {output}.dng e {output}.tif ({dpi} dpi)");

@@ -406,7 +406,7 @@
   "orientamento automatico": "automatic orientation",
   "pagina {n}": "page {n}",
   "pkexec non si avvia ({e})": "pkexec does not start ({e})",
-  "scanner disattivato (HP3770_NO_SCANNER)": "scanner switched off (HP3770_NO_SCANNER)",
+  "scanner disattivato (VETROSCAN_NO_SCANNER)": "scanner switched off (VETROSCAN_NO_SCANNER)",
   "scanner non elencato": "scanner not listed",
   "scansiona una foto": "scans a photo",
   "serve solo su Linux": "only needed on Linux",

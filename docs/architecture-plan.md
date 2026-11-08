@@ -1,7 +1,7 @@
 # Plan: from "an app for the HP 3770" to "an app for scanners"
 
-Status: **phases 0–6 done (v0.1.2 and v0.2.0 published; phases 5 and 6 come out with
-v0.3.0); next: phase 7** (plan written on 8 November 2026, after v0.1.1; updated the same day
+Status: **phases 0–7 done in the code (v0.1.2 and v0.2.0 published; phases 5–7 come out
+together in the next version); next: the second pass of the final check and the release** (plan written on 8 November 2026, after v0.1.1; updated the same day
 with the languages, the new name and the postponed phases). Each phase ends with a commit,
 green tests and a version; what is done is marked here.
 
@@ -164,7 +164,7 @@ How it went:
 How it went:
 
 - The scanner thread (`worker.rs`) holds a `Box<dyn Scanner>` opened from the `Registry`
-  (`hp3770_usb::UsbBackend`, or the made-up scanner with `HP3770_FAKE_SCANNER`). The e2e run
+  (`hp3770_usb::UsbBackend`, or the made-up scanner with `VETROSCAN_FAKE_SCANNER`). The e2e run
   the **same** thread on `scanner_api::fake`: before they had a separate fake. The events
   carry `DeviceStatus`, `Progress`, `ScanResult` and the button as an index; `Event::Opened`
   gives capabilities and the list of scanners.
@@ -255,12 +255,14 @@ How it went:
 - The capture files (`tests/fixtures/*.pcap`) and the folder name `Scansioni` keep their
   Italian names: tests and users' files refer to them.
 
-## Phase 7 · a new name, not tied to the HP 3770 → v0.4.0
+## Phase 7 · a new name, not tied to the HP 3770 → next version · done
 
-With several scanners the name "HP Scanjet 3770" no longer describes the app. **Decided by
-the user (8 November 2026): retroscan.** It is written `retroscan` in binaries, packages,
-crates and folders, "RetroScan" where it is shown (title, bar, menu). Before publishing,
-check that it is free: crates.io, GitHub, Flathub, AUR, Homebrew, registered trademarks.
+With several scanners the name "HP Scanjet 3770" no longer describes the app. The user first
+chose "retroscan"; checked before renaming, it turned out to be the name of about ten small
+GitHub projects, one of them a macOS scanning app, and the user asked for another name. The
+user then chose **VetroScan** (8 November 2026): `vetroscan` in programs, packages, crates
+and folders, "VetroScan" where it is shown; free on crates.io and on GitHub. Below,
+`retroscan` in the original plan reads as VetroScan.
 
 - **What changes name**: window title and name in the bar, binaries (`retroscan` for the
   app, the CLI also stays as `hp3770` as long as needed), packages
@@ -280,6 +282,29 @@ check that it is free: crates.io, GitHub, Flathub, AUR, Homebrew, registered tra
     stay valid.
 - **Done when:** an installation of v0.3.x updates to the new one on Windows and on Linux
   (deb and rpm) keeping preferences and presets, and the final checks below are clean.
+
+How it went:
+
+- The rename is a script with the name as a parameter (crate folders, packages, icons,
+  installer, workflow, docs), run on the commit before it: a different final name is one run
+  away. In the code the shown name is `APP_NAME` in the app's `main.rs`; the program and the
+  settings folder take the package's name (`env!("CARGO_PKG_NAME")`).
+- The app crate is `crates/vetroscan` (package and program `vetroscan`, not `-app`), the
+  export `crates/vetroscan-export`. The driver crates, the `hp3770` command and the
+  `70-hp3770.rules` udev rule keep their names: they are the HP 3770's, not the app's. So no
+  rule file is renamed (unlike the first plan).
+- Windows: the `AppId` is unchanged, the default folder for new installs is
+  `Programs\VetroScan`, an update stays in the old `Programs\HP3770`; `[InstallDelete]`
+  removes `hp3770-app.exe` and the old shortcuts.
+- Linux: the package `vetroscan` conflicts with, replaces and provides `hp3770` (and the
+  `-git` packages); the AUR PKGBUILD is `vetroscan-git`.
+- Settings: `prefs::migrate_dir` copies the files of the old `hp3770` folder into the new one
+  at the first start, only if the new one does not exist, and leaves the old one (test).
+- The status bar names the scanner in use next to its connection.
+- New CI steps, on every build: "Update test from v0.2.0" installs the v0.2.0 installer
+  (Windows) or `.deb` (Linux, both architectures) and this version over it, and checks that
+  the old program and shortcut are gone, the new ones are there, and the old package is
+  replaced.
 
 ## Final coherence check (double) · after phase 7
 

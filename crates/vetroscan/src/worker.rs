@@ -99,7 +99,7 @@ impl Handle {
 
 /// The scanners the app looks for: on USB, the RTS8822 driver.
 pub fn registry() -> Registry {
-    if std::env::var_os("HP3770_FAKE_SCANNER").is_some() {
+    if std::env::var_os("VETROSCAN_FAKE_SCANNER").is_some() {
         // A made-up scanner, to try the interface with no scanner.
         return Registry::new().with(scanner_api::fake::FakeBackend::new(vec![
             scanner_api::fake::FakeScanner::flatbed().paced(Duration::from_millis(400)),
@@ -241,8 +241,8 @@ impl Worker {
         if self.scanner.is_none() {
             // For trying the interface without touching the scanner (for
             // instance while another program uses it).
-            if std::env::var_os("HP3770_NO_SCANNER").is_some() {
-                return Err(tr("scanner disattivato (HP3770_NO_SCANNER)").into());
+            if std::env::var_os("VETROSCAN_NO_SCANNER").is_some() {
+                return Err(tr("scanner disattivato (VETROSCAN_NO_SCANNER)").into());
             }
             let devices = self.registry.list();
             let first = self
@@ -534,14 +534,14 @@ mod tests {
         let Event::Opened(first, _, all) = next(&events) else {
             panic!("opened");
         };
-        assert_eq!(first.name, "Prova Piano A4");
+        assert_eq!(first.name, "Test Flatbed A4");
         assert_eq!(all.len(), 2);
         let _ = next(&events);
         handle.send(Command::Choose(all[1].clone()));
         let Event::Opened(second, caps, _) = next(&events) else {
             panic!("opened");
         };
-        assert_eq!(second.name, "Prova Piano A3");
+        assert_eq!(second.name, "Test Flatbed A3");
         assert_eq!(caps.max_dpi(), 1200);
     }
 }

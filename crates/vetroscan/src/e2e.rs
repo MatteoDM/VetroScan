@@ -788,7 +788,7 @@ fn screenshot_of_the_print_preview() {
         ui.app.view(),
     );
     let snapshot = sim.snapshot(&iced::Theme::Dark).unwrap();
-    let path = std::env::temp_dir().join("hp3770-print-preview.png");
+    let path = std::env::temp_dir().join("vetroscan-print-preview.png");
     let _ = std::fs::remove_file(&path);
     let _ = snapshot.matches_image(&path);
     eprintln!("screenshot: {}", path.display());
@@ -1311,7 +1311,7 @@ fn without_buttons() -> FakeScanner {
 #[test]
 fn the_flatbed_offers_its_lamp_its_buttons_and_16_bits() {
     let mut ui = Ui::new();
-    assert_eq!(ui.app.caps.model, "Piano A4");
+    assert_eq!(ui.app.caps.model, "Flatbed A4");
     assert!(ui.shows("Pronto · lampada accesa"));
     ui.send(Message::Pane(crate::Pane::Scan));
     assert!(ui.shows("Profondità"));
@@ -1329,7 +1329,7 @@ fn the_flatbed_offers_its_lamp_its_buttons_and_16_bits() {
 #[test]
 fn a_scanner_without_a_lamp_and_16_bits_shows_neither() {
     let mut ui = Ui::with_scanners(vec![FakeScanner::a3()]);
-    assert_eq!(ui.app.caps.model, "Piano A3");
+    assert_eq!(ui.app.caps.model, "Flatbed A3");
     // Ready, and nothing about a lamp.
     assert!(ui.shows("Pronto"));
     assert!(!ui.shows("Pronto · lampada accesa"));
@@ -1399,7 +1399,7 @@ fn button_actions_are_kept_for_each_model() {
     // The A3: its Start does its default, adding a page.
     let a3 = ui.app.devices[1].clone();
     ui.send(Message::ChooseScanner(a3));
-    while ui.app.caps.model != "Piano A3" {
+    while ui.app.caps.model != "Flatbed A3" {
         let event = ui
             .events
             .recv_timeout(Duration::from_secs(10))
@@ -1415,7 +1415,7 @@ fn button_actions_are_kept_for_each_model() {
     // Back on the flatbed: its choice is still there.
     let flatbed = ui.app.devices[0].clone();
     ui.send(Message::ChooseScanner(flatbed));
-    while ui.app.caps.model != "Piano A4" {
+    while ui.app.caps.model != "Flatbed A4" {
         let event = ui
             .events
             .recv_timeout(Duration::from_secs(10))
@@ -1429,9 +1429,9 @@ fn button_actions_are_kept_for_each_model() {
     );
     // Both are saved, by model and button id.
     let stored = ui.app.prefs().buttons;
-    assert_eq!(stored["Prova Piano A4"].document["scan"], "rifai-ultima");
+    assert_eq!(stored["Test Flatbed A4"].document["scan"], "rifai-ultima");
     assert_eq!(
-        stored["Prova Piano A3"].document["start"],
+        stored["Test Flatbed A3"].document["start"],
         "salva-documento"
     );
 }
@@ -1489,4 +1489,53 @@ fn a_question_and_its_answers_in_english() {
     assert!(ui.shows("Switch to Photo"));
     ui.key(iced::keyboard::key::Named::Escape);
     assert!(ui.question().is_none());
+}
+
+// ---------------------------------------------------------------- the tour
+
+/// A tour of the app in Italian and in English, a screenshot of each place,
+/// to look at by hand (texts cut off, mixed or untranslated):
+/// `TOUR_DIR=tour cargo test -p vetroscan e2e::tour -- --ignored`.
+#[test]
+#[ignore = "screenshots to look at, not a check"]
+fn tour() {
+    use crate::i18n::LangChoice;
+    use crate::EditMsg;
+    let Some(dir) = std::env::var_os("TOUR_DIR").map(std::path::PathBuf::from) else {
+        return;
+    };
+    for (lang, choice) in [("it", LangChoice::It), ("en", LangChoice::En)] {
+        let mut ui = Ui::new();
+        ui.send(Message::Language(choice));
+        let mut n = 0;
+        let mut shot = |ui: &mut Ui, what: &str| {
+            n += 1;
+            let theme = ui.app.theme();
+            let mut sim = iced_test::Simulator::with_size(
+                iced::Settings::default(),
+                Size::new(1360.0, 900.0),
+                ui.app.view(),
+            );
+            let path = dir.join(format!("{lang}-{n:02}-{what}"));
+            sim.snapshot(&theme).unwrap().matches_image(path).unwrap();
+        };
+        shot(&mut ui, "start");
+        ui.send(Message::Preview);
+        ui.settle();
+        shot(&mut ui, "preview");
+        ui.scan(2);
+        shot(&mut ui, "pages");
+        ui.send(Message::Pane(crate::Pane::Adjust));
+        shot(&mut ui, "adjust");
+        ui.send(Message::Pane(crate::Pane::Output));
+        ui.send(Message::PdfSize(crate::PdfSize::A4));
+        shot(&mut ui, "output-pdf");
+        ui.send(Message::Pane(crate::Pane::Prefs));
+        shot(&mut ui, "prefs");
+        ui.send(Message::Edit(EditMsg::Open(0)));
+        shot(&mut ui, "editor");
+        ui.send(Message::Edit(EditMsg::Discard));
+        ui.send(Message::Kind(Kind::Photo));
+        shot(&mut ui, "question");
+    }
 }

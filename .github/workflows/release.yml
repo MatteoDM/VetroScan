@@ -240,6 +240,38 @@ jobs:
           }
           Write-Host "Installed per user and removed cleanly"
 
+      # The last version under the old name ("HP Scanjet 3770", v0.2.0), then this one over it:
+      # same folder, the old program and shortcut gone, one uninstall entry.
+      - name: Update test from v0.2.0 (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $old = Join-Path $env:RUNNER_TEMP 'old'
+          gh release download v0.2.0 --repo ${{ github.repository }} --pattern '*-windows-x86_64-setup.exe' --dir $old
+          $oldSetup = (Get-ChildItem "$old/*-setup.exe").FullName
+          Start-Process $oldSetup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER' -Wait
+          $dir = Join-Path $env:LOCALAPPDATA 'Programs\HP3770'
+          $programs = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
+          if (-not (Test-Path (Join-Path $dir 'hp3770-app.exe'))) { throw "v0.2.0 did not install" }
+          $setup = (Get-ChildItem dist/*-setup.exe).FullName
+          Start-Process $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER' -Wait
+          $present = @((Join-Path $dir 'vetroscan.exe'), (Join-Path $dir 'hp3770.exe'), (Join-Path $programs 'VetroScan.lnk'))
+          foreach ($path in $present) {
+            if (-not (Test-Path $path)) { throw "Missing after the update: $path" }
+          }
+          $gone = @((Join-Path $dir 'hp3770-app.exe'), (Join-Path $programs 'HP Scanjet 3770.lnk'))
+          foreach ($path in $gone) {
+            if (Test-Path $path) { throw "Left over by the update: $path" }
+          }
+          $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{6B0BD725-4FC5-40CE-A326-BBF50527870C}_is1'
+          if ((Get-ItemProperty $key).DisplayName -notlike 'VetroScan*') { throw "The uninstall entry is not the new one" }
+          $uninstaller = (Get-ItemProperty $key).UninstallString.Trim('"')
+          Start-Process $uninstaller -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait
+          Write-Host "v0.2.0 updated in place and removed"
+
       - name: Smoke test the packages (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -269,6 +301,27 @@ jobs:
             && test -f squashfs-root/vetroscan.desktop \
             && test -s squashfs-root/usr/share/licenses/vetroscan/THIRD_PARTY_LICENSES.txt)
           echo "deb installed and removed; rpm, pacman and AppImage contents checked"
+
+      # The last version under the old name (package hp3770, v0.2.0), then this one over it.
+      - name: Update test from v0.2.0 (Linux)
+        if: runner.os == 'Linux'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          old="$RUNNER_TEMP/old"
+          case "$(dpkg --print-architecture)" in amd64) label=x86_64 ;; arm64) label=aarch64 ;; esac
+          gh release download v0.2.0 --repo ${{ github.repository }} --pattern "*-linux-$label.deb" --dir "$old"
+          sudo apt-get install -y "$old"/*.deb
+          test -x /usr/bin/hp3770-app
+          sudo apt-get install -y ./dist/vetroscan-*.deb
+          test -x /usr/bin/vetroscan
+          test -x /usr/bin/hp3770
+          test ! -e /usr/bin/hp3770-app
+          test -f /usr/lib/udev/rules.d/70-hp3770.rules
+          if dpkg -s hp3770 >/dev/null 2>&1; then echo "hp3770 still installed" >&2; exit 1; fi
+          sudo apt-get remove -y vetroscan
+          echo "hp3770 v0.2.0 replaced by vetroscan"
 
       - name: Smoke test the disk image (macOS)
         if: runner.os == 'macOS'

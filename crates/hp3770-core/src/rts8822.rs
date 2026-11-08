@@ -71,11 +71,11 @@ pub fn device_status(s: &Status) -> DeviceStatus {
             ("USB".into(), if s.usb2 { "2.0" } else { "1.1" }.into()),
             ("Chip".into(), format!("RTS8822, chipset {}", s.chipset_id)),
             (
-                "Carrello".into(),
+                "Carriage".into(),
                 if s.head_at_home {
-                    "a casa"
+                    "at home"
                 } else {
-                    "fuori casa"
+                    "away from home"
                 }
                 .into(),
             ),

@@ -2,10 +2,11 @@
 
 *English: [README.md](README.md). La documentazione completa del progetto è in inglese.*
 
-**VetroScan** è un'app per scansionare con un driver per lo scanner **HP Scanjet 3770** (USB `03f0:2505`), scritti in Rust,
-per Linux, macOS e Windows (fino alla v0.2 si chiamava
-«HP Scanjet 3770»; aggiornando, le impostazioni restano). Le scansioni sono uguali a quelle del driver HP, a colori, in
-grigio e in bianco e nero, da 200 a 2400 dpi, anche a 16 bit per canale.
+**VetroScan** è un'app per scansionare, con un driver per lo scanner **HP Scanjet 3770**
+(USB `03f0:2505`); app e driver sono scritti in Rust, per Linux, macOS e Windows. Fino alla
+v0.2 l'app si chiamava «HP Scanjet 3770»: aggiornando, le impostazioni restano. Le scansioni
+sono uguali a quelle del driver HP, a colori, in grigio e in bianco e nero, da 200 a 2400 dpi,
+anche a 16 bit per canale.
 
 L'app parla italiano e inglese: nelle **Preferenze**, *Lingua* sceglie fra *Automatica*
 (la lingua del sistema), *Italiano* ed *English*.

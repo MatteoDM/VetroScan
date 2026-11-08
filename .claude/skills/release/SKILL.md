@@ -34,7 +34,7 @@ in `vetroscan.iss`: Windows uses it to update and uninstall. A tag with `-` (e.g
 `v0.2.0-rc.1`) comes out as a prerelease. `workflow_dispatch` builds the packages without
 publishing them.
 
-The AUR PKGBUILD `packaging/aur/PKGBUILD` (`hp3770-git`) builds from git and does not follow
+The AUR PKGBUILD `packaging/aur/PKGBUILD` (`vetroscan-git`) builds from git and does not follow
 the tags: it is not touched at every release.
 
 ## Steps
@@ -94,7 +94,7 @@ machine (`linux-x86_64`, `macos-arm64`, …, the same as the CI). The CI passes 
 arguments and builds first: `scripts/package.sh <target|""> <label> <version>`. On Linux it
 makes `.deb`, `.rpm`, `.pkg.tar.zst` and `.AppImage`; it needs `nfpm` and `appimagetool` in
 the `PATH` or in the `NFPM` / `APPIMAGETOOL` variables, and `APPIMAGE_RUNTIME` if
-appimagetool cannot download the runtime. On macOS it makes `HP Scanjet 3770.app`
+appimagetool cannot download the runtime. On macOS it makes `VetroScan.app`
 (Info.plist, icon made with `sips`/`iconutil`, ad-hoc signature, not notarised) inside a
 `.dmg`. Every system needs cargo-about (`cargo install --locked --features cli cargo-about`)
 for `THIRD_PARTY_LICENSES.txt` (`scripts/third_party_licenses.sh`). The output goes to

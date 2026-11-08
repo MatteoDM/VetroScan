@@ -109,8 +109,8 @@ impl FakeScanner {
     /// tone curve.
     pub fn flatbed() -> Self {
         Self::with(Capabilities {
-            manufacturer: "Prova".into(),
-            model: "Piano A4".into(),
+            manufacturer: "Test".into(),
+            model: "Flatbed A4".into(),
             glass_inches: (8.5, 11.7),
             resolutions: vec![200, 300, 600, 1200, 2400],
             modes: vec![ColourMode::Colour, ColourMode::Grey, ColourMode::Lineart],
@@ -136,8 +136,8 @@ impl FakeScanner {
     /// buttons, no lamp to switch.
     pub fn a3() -> Self {
         Self::with(Capabilities {
-            manufacturer: "Prova".into(),
-            model: "Piano A3".into(),
+            manufacturer: "Test".into(),
+            model: "Flatbed A3".into(),
             glass_inches: (11.7, 16.5),
             resolutions: vec![150, 300, 600, 1200],
             modes: vec![ColourMode::Colour, ColourMode::Grey],
@@ -217,7 +217,7 @@ impl Scanner for FakeScanner {
             ready: true,
             lamp,
             adapter: self.caps.transparency.then_some(false),
-            details: vec![("Collegamento".into(), "in memoria".into())],
+            details: vec![("Link".into(), "in memory".into())],
         })
     }
 
@@ -423,16 +423,16 @@ mod tests {
         ]));
         let devices = registry.list();
         let names: Vec<_> = devices.iter().map(|d| d.name.as_str()).collect();
-        assert_eq!(names, ["Prova Piano A4", "Prova Piano A3"]);
+        assert_eq!(names, ["Test Flatbed A4", "Test Flatbed A3"]);
         let second = registry.open(&devices[1]).unwrap();
         assert_eq!(second.capabilities().max_dpi(), 1200);
         assert_eq!(second.capabilities().glass_pixels(100), (1170, 1650));
         assert_eq!(
             registry.open_first().unwrap().capabilities().model,
-            "Piano A4"
+            "Flatbed A4"
         );
         assert!(Registry::new().open_first().is_err());
         assert_eq!(registry.models().len(), 2);
-        assert_eq!(registry.models()[1].model, "Piano A3");
+        assert_eq!(registry.models()[1].model, "Flatbed A3");
     }
 }

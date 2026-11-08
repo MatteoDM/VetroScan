@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! What the application remembers between runs, in a JSON file in the
-//! user's configuration folder (`%APPDATA%\hp3770\impostazioni.json` on
-//! Windows, `~/.config/hp3770/impostazioni.json` on Linux).
+//! user's configuration folder, named after the app's package
+//! (`%APPDATA%etroscan\impostazioni.json` on Windows,
+//! `~/.config/vetroscan/impostazioni.json` on Linux; `hp3770` up to v0.2,
+//! see [`config_dir`]).
 //!
 //! The file mirrors the interface's settings with plain fields, so that it
 //! stays readable and a field added later only takes its default.
