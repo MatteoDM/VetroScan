@@ -69,14 +69,35 @@ enum Command {
         #[arg(value_parser = clap::value_parser!(u16).range(1..=600))]
         steps: u16,
     },
-    /// Switch the flatbed lamp on or off.
+    /// Experimental: scan the whole glass with the transparency adapter's
+    /// lamp, to see where its light falls.
     ///
-    /// Writes E946 and E954 like the HP driver. The lamp also switches off
-    /// by itself after the timer set by `init` (13 minutes).
+    /// Calibrates on the white strip with the flatbed lamp as usual, then
+    /// switches to the adapter's lamp, waits 30 s for it to warm up and
+    /// scans in colour (linear samples, no tone curve). The colours are
+    /// those of the flatbed calibration: only the place of the light
+    /// counts. Remove the lid's white backing first.
+    TmaPreview {
+        /// Output file (PNG, or PPM if the name ends in .ppm).
+        output: PathBuf,
+        /// Resolution: 200 or 300 dpi.
+        #[arg(long, default_value_t = 200)]
+        dpi: u16,
+    },
+    /// Switch the flatbed lamp, or the transparency adapter's, on or off.
+    ///
+    /// Writes E946 and E954 like the HP driver (E965 and E946 for the
+    /// adapter). One lamp at a time: switching one on switches the other
+    /// off. The flatbed lamp also switches off by itself after the timer
+    /// set by `init` (13 minutes).
     Lamp {
         /// on or off.
         #[arg(value_enum)]
         state: LampState,
+        /// The transparency adapter's lamp (in the lid) instead of the
+        /// flatbed lamp.
+        #[arg(long)]
+        tma: bool,
     },
     /// Scan an area of the glass in colour and save it as PNG (or PPM if
     /// the file name ends in .ppm).
@@ -180,7 +201,7 @@ fn main() -> ExitCode {
         Command::Init => open(cli.backend).and_then(init),
         Command::Park => open(cli.backend).and_then(park),
         Command::Forward { steps } => open(cli.backend).and_then(|s| forward(s, steps)),
-        Command::Lamp { state } => open(cli.backend).and_then(|s| lamp(s, state)),
+        Command::Lamp { state, tma } => open(cli.backend).and_then(|s| lamp(s, state, tma)),
         Command::Probe { output } => open(cli.backend).and_then(|s| probe(s, output)),
         Command::Scan {
             output,
@@ -205,6 +226,9 @@ fn main() -> ExitCode {
                 (mode, threshold, linear, sharpen, !no_fast_travel),
                 depth,
             )
+        }
+        Command::TmaPreview { output, dpi } => {
+            open(cli.backend).and_then(|s| tma_preview(s, &output, dpi))
         }
         Command::Detect { input, crop } => detect(&input, crop.as_deref()),
         Command::Buttons { count, method, raw } => {
@@ -265,6 +289,7 @@ fn status(scanner: Scanner) -> CliResult {
     println!("carriage at home   {}", yes_no(s.head_at_home));
     println!("lamp               {}", s.lamp);
     println!("TMA plugged in     {}", yes_no(s.tma_attached));
+    println!("TMA lamp lit       {}", yes_no(s.tma_lamp_lit));
     println!(
         "buttons held       {}",
         if held.is_empty() {
@@ -521,13 +546,85 @@ fn save_image(
     Ok(())
 }
 
-fn lamp(scanner: Scanner, state: LampState) -> CliResult {
+fn tma_preview(scanner: Scanner, output: &std::path::Path, dpi: u16) -> CliResult {
+    use hp3770_core::geometry::{Area, GLASS_INCHES};
+    use hp3770_core::session::{self, Request, Stage, TMA_WARMUP};
+    if dpi != 200 && dpi != 300 {
+        return Err("tma-preview takes 200 or 300 dpi".into());
+    }
+    let mut chip = Chip::new(scanner);
+    if !chip.status()?.tma_attached {
+        return Err("the transparency adapter is not plugged in".into());
+    }
+    let profile = &hp3770_core::profile::HP3770;
+    let area = Area::from_mm(dpi, 0.0, 0.0, GLASS_INCHES.0 * 25.4, GLASS_INCHES.1 * 25.4);
+    let request = Request {
+        linear: true,
+        transparency: true,
+        adjust: scan_imaging::adjust::Adjustments {
+            sharpen: 0.0,
+            ..Default::default()
+        },
+        ..Request::new(dpi, area, scan_imaging::Mode::Colour)
+    };
+    let start = Instant::now();
+    let mut calibrated = false;
+    let mut last_percent = None;
+    let (image, report) = session::scan(&mut chip, profile, &request, &mut |stage| {
+        match stage {
+            Stage::Starting => eprintln!("starting"),
+            Stage::WarmingUp if calibrated => eprintln!(
+                "TMA lamp         on, warming up for {} s",
+                TMA_WARMUP.as_secs()
+            ),
+            Stage::WarmingUp => eprintln!("lamp             was off, warming up"),
+            Stage::Calibrating => {
+                calibrated = true;
+                eprintln!("calibrating      (flatbed lamp, white strip)");
+            }
+            Stage::Scanning { done, total } => {
+                let percent = done * 100 / total.max(1) / 10 * 10;
+                if last_percent != Some(percent) {
+                    last_percent = Some(percent);
+                    eprintln!("scanning         {percent} %");
+                }
+            }
+            Stage::Finishing => eprintln!("finishing        (flatbed lamp on again)"),
+        }
+        true
+    })?;
+    eprintln!("gains            {:?}", report.gains);
+    save_image(output, image.width, image.height, &image.data, image.format)?;
+    println!(
+        "scanned          {} x {} pixels in {:.1} s",
+        image.width,
+        image.height,
+        start.elapsed().as_secs_f32()
+    );
+    println!("saved            {}", output.display());
+    Ok(())
+}
+
+fn lamp(scanner: Scanner, state: LampState, tma: bool) -> CliResult {
     let mut chip = Chip::new(scanner);
     // The block kept in memory by a long-running driver; this one-shot
-    // command has none, and lamp_flatbed reads the chip anyway.
+    // command has none, and the lamp functions read the chip anyway.
     let mut init = hp3770_core::init::Registers::default();
-    chip.lamp_flatbed(&mut init, state == LampState::On)?;
-    println!("lamp             {}", chip.lamp_status()?);
+    let on = state == LampState::On;
+    if tma {
+        if !chip.status()?.tma_attached {
+            return Err("the transparency adapter is not plugged in".into());
+        }
+        chip.lamp_transparency(&mut init, on)?;
+    } else {
+        chip.lamp_flatbed(&mut init, on)?;
+    }
+    let s = chip.status()?;
+    println!("lamp             {}", s.lamp);
+    println!(
+        "TMA lamp lit     {}",
+        if s.tma_lamp_lit { "yes" } else { "no" }
+    );
     Ok(())
 }
 
@@ -766,7 +863,16 @@ mod tests {
         assert!(matches!(
             cli.command,
             Command::Lamp {
-                state: LampState::Off
+                state: LampState::Off,
+                tma: false
+            }
+        ));
+        let cli = Cli::parse_from(["hp3770", "lamp", "on", "--tma"]);
+        assert!(matches!(
+            cli.command,
+            Command::Lamp {
+                state: LampState::On,
+                tma: true
             }
         ));
     }

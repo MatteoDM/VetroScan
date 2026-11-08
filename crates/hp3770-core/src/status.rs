@@ -21,14 +21,31 @@ pub enum Lamp {
 }
 
 impl Lamp {
-    /// Decodes `E946` and `E955` (`Lamp_Status_Get`, chipsets other than the
-    /// RTS8822BL-03A): bit 6 of `E946` switches the lamp on, bit 4 of `E955`
-    /// selects the transparency adapter instead of the flatbed lamp.
-    pub fn from_registers(e946: u8, e955: u8) -> Self {
-        match (e946 & 0x40 != 0, e955 & 0x10 != 0) {
-            (false, _) => Self::Off,
-            (true, false) => Self::Flatbed,
-            (true, true) => Self::Transparency,
+    /// The lamp `E946` asks for (`Lamp_Status_Get`, as hp3900 does for the
+    /// RTS8822BL-03A): bit 6 the flatbed lamp, bit 5 the transparency
+    /// adapter's. The adapter's only lights if bit 6 of `E965` is set too
+    /// (see [`Lamp::from_registers`]); the flatbed lamp wins if both are
+    /// asked for.
+    pub fn from_e946(e946: u8) -> Self {
+        if e946 & 0x40 != 0 {
+            Self::Flatbed
+        } else if e946 & 0x20 != 0 {
+            Self::Transparency
+        } else {
+            Self::Off
+        }
+    }
+
+    /// Which lamp is lit, from `E946` and `E965`. Found on the HP 3770 on
+    /// 8 November 2026, with the lid's light checked by eye and bit 4 of
+    /// `E969` as witness: the adapter's lamp lights with bit 5 of `E946`
+    /// and bit 6 of `E965` both set, and with neither alone; bit 6 of
+    /// `E946` is the flatbed lamp whatever `E965` holds; bit 7 of `E965`,
+    /// the lamp timer bit of `E946` and `E955` play no part.
+    pub fn from_registers(e946: u8, e965: u8) -> Self {
+        match Self::from_e946(e946) {
+            Self::Transparency if e965 & 0x40 == 0 => Self::Off,
+            lamp => lamp,
         }
     }
 }
@@ -63,6 +80,9 @@ pub struct Status {
     /// The transparency adapter is plugged in (`RTS_isTmaAttached`: bit 1 of
     /// `E969` is 0 when it is).
     pub tma_attached: bool,
+    /// The transparency adapter's lamp is lit: bit 4 of `E969`, set exactly
+    /// when the lid's light was on in the tries of 8 November 2026.
+    pub tma_lamp_lit: bool,
     /// Buttons held down, one bit each (see [`crate::device::Button::mask`]).
     pub buttons_held: u8,
     /// `E829`-`E82A`, which `IsScannerLinked` reads to tell the first
@@ -80,7 +100,7 @@ impl<T: Transport> Chip<T> {
         let e800 = self.read_byte(0xe800)?;
         let link_word = self.read_word(0xe829)?;
         let e946 = self.read_byte(0xe946)?;
-        let e954 = self.read_registers(0xe954, 2)?;
+        let e965 = self.read_byte(0xe965)?;
         let e968 = self.read_registers(0xe968, 2)?;
         let e96f = self.read_byte(0xe96f)?;
         Ok(Status {
@@ -89,8 +109,9 @@ impl<T: Transport> Chip<T> {
             init_done: f910 & 0x08 != 0,
             executing: e800 & 0x80 != 0,
             head_at_home: e96f & 0x40 != 0,
-            lamp: Lamp::from_registers(e946, e954[1]),
+            lamp: Lamp::from_registers(e946, e965),
             tma_attached: e968[1] & 0x02 == 0,
+            tma_lamp_lit: e968[1] & 0x10 != 0,
             buttons_held: !e968[0] & 0x3f,
             link_word,
         })
@@ -156,6 +177,7 @@ mod tests {
         assert!(s.head_at_home);
         assert_eq!(s.lamp, Lamp::Flatbed);
         assert!(s.tma_attached);
+        assert!(!s.tma_lamp_lit);
         assert_eq!(s.buttons_held, 0);
         assert_eq!(s.link_word, 0x1024);
     }
@@ -163,8 +185,15 @@ mod tests {
     #[test]
     fn lamp_bits() {
         // During a scan the HP driver writes E946 = C9 then 89, E955 = 09.
-        assert_eq!(Lamp::from_registers(0xc9, 0x09), Lamp::Flatbed);
-        assert_eq!(Lamp::from_registers(0x89, 0x09), Lamp::Off);
-        assert_eq!(Lamp::from_registers(0xc9, 0x19), Lamp::Transparency);
+        assert_eq!(Lamp::from_e946(0xc9), Lamp::Flatbed);
+        assert_eq!(Lamp::from_e946(0x89), Lamp::Off);
+        // The tries of 8 November 2026 (E946, E965, the lid's light).
+        assert_eq!(Lamp::from_registers(0xa9, 0xcc), Lamp::Transparency);
+        assert_eq!(Lamp::from_registers(0xa9, 0x4c), Lamp::Transparency);
+        assert_eq!(Lamp::from_registers(0xb9, 0xcc), Lamp::Transparency);
+        assert_eq!(Lamp::from_registers(0xa9, 0x8c), Lamp::Off);
+        assert_eq!(Lamp::from_registers(0x89, 0xcc), Lamp::Off);
+        assert_eq!(Lamp::from_registers(0xd9, 0xcc), Lamp::Flatbed);
+        assert_eq!(Lamp::from_registers(0xd9, 0x0c), Lamp::Flatbed);
     }
 }

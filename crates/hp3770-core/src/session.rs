@@ -39,7 +39,18 @@ pub struct Request {
     /// Bits per sample asked of the chip: 8, or 16 (the samples are then
     /// also in [`Report::samples16`]).
     pub depth: u8,
+    /// Experimental: scan with the transparency adapter's lamp, switched on
+    /// after the usual calibration (on the white strip, with the flatbed
+    /// lamp) and given [`TMA_WARMUP`]; at the end it is switched off and the
+    /// flatbed lamp on again, as hp3900 does. For finding where the
+    /// adapter's light falls on the glass, not for pictures: the
+    /// calibration of the adapter is not done yet.
+    pub transparency: bool,
 }
+
+/// The transparency adapter's lamp warms up for at least this long (HP's
+/// user's manual: at least 30 seconds before scanning slides or negatives).
+pub const TMA_WARMUP: std::time::Duration = std::time::Duration::from_secs(30);
 
 impl Request {
     /// A request with the HP driver's defaults for `mode`.
@@ -52,6 +63,7 @@ impl Request {
             linear: false,
             fast_travel: true,
             depth: 8,
+            transparency: false,
         }
     }
 }
@@ -169,6 +181,15 @@ pub fn scan<T: Transport>(
         samples16: None,
     };
     let tables = calibration.tables(Some(&gamma));
+    if request.transparency {
+        chip.lamp_transparency(&mut init, true)?;
+        if !progress(Stage::WarmingUp) {
+            chip.lamp_transparency(&mut init, false)?;
+            chip.lamp_flatbed(&mut init, true)?;
+            return Err(Error::Cancelled("lamp warm-up"));
+        }
+        std::thread::sleep(TMA_WARMUP);
+    }
     if request.fast_travel {
         if let Some((steps, top)) = fast_travel(profile, params.resolution_y, params.top) {
             chip.motor_move(
@@ -210,6 +231,10 @@ pub fn scan<T: Transport>(
     // The chip brings the carriage back by itself below 600 dpi, and not
     // when the scan was cut short: make sure it is home.
     chip.head_park_home(&park_registers(&init), &profile.park)?;
+    if request.transparency {
+        chip.lamp_transparency(&mut init, false)?;
+        chip.lamp_flatbed(&mut init, true)?;
+    }
     if stopped {
         return Err(Error::Cancelled("scan"));
     }

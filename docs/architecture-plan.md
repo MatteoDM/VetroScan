@@ -405,9 +405,21 @@ It needs no new hardware, only slides and negatives to put in the holder.
     `hp3770-cli`) the lid's light never came on: bit 6 of `E946` always lights the flatbed lamp,
     bit 5 nothing visible. Matteo saw the lid's light on only during the HP driver's first
     attempts, before a power cycle, with the chip in the state left by `hp3770 init`.
-  Next: power cycle, `hp3770 init`, the HP driver's attempt captured this time; check the
-  cable in the TMA socket and the light from the scanner's buttons.
-- **Driver**: the adapter's lamp (bit 4 of `E955`, already read by `Lamp::Transparency`), its
+  Found later the same evening, writing back the whole register block read while the light
+  was on and halving the differences (witness: bit 4 of `E969`, 1 exactly when the lid's light
+  is on): **the adapter's lamp lights with bit 5 of `E946` and bit 6 of `E965` together**,
+  with neither alone. Bit 6 of `E946` stays the flatbed lamp; bit 7 of `E965`, the timer bit
+  and `E955` play no part. Every start-up (hp3900's, the HP driver's, ours) clears bit 6 of
+  `E965`: that is why the HP driver never lights the adapter on Windows 11 (perhaps the value
+  is in its missing `hpsj3770.spf`). `lamp_transparency`, `hp3770 lamp on|off --tma`, the
+  `tma_lamp_lit` state and the experimental `hp3770 tma-preview` (calibration with the flatbed
+  lamp, then the adapter's lamp, 30 s, the whole glass) use it.
+  The adapter's light on the glass (`tma-preview` at 200 dpi, Matteo's holder with a strip of
+  negatives): 87.6-131.6 mm across, 76.2-171.6 mm down; at the top a slot with no film,
+  about 88-132 x 76-84 mm (the place to calibrate the adapter on, as the white strip for the
+  glass); below, the film window, about 97-122 x 94-171 mm, two 35 mm frames one above the
+  other, the strip along the carriage's travel.
+- **Driver**: the adapter's lamp (done: bit 5 of `E946` and bit 6 of `E965`, see above), its
   calibration (no white strip under the lid: what the HP driver does instead comes from the
   captures), the area of the holder; `hp3900` (`ST_TA`, `ST_NEG` in `hp3900_rts8822.c`) is the
   map, as for the flatbed. `Capabilities::transparency` becomes true for the 3770 and
