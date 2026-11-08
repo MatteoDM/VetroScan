@@ -9,10 +9,13 @@ Tempo: circa 15 minuti, quasi tutti di attesa mentre il computer compila.
 Non servono driver HP, SANE o altri programmi di scansione: l'app parla direttamente
 con lo scanner.
 
-> **Metodo provvisorio.** Per ora l'app si compila dal codice, per questo servono Rust e
-> qualche minuto di attesa. In arrivo un'AppImage (si scarica e si apre, su qualunque
-> Linux) e un pacchetto AUR per Omarchy/Arch (`yay -S hp3770`): con quelli questa guida
-> si riduce a tre righe.
+> **C'è una strada più corta.** Questa guida compila l'app dal codice, per questo servono
+> Rust e qualche minuto di attesa. Dalla prima versione pubblicata, nella pagina
+> [Releases](https://github.com/MatteoDM/scanner/releases/latest) c'è il pacchetto già
+> pronto per Omarchy/Arch (`hp3770-vX.Y.Z-linux-x86_64.pkg.tar.zst`): scaricalo e
+> installalo con `sudo pacman -U` seguito dal nome del file. Fa da solo i passi 3, 4 e 6
+> (regola udev compresa); poi salta al passo 5 per controllare. Le istruzioni per tutti i
+> sistemi, pacchetti e AppImage compresi, sono in [installazione.md](installazione.md).
 
 ---
 
