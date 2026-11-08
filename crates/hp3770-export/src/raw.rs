@@ -24,7 +24,7 @@
 //! crate cannot write DNG's own tags).
 
 use crate::Result;
-use hp3770_core::session::{Format, Image};
+use scan_imaging::{Format, Image};
 use std::io::Write;
 use std::path::Path;
 

@@ -942,7 +942,7 @@ fn colour_adjustments_do_not_come_back_after_closing_scan_settings_do() {
         std::mem::forget(ui);
     }
     let (app, _) = App::new();
-    let fresh = hp3770_core::adjust::Adjustments::default();
+    let fresh = scan_imaging::adjust::Adjustments::default();
     assert_eq!(app.photo.adjust, fresh, "the look starts clean");
     assert_eq!(app.document.adjust, fresh);
     assert_eq!(app.photo.dpi, 600, "the scan settings stay");
@@ -1083,7 +1083,7 @@ fn the_editor_turns_a_page_and_its_ctrl_z_takes_it_back() {
 // ------------------------------------------------- duplicate and drag
 
 /// Which scan each page shows (pages scanned apart have their own).
-fn scans(ui: &Ui) -> Vec<*const hp3770_core::session::Image> {
+fn scans(ui: &Ui) -> Vec<*const scan_imaging::Image> {
     ui.app
         .pages
         .iter()

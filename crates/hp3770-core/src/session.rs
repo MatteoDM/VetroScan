@@ -7,7 +7,6 @@
 //! sharpening and the grey or black-and-white conversion. The command line
 //! tool and the desktop application both use it.
 
-use crate::adjust::{self, Adjustments};
 use crate::arrange;
 use crate::error::{Error, Result};
 use crate::geometry::{self, Area};
@@ -16,8 +15,9 @@ use crate::profile::Profile;
 use crate::scan::LAMP_WARMUP;
 use crate::setup::ArrangeLine;
 use crate::transport::{Chip, Transport};
+use scan_imaging::adjust::{self, Adjustments};
 
-pub use scan_imaging::{Format, Image, Mode};
+use scan_imaging::{Image, Mode};
 
 /// A scan to make.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -271,6 +271,7 @@ pub fn process(
 mod tests {
     use super::*;
     use crate::profile::HP3770;
+    use scan_imaging::Format;
 
     fn request(mode: Mode) -> Request {
         Request {

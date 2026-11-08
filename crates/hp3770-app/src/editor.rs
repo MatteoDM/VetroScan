@@ -9,12 +9,12 @@
 
 use crate::viewer::Selection;
 use crate::{heading, labelled, App, Colour, Field, Look, Message, Page, Tab, View, ALL_COLOURS};
-use hp3770_core::transform::{Crop, Transform, MAX_ANGLE};
 use iced::widget::{
     button, checkbox, column, container, mouse_area, pick_list, row, slider, text, text_input,
     Space,
 };
 use iced::{Alignment, Element, Length, Theme};
+use scan_imaging::transform::{Crop, Transform, MAX_ANGLE};
 use std::time::{Duration, Instant};
 
 /// The parts of the editor.

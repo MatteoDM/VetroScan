@@ -35,6 +35,3 @@ pub mod status;
 pub mod transport;
 
 pub use error::{Error, Result};
-
-// Moved to `scan-imaging`; re-exported while the rest of the workspace moves.
-pub use scan_imaging::{adjust, convert, detect, transform};

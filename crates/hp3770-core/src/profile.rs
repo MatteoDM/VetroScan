@@ -14,11 +14,11 @@
 //! captures, where the first configuration of the file says 0, 0, 0 and
 //! 127, 128. "Configuration" below means that one.
 
-use crate::adjust::Tone;
 use crate::calibration::CalibrationConfig;
 use crate::geometry;
 use crate::motor::{MotorMove, StepType};
 use crate::motor_curves;
+use scan_imaging::adjust::Tone;
 
 /// Spread-spectrum clock generator settings (`SSCGEnable`, `SSCGMode`,
 /// `SSCGClockControl` in `[SCAN_PARAM]`).

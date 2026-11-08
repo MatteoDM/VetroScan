@@ -8,12 +8,13 @@
 
 use hp3770_core::device::Button;
 use hp3770_core::profile::HP3770;
-use hp3770_core::session::{self, Image, Report, Request, Stage};
+use hp3770_core::session::{self, Report, Request, Stage};
 use hp3770_core::status::Status;
 use hp3770_core::transport::Chip;
 use hp3770_usb::Scanner;
 use iced::futures::channel::mpsc;
 use iced::futures::{SinkExt, Stream};
+use scan_imaging::Image;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc as std_mpsc, Arc};
 use std::time::{Duration, Instant};
@@ -355,8 +356,8 @@ fn log(line: &str) {
 pub mod fake {
     use super::*;
     use hp3770_core::geometry::Area;
-    use hp3770_core::session::{Format, Mode};
     use hp3770_core::status::Lamp;
+    use scan_imaging::{Format, Mode};
 
     /// The originals on the glass: left, top, width, height (inches) and
     /// the colour they are printed in.

@@ -11,7 +11,7 @@
 
 use crate::compress::{encode, prepare, Encoding};
 use crate::Result;
-use hp3770_core::session::Image;
+use scan_imaging::Image;
 use std::io::Write;
 
 /// Size of the pages.
@@ -318,7 +318,7 @@ pub fn write_pages<W: Write>(out: &mut W, pages: &[PdfPage]) -> Result<()> {
 mod tests {
     use super::*;
     use crate::tests::sample;
-    use hp3770_core::session::Format;
+    use scan_imaging::Format;
 
     #[test]
     fn document_structure() {

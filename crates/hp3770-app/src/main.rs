@@ -30,20 +30,21 @@ mod worker;
 
 use editor::{Edit, EditMsg, Editor, Section};
 use histogram::Histogram;
-use hp3770_core::adjust::{self, Adjustments};
-use hp3770_core::convert;
-use hp3770_core::detect::{self, Found};
 use hp3770_core::geometry::{Area, GLASS_INCHES, HP_WHITE, RESOLUTIONS};
 use hp3770_core::profile::HP3770;
-use hp3770_core::session::{self, Format, Image, Request, Stage};
+use hp3770_core::session::{Request, Stage};
 use hp3770_core::status::Status;
-use hp3770_core::transform::Transform;
 use hp3770_export::{ImageFormat, PageSize};
 use iced::widget::{
     button, canvas, center, checkbox, column, container, mouse_area, opaque, pick_list,
     progress_bar, row, rule, scrollable, slider, stack, text, Space,
 };
 use iced::{Alignment, Element, Length, Point, Size, Subscription, Task, Theme};
+use scan_imaging::adjust::{self, Adjustments};
+use scan_imaging::convert;
+use scan_imaging::detect::{self, Found};
+use scan_imaging::transform::Transform;
+use scan_imaging::{Format, Image, Mode};
 use std::borrow::Cow;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -655,11 +656,11 @@ impl Settings {
         }
     }
 
-    fn mode(&self) -> session::Mode {
+    fn mode(&self) -> Mode {
         match self.colour {
-            Colour::Rgb => session::Mode::Colour,
-            Colour::Grey => session::Mode::Grey,
-            Colour::Lineart => session::Mode::Lineart {
+            Colour::Rgb => Mode::Colour,
+            Colour::Grey => Mode::Grey,
+            Colour::Lineart => Mode::Lineart {
                 threshold: self.threshold,
             },
         }
@@ -799,8 +800,8 @@ impl Settings {
                 curve: std::array::from_fn(|i| {
                     a.curve_points
                         .get(i)
-                        .map(|p| hp3770_core::adjust::Curve::new(p))
-                        .unwrap_or(hp3770_core::adjust::Curve::IDENTITY)
+                        .map(|p| scan_imaging::adjust::Curve::new(p))
+                        .unwrap_or(scan_imaging::adjust::Curve::IDENTITY)
                 }),
                 noise: a.noise,
                 descreen: a.descreen,
@@ -2597,7 +2598,7 @@ impl App {
                 ..Adjustments::default()
             },
             depth,
-            ..Request::new(dpi, area, session::Mode::Colour)
+            ..Request::new(dpi, area, Mode::Colour)
         }
     }
 
@@ -3614,7 +3615,7 @@ impl App {
                     self.remember(None);
                 }
                 self.curve_drag = Some(now);
-                let curve = hp3770_core::adjust::Curve::new(&points);
+                let curve = scan_imaging::adjust::Curve::new(&points);
                 self.apply(|s| s.adjust.curve[c] = curve);
             }
             Message::Descreen(screen) => self.change(|s| s.adjust.descreen = screen.0),
@@ -5605,7 +5606,7 @@ impl App {
         } else {
             0
         };
-        let curve_preset = |label: &'static str, c: hp3770_core::adjust::Curve| {
+        let curve_preset = |label: &'static str, c: scan_imaging::adjust::Curve| {
             button(text(label).size(11))
                 .padding([3, 8])
                 .style(button::secondary)
@@ -5633,14 +5634,14 @@ impl App {
                 .width(Length::Fill)
                 .height(220),
                 row![
-                    curve_preset("Lineare", hp3770_core::adjust::Curve::IDENTITY),
+                    curve_preset("Lineare", scan_imaging::adjust::Curve::IDENTITY),
                     curve_preset(
                         "Contrasto medio",
-                        hp3770_core::adjust::Curve::MEDIUM_CONTRAST
+                        scan_imaging::adjust::Curve::MEDIUM_CONTRAST
                     ),
                     curve_preset(
                         "Contrasto forte",
-                        hp3770_core::adjust::Curve::STRONG_CONTRAST
+                        scan_imaging::adjust::Curve::STRONG_CONTRAST
                     ),
                 ]
                 .spacing(4),

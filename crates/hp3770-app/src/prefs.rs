@@ -38,7 +38,7 @@ pub struct StoredAdjust {
 
 impl Default for StoredAdjust {
     fn default() -> Self {
-        let a = hp3770_core::adjust::Adjustments::default();
+        let a = scan_imaging::adjust::Adjustments::default();
         Self {
             temperature: a.temperature,
             tint: a.tint,
@@ -102,7 +102,7 @@ impl Default for StoredMode {
         Self {
             dpi: 300,
             colour: "colore".into(),
-            threshold: hp3770_core::convert::DEFAULT_THRESHOLD,
+            threshold: scan_imaging::convert::DEFAULT_THRESHOLD,
             output: "pdf".into(),
             pdf_size: "scansione".into(),
             pdf_sheet: "auto".into(),

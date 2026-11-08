@@ -7,9 +7,9 @@
 //! hp3770-core --test golden_adjust -- --nocapture` prints it without failing,
 //! to write down new values only when a change of the result is wanted.
 
-use hp3770_core::adjust::{self, Adjustments, Curve, Samples};
 use hp3770_core::profile::HP3770;
-use hp3770_core::session::Mode;
+use scan_imaging::adjust::{self, Adjustments, Curve, Samples};
+use scan_imaging::Mode;
 
 const WIDTH: usize = 97;
 const HEIGHT: usize = 61;

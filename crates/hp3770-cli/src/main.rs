@@ -107,7 +107,7 @@ enum Command {
         #[arg(long, value_enum, default_value_t = Mode::Colour)]
         mode: Mode,
         /// Lineart threshold, as the HP driver's: white from 255 minus this.
-        #[arg(long, default_value_t = hp3770_core::convert::DEFAULT_THRESHOLD)]
+        #[arg(long, default_value_t = scan_imaging::convert::DEFAULT_THRESHOLD)]
         threshold: u8,
         /// Save the chip's linear samples, without the tone curve the HP
         /// driver applies on the host (white at 196, gamma 2.2).
@@ -118,7 +118,7 @@ enum Command {
         #[arg(long)]
         no_fast_travel: bool,
         /// Sharpening as the HP driver's; 0 for none.
-        #[arg(long, default_value_t = hp3770_core::convert::HP_SHARPEN)]
+        #[arg(long, default_value_t = scan_imaging::convert::HP_SHARPEN)]
         sharpen: f32,
         /// Bits per sample asked of the chip (16: saves
         /// also NAME-16bit.png with the samples as sent, and prints how
@@ -362,7 +362,7 @@ fn scan(
     let profile = &hp3770_core::profile::HP3770;
     let request = Request {
         fast_travel,
-        adjust: hp3770_core::adjust::Adjustments {
+        adjust: scan_imaging::adjust::Adjustments {
             sharpen,
             ..Default::default()
         },
@@ -372,9 +372,9 @@ fn scan(
             dpi,
             area,
             match mode {
-                Mode::Colour => session::Mode::Colour,
-                Mode::Grey => session::Mode::Grey,
-                Mode::Lineart => session::Mode::Lineart { threshold },
+                Mode::Colour => scan_imaging::Mode::Colour,
+                Mode::Grey => scan_imaging::Mode::Grey,
+                Mode::Lineart => scan_imaging::Mode::Lineart { threshold },
             },
         )
     };
@@ -486,9 +486,9 @@ fn save_image(
     width: usize,
     height: usize,
     data: &[u8],
-    format: hp3770_core::session::Format,
+    format: scan_imaging::Format,
 ) -> CliResult {
-    use hp3770_core::session::Format;
+    use scan_imaging::Format;
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -689,7 +689,7 @@ fn detect(
     input: &std::path::Path,
     crop: Option<&[usize]>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use hp3770_core::session::{Format, Image};
+    use scan_imaging::{Format, Image};
     let decoder = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(input)?));
     let mut reader = decoder.read_info()?;
     let mut data = vec![
@@ -716,7 +716,7 @@ fn detect(
         Some(&[x, y, w, h]) => image.cropped(x, y, w, h),
         _ => image,
     };
-    let found = hp3770_core::detect::objects(&image);
+    let found = scan_imaging::detect::objects(&image);
     let mm = 25.4 / 200.0;
     println!("{} originals", found.len());
     for (i, f) in found.iter().enumerate() {

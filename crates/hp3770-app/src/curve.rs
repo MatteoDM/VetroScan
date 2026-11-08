@@ -5,10 +5,10 @@
 //! can be moved too. The histogram is drawn behind, with a 4 × 4 grid, and
 //! the input and output of the point being moved are shown.
 
-use hp3770_core::adjust::Curve;
 use iced::mouse;
 use iced::widget::canvas::{self, Action, Event, Frame, Geometry, Path, Stroke};
 use iced::{Color, Point, Rectangle, Renderer, Size, Theme};
+use scan_imaging::adjust::Curve;
 use std::time::{Duration, Instant};
 
 /// The editor of one curve.

@@ -6,7 +6,7 @@
 //! (`hp3770 scan --linear --depth 16`, the file NAME-16bit.png).
 
 use hp3770_core::geometry::HP_WHITE;
-use hp3770_core::session::{Format, Image};
+use scan_imaging::{Format, Image};
 
 fn main() -> hp3770_export::Result<()> {
     let args: Vec<String> = std::env::args().collect();

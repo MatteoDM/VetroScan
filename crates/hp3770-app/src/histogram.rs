@@ -2,10 +2,10 @@
 //! The histogram of the adjusted preview: red, green and blue (or grey),
 //! with the share of pixels clipped to black and to white.
 
-use hp3770_core::session::{Format, Image};
 use iced::mouse;
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke};
 use iced::{Color, Point, Rectangle, Renderer, Size, Theme};
+use scan_imaging::{Format, Image};
 
 /// Counts of each level, per channel (one channel for grey).
 #[derive(Debug, Clone, Default)]

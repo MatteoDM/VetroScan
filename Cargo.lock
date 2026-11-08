@@ -1609,6 +1609,7 @@ dependencies = [
  "iced_test",
  "notify-rust",
  "rfd",
+ "scan-imaging",
  "serde",
  "serde_json",
  "winresource",
@@ -1629,6 +1630,7 @@ dependencies = [
  "hp3770-core",
  "hp3770-usb",
  "png",
+ "scan-imaging",
 ]
 
 [[package]]
@@ -1646,6 +1648,7 @@ dependencies = [
  "hp3770-core",
  "image",
  "png",
+ "scan-imaging",
  "tiff",
  "zip",
 ]

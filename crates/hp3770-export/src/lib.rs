@@ -13,7 +13,7 @@ pub mod compress;
 mod pdf;
 mod raw;
 
-use hp3770_core::session::{Format, Image};
+use scan_imaging::{Format, Image};
 use std::fmt;
 use std::io::{Seek, Write};
 use std::path::{Path, PathBuf};
