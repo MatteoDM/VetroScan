@@ -1,9 +1,10 @@
 # Plan: from "an app for the HP 3770" to "an app for scanners"
 
-Status: **phases 0–7 done in the code (v0.1.2 and v0.2.0 published; phases 5–7 come out
-together in the next version); next: the second pass of the final check and the release** (plan written on 8 November 2026, after v0.1.1; updated the same day
-with the languages, the new name and the postponed phases). Each phase ends with a commit,
-green tests and a version; what is done is marked here.
+Status: **phases 0–7 done and published (v0.1.2, v0.2.0, v0.3.0), with the double final
+check; phases 8–9 postponed until there is hardware** (plan written on 8 November 2026,
+after v0.1.1; updated the same day with the languages, the new name and the postponed
+phases). Each phase ends with a commit, green tests and a version; what is done is marked
+here.
 
 Order: first the refactoring (phases 1–4), then languages, the project in English and the
 new name (phases 5–7), which need no hardware; the other scanners (phases 8–9) are
@@ -255,7 +256,7 @@ How it went:
 - The capture files (`tests/fixtures/*.pcap`) and the folder name `Scansioni` keep their
   Italian names: tests and users' files refer to them.
 
-## Phase 7 · a new name, not tied to the HP 3770 → next version · done
+## Phase 7 · a new name, not tied to the HP 3770 → v0.3.0 · done
 
 With several scanners the name "HP Scanjet 3770" no longer describes the app. The user first
 chose "retroscan"; checked before renaming, it turned out to be the name of about ten small
@@ -306,7 +307,7 @@ How it went:
   the old program and shortcut are gone, the new ones are there, and the old package is
   replaced.
 
-## Final coherence check (double) · after phase 7
+## Final coherence check (double) · after phase 7 · done
 
 Two independent passes, the second only after correcting everything the first finds.
 
@@ -327,6 +328,20 @@ Two independent passes, the second only after correcting everything the first fi
    - reading README, `docs/`, CHANGELOG and the release notes from start to end: the same
      name, the same language, the same words for the same things;
    - a clean install on every system and a check of name, icon and menu entry.
+
+How it went:
+
+- First pass: RAW metadata no longer name the HP 3770 for every scanner, the export's and
+  backends' texts are English, the thumbnails' notes are translated, the test variables
+  follow the new name.
+- Second pass: the tour (`e2e::tour`, 13 screenshots per language, Photo and the editor
+  included) found two texts cut off, numbers with the other language's decimal separator,
+  the last note left in the old language and "Annulla" of the editor translated as Cancel
+  (now `tr("undo|Annulla")`). Reading the documents added how to update from v0.2 on macOS
+  and from source on Linux; a script found no broken link.
+- Clean installs were not tried by hand: the CI installs every package it builds and, on
+  Windows and Linux, updates v0.2.0 to the new version. Smoke tests on the real scanner:
+  6 out of 6.
 
 ## Phase 8 · other HP scanners with an RTS88xx chip · postponed (experimental)
 
@@ -362,6 +377,6 @@ Each backend only implements `trait Scanner`: app, imaging and export do not cha
 | 1–4 · refactoring (done) | 0.2.0 | medium, covered by tests | yes |
 | 5 · Italian and English (done) | 0.3.0 | low, covered by tests | yes |
 | 6 · project in English (done) | with 0.3.0 | low | yes |
-| 7 · new name + final check | 0.4.0 | medium: updates and preferences | yes |
+| 7 · new name + final check (done) | 0.3.0 | medium: updates and preferences | yes |
 | 8 · other HP (postponed) | to be decided | high | no: testers needed |
 | 9 · other brands (postponed) | to be decided | medium | eSCL yes, with a network scanner |
