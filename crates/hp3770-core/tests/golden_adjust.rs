@@ -272,6 +272,25 @@ const EXPECTED: &[(&str, usize, u64)] = &[
     ),
 ];
 
+/// Where macOS differs: its maths library rounds a sample of the 16-bit
+/// output differently once in a while (`powf` of `f32`, here with gamma
+/// 1.3), the same before and after any change of this crate. Each system
+/// keeps its own values, so the test stays byte for byte everywhere.
+const MACOS: &[(&str, u64)] = &[("render16/busy/colour/linear=true", 0xf644_90a7_4373_5be9)];
+
+/// The values expected on this system.
+fn expected() -> Vec<(&'static str, usize, u64)> {
+    EXPECTED
+        .iter()
+        .map(|&(case, len, hash)| {
+            let own = MACOS
+                .iter()
+                .find(|(c, _)| cfg!(target_os = "macos") && *c == case);
+            (case, len, own.map_or(hash, |&(_, h)| h))
+        })
+        .collect()
+}
+
 #[test]
 fn adjustments_give_the_same_bytes() {
     let got = renderings();
@@ -284,5 +303,5 @@ fn adjustments_give_the_same_bytes() {
         return;
     }
     let got: Vec<(&str, usize, u64)> = got.iter().map(|(c, l, h)| (c.as_str(), *l, *h)).collect();
-    assert_eq!(got, EXPECTED, "now:\n{table}");
+    assert_eq!(got, expected(), "now:\n{table}");
 }
