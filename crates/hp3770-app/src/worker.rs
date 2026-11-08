@@ -84,11 +84,19 @@ pub fn events() -> impl Stream<Item = Event> {
             cancel: cancel.clone(),
         };
         let _ = output.send(Event::Ready(handle)).await;
-        let sender = output.clone();
-        std::thread::Builder::new()
-            .name("scanner".into())
-            .spawn(move || Worker::new(sender, cancel).run(receiver))
-            .expect("scanner thread");
+        let mut sender = output.clone();
+        let thread = std::thread::Builder::new().name("scanner".into());
+        if std::env::var_os("HP3770_FAKE_SCANNER").is_some() {
+            // A made-up scanner, to try the interface with no scanner.
+            thread.spawn(move || {
+                fake::run(&receiver, &cancel, Duration::from_millis(400), |event| {
+                    let _ = iced::futures::executor::block_on(sender.send(event));
+                });
+            })
+        } else {
+            thread.spawn(move || Worker::new(sender, cancel).run(receiver))
+        }
+        .expect("scanner thread");
         // Keep the stream alive for as long as the application runs.
         std::future::pending::<()>().await;
     })
@@ -259,7 +267,7 @@ impl Worker {
 /// settings), to tell what happened when a press seems lost.
 fn log(line: &str) {
     use std::io::Write;
-    let Some(dir) = dirs::config_dir().map(|d| d.join("hp3770")) else {
+    let Some(dir) = crate::prefs::config_dir() else {
         return;
     };
     let _ = std::fs::create_dir_all(&dir);
@@ -277,6 +285,172 @@ fn log(line: &str) {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0.0, |d| d.as_secs_f64());
         let _ = writeln!(f, "{now:.3} {line}");
+    }
+}
+
+/// A scanner made up in memory, for the tests of the interface and for
+/// trying it with no scanner (`HP3770_FAKE_SCANNER=1`): a white lid with
+/// three originals on the glass, scanned at any resolution and in any mode.
+pub mod fake {
+    use super::*;
+    use hp3770_core::geometry::Area;
+    use hp3770_core::session::{Format, Mode};
+    use hp3770_core::status::Lamp;
+
+    /// The originals on the glass: left, top, width, height (inches) and
+    /// the colour they are printed in.
+    pub const ORIGINALS: [([f64; 4], [u8; 3]); 3] = [
+        ([0.8, 0.8, 4.0, 2.8], [190, 90, 40]),
+        ([1.0, 5.0, 3.0, 3.0], [40, 90, 170]),
+        ([5.3, 4.5, 2.5, 4.0], [60, 140, 70]),
+    ];
+
+    /// The colour of the glass at a point (inches from the top left).
+    pub fn glass(x: f64, y: f64) -> [u8; 3] {
+        for ([left, top, width, height], colour) in ORIGINALS {
+            let (u, v) = ((x - left) / width, (y - top) / height);
+            if (0.0..1.0).contains(&u) && (0.0..1.0).contains(&v) {
+                // Shaded across, with stripes: something for the
+                // adjustments to change and the crop to find.
+                let stripe = if ((u * 12.0) as i32 + (v * 8.0) as i32) % 2 == 0 {
+                    1.0
+                } else {
+                    0.8
+                };
+                let shade = (0.6 + 0.4 * u) * stripe;
+                return colour.map(|c| (f64::from(c) * shade).round() as u8);
+            }
+        }
+        [236, 236, 232]
+    }
+
+    /// The scanner state of the made-up scanner.
+    pub fn status() -> Status {
+        Status {
+            usb2: true,
+            chipset_id: 6,
+            init_done: true,
+            executing: false,
+            head_at_home: true,
+            lamp: Lamp::Flatbed,
+            tma_attached: false,
+            buttons_held: 0,
+            link_word: 1024,
+        }
+    }
+
+    /// The scan of `request`, as the real scanner would give it back.
+    pub fn scan(request: &Request) -> (Image, Report) {
+        let Area {
+            x,
+            y,
+            width,
+            height,
+        } = request.area;
+        let (width, height) = (width as usize, height as usize);
+        let dpi = f64::from(request.dpi);
+        let mut rgb = Vec::with_capacity(width * height * 3);
+        for row in 0..height {
+            let gy = (f64::from(y) + row as f64 + 0.5) / dpi;
+            for col in 0..width {
+                let gx = (f64::from(x) + col as f64 + 0.5) / dpi;
+                rgb.extend_from_slice(&glass(gx, gy));
+            }
+        }
+        let grey = |p: &[u8]| {
+            ((u32::from(p[0]) * 299 + u32::from(p[1]) * 587 + u32::from(p[2]) * 114) / 1000) as u8
+        };
+        let (format, data) = match request.mode {
+            Mode::Colour => (Format::Rgb, rgb.clone()),
+            Mode::Grey => (Format::Grey, rgb.chunks_exact(3).map(grey).collect()),
+            Mode::Lineart { threshold } => {
+                let stride = width.div_ceil(8);
+                let mut data = vec![0u8; stride * height];
+                for (i, p) in rgb.chunks_exact(3).enumerate() {
+                    if grey(p) >= 255 - threshold {
+                        let (row, col) = (i / width, i % width);
+                        data[row * stride + col / 8] |= 0x80 >> (col % 8);
+                    }
+                }
+                (Format::Lineart, data)
+            }
+        };
+        let samples16 = (request.depth == 16 && request.mode == Mode::Colour)
+            .then(|| rgb.iter().map(|&v| u16::from(v) * 257).collect());
+        (
+            Image {
+                width,
+                height,
+                dpi: request.dpi,
+                format,
+                data,
+            },
+            Report {
+                warmed_up: false,
+                gains: [16, 14, 21],
+                offsets: [300, 300, 310],
+                peak_buffered: 0,
+                white: [Vec::new(), Vec::new(), Vec::new()],
+                samples16,
+            },
+        )
+    }
+
+    /// Answers the interface's commands like the scanner thread, taking
+    /// `pace` for each stage of a scan (so that "Annulla" can stop it).
+    pub fn run(
+        commands: &std_mpsc::Receiver<Command>,
+        cancel: &AtomicBool,
+        pace: Duration,
+        mut emit: impl FnMut(Event),
+    ) {
+        while let Ok(command) = commands.recv() {
+            match command {
+                Command::Status => emit(Event::Status(Ok(status()))),
+                Command::Scan(purpose, request) => {
+                    let stages = [
+                        Stage::Starting,
+                        Stage::Calibrating,
+                        Stage::Scanning { done: 1, total: 2 },
+                        Stage::Finishing,
+                    ];
+                    let mut cancelled = false;
+                    for stage in stages {
+                        emit(Event::Progress(stage));
+                        std::thread::sleep(pace);
+                        if cancel.load(Ordering::SeqCst) {
+                            cancelled = true;
+                            break;
+                        }
+                    }
+                    let result = if cancelled {
+                        Err(CANCELLED.to_string())
+                    } else {
+                        Ok(Arc::new(scan(&request)))
+                    };
+                    emit(Event::Done(purpose, result));
+                }
+            }
+        }
+    }
+
+    /// A made-up scanner on a thread of its own, for the tests: the handle
+    /// the interface sends to, and where its events come out.
+    #[cfg(test)]
+    pub fn spawn(pace: Duration) -> (Handle, std_mpsc::Receiver<Event>) {
+        let (commands, receiver) = std_mpsc::channel();
+        let (events, out) = std_mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let handle = Handle {
+            commands,
+            cancel: cancel.clone(),
+        };
+        std::thread::spawn(move || {
+            run(&receiver, &cancel, pace, |e| {
+                let _ = events.send(e);
+            });
+        });
+        (handle, out)
     }
 }
 

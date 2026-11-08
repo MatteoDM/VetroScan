@@ -82,6 +82,26 @@ anche quelle, indica la cartella che le contiene.
 HP3770_CAPTURES=/percorso/catture cargo test
 ```
 
+**Test dell'app (e2e).** `cargo test -p hp3770-app` prova l'app intera senza finestra e
+senza scanner: clicca i pulsanti veri con il simulatore di iced, e uno scanner finto
+(in memoria, con tre originali sul vetro) risponde come quello vero. Coprono le
+domande prima di perdere scansioni, Documento e Foto, Rifai, Ctrl+Z, l'editor e il
+salvataggio in ogni formato. Nessun test tocca le impostazioni, le notifiche, la
+stampante o la cartella Immagini.
+
+L'app si può provare a mano con lo stesso scanner finto:
+
+```sh
+HP3770_FAKE_SCANNER=1 cargo run -p hp3770-app
+```
+
+**Test sullo scanner vero.** Muovono il carrello, quindi partono solo se richiesti, con
+lo scanner collegato e nessun altro programma che lo usa:
+
+```sh
+cargo test -p hp3770-cli --test hardware -- --ignored --test-threads 1
+```
+
 ## Comando `hp3770`
 
 ```sh

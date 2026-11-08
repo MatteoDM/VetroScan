@@ -153,10 +153,24 @@ impl Default for Prefs {
     }
 }
 
+/// The folder of the preferences, the presets and the log of the buttons.
+/// In tests, a folder of the test's own: tests never touch the real
+/// settings, nor each other's.
+pub fn config_dir() -> Option<PathBuf> {
+    #[cfg(test)]
+    {
+        Some(crate::testing::dir().join("config"))
+    }
+    #[cfg(not(test))]
+    {
+        Some(dirs::config_dir()?.join("hp3770"))
+    }
+}
+
 impl Prefs {
     /// The file the preferences live in.
     pub fn path() -> Option<PathBuf> {
-        Some(dirs::config_dir()?.join("hp3770").join("impostazioni.json"))
+        Some(config_dir()?.join("impostazioni.json"))
     }
 
     /// The saved preferences, or the defaults if there are none (or the
@@ -191,7 +205,7 @@ pub struct Preset {
 
 /// The file of the presets, next to the preferences.
 pub fn presets_path() -> Option<PathBuf> {
-    Some(dirs::config_dir()?.join("hp3770").join("preset.json"))
+    Some(config_dir()?.join("preset.json"))
 }
 
 /// The saved presets (none if there is no file or it cannot be read).

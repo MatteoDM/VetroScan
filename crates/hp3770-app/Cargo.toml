@@ -27,3 +27,8 @@ path = "src/main.rs"
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+iced_test = "0.14"
+iced_runtime = "0.14"
+

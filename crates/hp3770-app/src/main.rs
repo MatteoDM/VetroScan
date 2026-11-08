@@ -17,9 +17,12 @@
 
 mod access;
 mod curve;
+#[cfg(test)]
+mod e2e;
 mod editor;
 mod histogram;
 mod prefs;
+mod testing;
 mod viewer;
 mod wia;
 mod worker;
@@ -1409,7 +1412,7 @@ struct Confirm {
     title: String,
     body: String,
     /// The label of the button that goes on.
-    yes: &'static str,
+    yes: String,
     then: Box<Message>,
 }
 
@@ -1661,14 +1664,14 @@ impl App {
     /// Before an action that throws scans away: shows the question, and
     /// `then` is done again once confirmed. True when it asked (the
     /// action stops here); false when it was confirmed already.
-    fn ask(&mut self, then: Message, title: String, body: String, yes: &'static str) -> bool {
+    fn ask(&mut self, then: Message, title: String, body: String, yes: impl Into<String>) -> bool {
         if self.confirmed {
             return false;
         }
         self.confirm = Some(Confirm {
             title,
             body,
-            yes,
+            yes: yes.into(),
             then: Box::new(then),
         });
         true
@@ -2310,6 +2313,9 @@ impl App {
 
     /// The usual folder of saved scans: Pictures\Scansioni.
     fn default_folder() -> PathBuf {
+        #[cfg(test)]
+        return testing::dir().join("Scansioni");
+        #[cfg(not(test))]
         dirs::picture_dir()
             .or_else(dirs::document_dir)
             .unwrap_or_else(|| PathBuf::from("."))
@@ -2380,6 +2386,38 @@ impl App {
             "{prefix}-{}.{extension}",
             chrono::Local::now().format("%Y-%m-%d-%H%M%S")
         )
+    }
+
+    /// A name made of the date and time that no file in `folder` has yet,
+    /// nor the files of each page next to it (`NAME-001.ext`): two saves
+    /// in the same second would otherwise write over the first without a
+    /// word. "NAME (2).ext" when taken.
+    fn free_name(folder: &std::path::Path, prefix: &str, extension: &str) -> String {
+        let stamped = Self::stamped(prefix, extension);
+        let stem = stamped
+            .strip_suffix(&format!(".{extension}"))
+            .unwrap_or(&stamped)
+            .to_string();
+        let names: Vec<String> = std::fs::read_dir(folder)
+            .map(|d| {
+                d.filter_map(|e| e.ok())
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let taken = |stem: &str| {
+            names.iter().any(|n| {
+                n.ends_with(&format!(".{extension}"))
+                    && (n == &format!("{stem}.{extension}") || n.starts_with(&format!("{stem}-")))
+            })
+        };
+        let mut candidate = stem.clone();
+        let mut n = 2;
+        while taken(&candidate) {
+            candidate = format!("{stem} ({n})");
+            n += 1;
+        }
+        format!("{candidate}.{extension}")
     }
 
     /// Writes the document (all pages) or the shown photo to `path`.
@@ -3038,9 +3076,13 @@ impl App {
                     (Kind::Document, _) => (self.name(), "Documento"),
                     (Kind::Photo, _) => (self.name(), "Immagine"),
                 };
-                let file = Self::stamped(prefix, ext);
                 let folder = self.folder();
                 let _ = std::fs::create_dir_all(&folder);
+                let file = Self::free_name(&folder, prefix, ext);
+                // Tests answer the dialog themselves.
+                if cfg!(test) {
+                    return Task::done(Message::SaveTo(testing::save_answer(&folder, &file)));
+                }
                 return Task::perform(
                     async move {
                         rfd::AsyncFileDialog::new()
@@ -3156,7 +3198,7 @@ impl App {
                             Message::PageDelete(i),
                             format!("Eliminare la {}?", self.page_name(i)),
                             "Non è salvata e non si può recuperare.".into(),
-                            "Elimina",
+                            format!("Elimina la {}", self.page_name(i)),
                         )
                     {
                         return Task::none();
@@ -3459,7 +3501,11 @@ impl App {
         if self.photo.auto_save && n > 0 {
             let folder = self.folder();
             let _ = std::fs::create_dir_all(&folder);
-            let path = folder.join(Self::stamped(self.name(), self.photo.output.extension()));
+            let path = folder.join(Self::free_name(
+                &folder,
+                self.name(),
+                self.photo.output.extension(),
+            ));
             let written = self.write(&path);
             if written.is_ok() {
                 self.unsaved = false;
@@ -3556,7 +3602,8 @@ impl App {
                 }
                 let folder = self.folder();
                 let _ = std::fs::create_dir_all(&folder);
-                let path = folder.join(Self::stamped(
+                let path = folder.join(Self::free_name(
+                    &folder,
                     self.name(),
                     self.settings().output.extension(),
                 ));
@@ -3640,7 +3687,7 @@ impl App {
                         .padding([6, 14])
                         .style(button::primary)
                         .on_press(Message::ConfirmSave),
-                    button(text(confirm.yes).size(13))
+                    button(text(&confirm.yes).size(13))
                         .padding([6, 14])
                         .style(button::danger)
                         .on_press(Message::Confirm(true)),
@@ -5094,6 +5141,10 @@ fn notify(summary: &str, body: &str, error: bool) {
     } else {
         summary.to_string()
     };
+    if cfg!(test) {
+        testing::record(format!("notifica: {summary}"));
+        return;
+    }
     let body = body.to_string();
     std::thread::spawn(move || {
         let _ = notify_rust::Notification::new()
@@ -5106,6 +5157,10 @@ fn notify(summary: &str, body: &str, error: bool) {
 
 /// Opens a folder in the file manager.
 fn open_folder(folder: &std::path::Path) {
+    if cfg!(test) {
+        testing::record(format!("cartella aperta: {}", folder.display()));
+        return;
+    }
     let program = if cfg!(windows) {
         "explorer"
     } else if cfg!(target_os = "macos") {
@@ -5158,6 +5213,10 @@ fn card<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
 /// Sends an image to the default printer: Paint on Windows (`/pt` prints
 /// without opening a window), `lp` elsewhere.
 fn print_file(path: &std::path::Path) -> Result<(), String> {
+    if cfg!(test) {
+        testing::record(format!("stampa: {}", path.display()));
+        return Ok(());
+    }
     let mut command = if cfg!(windows) {
         let mut c = std::process::Command::new("mspaint");
         c.arg("/pt").arg(path);
