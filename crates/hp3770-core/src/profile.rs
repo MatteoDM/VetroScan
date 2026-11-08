@@ -305,11 +305,16 @@ pub const HP3770: Profile = Profile {
         slot: [876, 756, 440, 83],
         // [CalibTransparent]: the offsets as on the glass (the optical black
         // pixels do not see the lamp), GainHeight=30, GainTargetFactor=90,
-        // BShadingHeight=30, Cut 0, WShadingHeight=24. White: 245 as on
-        // the glass, not the WRef of the section (about 80, for HP's own
-        // host processing): the slot then reads as the lamp through no film,
-        // and the 16-bit samples keep their whole range.
+        // BShadingHeight=30, Cut 0, WShadingHeight=24, and the white of
+        // U2_T6_8B_12D_WRef_R/G/B=81/83/70 (first values): the slot gets
+        // about a third of the light of the holder's window (measured on 8
+        // November 2026 with the holder empty: 1/2.98, 1/2.96, 1/3.55 for
+        // red, green and blue, that is 245 / 82, 83, 69), so the window's
+        // clear light comes out at about 245, the glass's white. With 245
+        // on the slot the window came out three times too bright: the gains
+        // ended at their maximum and red saturated on the film's base.
         calibration: CalibrationConfig {
+            white_ref: [81, 83, 70],
             gain_lines: 30,
             gain_target_percent: 90,
             black_lines: 30,

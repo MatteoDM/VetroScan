@@ -91,9 +91,114 @@ pub const CHECK_LINES: u32 = 10;
 /// Most offset checks before giving up. The captures need 1 to 3.
 pub const MAX_OFFSET_CHECKS: usize = 20;
 
-/// Wait after the transparency adapter's lamp is switched on again for the
-/// white shading (not captured: the HP driver never got that far).
-const TMA_RELIGHT: std::time::Duration = std::time::Duration::from_secs(15);
+/// The transparency adapter's lamp is steady when this many readings in a
+/// row, a second apart, are well above the dark and within
+/// [`TMA_STEADY_SPREAD`] of their mean (the HP configuration's
+/// `[CheckStable]` asks for 15 readings 200 ms apart).
+const TMA_STEADY_READINGS: usize = 5;
+/// See [`TMA_STEADY_READINGS`]: three percent.
+const TMA_STEADY_SPREAD: f64 = 0.03;
+/// The longest wait for the adapter's lamp to be steady.
+const TMA_STEADY_MAX: std::time::Duration = std::time::Duration::from_secs(180);
+/// The shortest wait after switching it on from cold (HP's user's manual:
+/// at least 30 seconds before scanning slides or negatives).
+const TMA_COLD_MIN: std::time::Duration = std::time::Duration::from_secs(30);
+
+impl<T: Transport> Chip<T> {
+    /// The brightness of the adapter's light at the slot, with the carriage
+    /// there: 10 lines at 200 dpi read standing over the slot's middle
+    /// half, with fixed offsets and gains, the mean of the brightest tenth
+    /// of the columns of each channel (8-bit).
+    fn tma_brightness(&mut self, init: &Registers, profile: &Profile) -> Result<[f64; 3]> {
+        let slot = profile
+            .transparency
+            .as_ref()
+            .map_or([0, 0, 2000, 0], |t| t.slot);
+        // 200 dpi pixels of tenths of a millimetre; the glass starts at
+        // pixel 43 (see `geometry`).
+        let px = |tenths: u16| u32::from(tenths) * 200 / 254;
+        let params = ScanParams {
+            negative: false,
+            depth: 8,
+            resolution_x: 200,
+            resolution_y: 200,
+            left: 43 + px(slot[0]) + px(slot[2]) / 4,
+            top: 1,
+            width: (px(slot[2]) / 2) / 4 * 4,
+            height: 10,
+        };
+        let still = Hardware {
+            black_shading: false,
+            white_shading: false,
+            gamma: false,
+            gamma_size: 0,
+            backward: false,
+            static_head: true,
+            dummy_scan: false,
+            compression: false,
+            arrange_line: ArrangeLine::None,
+            high_resolution: false,
+        };
+        let go = GainOffset {
+            even_offset: [315; 3],
+            odd_offset: [315; 3],
+            even_fine: [0; 3],
+            odd_fine: [0; 3],
+            gain: [10; 3],
+            gain2: [4; 3],
+            pga: [3; 3],
+        };
+        let mut regs = init.clone();
+        let data = self.get_image(&mut regs, profile, &params, &still, &go, None)?;
+        let img = Image::new(&data, image_width(&data, params.height));
+        Ok(std::array::from_fn(|c| gain_peak(&img, c)))
+    }
+
+    /// Waits until the adapter's lamp, just switched on, lights steadily
+    /// (see [`TMA_STEADY_READINGS`]), at least `min`. Its cold cathode tube
+    /// does not always strike at once: on Matteo's scanner, from cold, it
+    /// stayed off with brief flashes for about 50 s, then lit steadily, and
+    /// once went off for a moment by itself. `dark` is the reading with
+    /// the lamp off.
+    fn wait_tma_steady(
+        &mut self,
+        init: &Registers,
+        profile: &Profile,
+        dark: [f64; 3],
+        min: std::time::Duration,
+    ) -> Result<()> {
+        let start = std::time::Instant::now();
+        let mut recent: Vec<f64> = Vec::new();
+        loop {
+            let b = self.tma_brightness(init, profile)?;
+            let level = b.iter().sum::<f64>();
+            let dark_level = dark.iter().sum::<f64>();
+            if level > dark_level * 1.6 + 6.0 {
+                recent.push(level);
+            } else {
+                recent.clear();
+            }
+            if recent.len() > TMA_STEADY_READINGS {
+                recent.remove(0);
+            }
+            let steady = recent.len() == TMA_STEADY_READINGS && {
+                let mean = recent.iter().sum::<f64>() / recent.len() as f64;
+                recent
+                    .iter()
+                    .all(|&r| (r - mean).abs() <= mean * TMA_STEADY_SPREAD)
+            };
+            if steady && start.elapsed() >= min {
+                return Ok(());
+            }
+            if start.elapsed() >= TMA_STEADY_MAX {
+                return Err(Error::Calibration(
+                    "the adapter's lamp does not light steadily".into(),
+                ));
+            }
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+    }
+}
 
 /// The lamp a calibration works with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -532,6 +637,7 @@ impl<T: Transport> Chip<T> {
         scan: &ScanParams,
         light: Light,
     ) -> Result<Calibration> {
+        let mut tma_dark = None;
         let cfg = match light {
             Light::Flatbed => &profile.calibration,
             Light::Transparency => {
@@ -548,6 +654,19 @@ impl<T: Transport> Chip<T> {
                         steps: adapter.strip_steps,
                     },
                 )?;
+                // The dark there, then the lamp on until it is steady.
+                let was_on = self.read_byte(0xe946)? & 0x20 != 0;
+                self.lamp_transparency(init, false)?;
+                self.lamp_flatbed(init, false)?;
+                let dark = self.tma_brightness(init, profile)?;
+                self.lamp_transparency(init, true)?;
+                let min = if was_on {
+                    std::time::Duration::ZERO
+                } else {
+                    TMA_COLD_MIN
+                };
+                self.wait_tma_steady(init, profile, dark, min)?;
+                tma_dark = Some(dark);
                 &adapter.calibration
             }
         };
@@ -706,7 +825,8 @@ impl<T: Transport> Chip<T> {
             Light::Flatbed => self.lamp_flatbed(init, true)?,
             Light::Transparency => {
                 self.lamp_transparency(init, true)?;
-                std::thread::sleep(TMA_RELIGHT);
+                let dark = tma_dark.unwrap_or_default();
+                self.wait_tma_steady(init, profile, dark, std::time::Duration::ZERO)?;
             }
         }
         let img = Image::new(&data, image_width(&data, black_read.height));

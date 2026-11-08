@@ -55,7 +55,8 @@ pub struct Request {
 }
 
 /// The transparency adapter's lamp warms up for at least this long (HP's
-/// user's manual: at least 30 seconds before scanning slides or negatives).
+/// user's manual: at least 30 seconds before scanning slides or negatives);
+/// the calibration waits longer if it does not light steadily yet.
 pub const TMA_WARMUP: std::time::Duration = std::time::Duration::from_secs(30);
 
 impl Request {
@@ -173,13 +174,11 @@ pub fn scan<T: Transport>(
         std::thread::sleep(LAMP_WARMUP);
     }
     if request.transparency {
-        chip.lamp_transparency(&mut init, true)?;
+        // The lamp is switched on and waited for in the calibration, until
+        // it lights steadily (at least [`TMA_WARMUP`] from cold).
         if !progress(Stage::WarmingUp) {
-            chip.lamp_transparency(&mut init, false)?;
-            chip.lamp_flatbed(&mut init, true)?;
             return Err(Error::Cancelled("lamp warm-up"));
         }
-        std::thread::sleep(TMA_WARMUP);
     }
     if !progress(Stage::Calibrating) {
         if request.transparency {

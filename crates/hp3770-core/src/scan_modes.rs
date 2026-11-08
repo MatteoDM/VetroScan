@@ -480,13 +480,16 @@ const fn exposures(e: [(u32, u32); 3]) -> Option<[Exposure; 3]> {
 
 /// Colour scan modes for negatives with the transparency adapter, by
 /// resolution (`[ScanNegColorMode1]`-`[ScanNegColorMode5]`, next to the
-/// glass's sections in the file). The line is three times as long as on
-/// the glass: the second value of `CTPC` (the first, six times as long,
-/// tried on 8 November 2026, gave so much light that the calibration's
-/// gains ended at their minimum, 0.91 times, and the brightest channel
-/// saturated in its reads; with the glass's line they ended at their
-/// maximum, 3.1 times, and the shadows were noisy). The motor runs at
-/// constant speed (`MotorCurve=0`) at every resolution.
+/// glass's sections in the file). The line is twice as long as on the
+/// glass (the HP configuration has six and three times): with the
+/// adapter's white of [`crate::profile::Transparency`] the holder's clear
+/// window comes out at the full scale, and twice the light then puts a
+/// film's base, which lets through at most about three quarters, near the
+/// top without saturating it, the blue far above the glass's exposure.
+/// Tried on 8 November 2026: six times saturated the calibration; three
+/// times, with the slot calibrated to the glass's white, saturated red on
+/// the base. The motor runs at constant speed (`MotorCurve=0`) at every
+/// resolution.
 ///
 /// The HP configuration also gives each colour its own exposure, kept here
 /// in [`NEGATIVE_EXPOSURES`] but not used: `MEXPT` is how long the colour
@@ -503,7 +506,7 @@ pub const NEGATIVE_MODES: [ScanMode; 5] = [
     // MotorBackStep=96 256 MEXPT1=50999 EXPT1=20399 MEXPT2=30599
     // EXPT2=40799 MEXPT3=71399 EXPT3=0 MotorPhase=1.
     ScanMode {
-        ctpc: 35999,
+        ctpc: 23999,
         motor_curve: None,
         motor_back_step: 96,
         motor_phase: true,
@@ -512,7 +515,7 @@ pub const NEGATIVE_MODES: [ScanMode; 5] = [
     },
     // [ScanNegColorMode2]: as mode 1, Timing=2, MotorBackStep=128.
     ScanMode {
-        ctpc: 35999,
+        ctpc: 23999,
         motor_curve: None,
         motor_back_step: 128,
         motor_phase: true,
@@ -523,7 +526,7 @@ pub const NEGATIVE_MODES: [ScanMode; 5] = [
     // MotorBackStep=256 MEXPT1=12719 EXPT1=5087 MEXPT2=7631 EXPT2=10175
     // MEXPT3=17807 EXPT3=0 MotorPhase=1.
     ScanMode {
-        ctpc: 8999,
+        ctpc: 5999,
         motor_curve: None,
         motor_back_step: 256,
         motor_phase: true,
@@ -534,7 +537,7 @@ pub const NEGATIVE_MODES: [ScanMode; 5] = [
     // MotorBackStep=1024 MEXPT1=8399 EXPT1=3359 MEXPT2=5039 EXPT2=6719
     // MEXPT3=11759 EXPT3=0 MotorPhase=1.
     ScanMode {
-        ctpc: 5975,
+        ctpc: 3983,
         motor_curve: None,
         motor_back_step: 1024,
         motor_phase: true,
@@ -544,7 +547,7 @@ pub const NEGATIVE_MODES: [ScanMode; 5] = [
     // [ScanNegColorMode5]: the exposures of mode 3, Timing=3,
     // MotorBackStep=1024.
     ScanMode {
-        ctpc: 8999,
+        ctpc: 5999,
         motor_curve: None,
         motor_back_step: 1024,
         motor_phase: true,

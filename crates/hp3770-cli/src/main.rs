@@ -88,6 +88,11 @@ enum Command {
         /// What is in the holder.
         #[arg(long, value_enum)]
         film: Option<FilmArg>,
+        /// For measuring the adapter's light: calibrate at this distance
+        /// from the top of the glass, in mm, instead of on the slot without
+        /// film (with the holder empty, the middle of its window).
+        #[arg(long)]
+        calibrate_at: Option<f64>,
     },
     /// Turn a saved scan of the transparency adapter (the NAME-16bit.png of
     /// `tma-scan`) into its picture again, without the scanner.
@@ -246,9 +251,12 @@ fn main() -> ExitCode {
                 depth,
             )
         }
-        Command::TmaScan { output, dpi, film } => {
-            open(cli.backend).and_then(|s| tma_scan(s, &output, dpi, film))
-        }
+        Command::TmaScan {
+            output,
+            dpi,
+            film,
+            calibrate_at,
+        } => open(cli.backend).and_then(|s| tma_scan(s, &output, dpi, film, calibrate_at)),
         Command::Develop {
             input,
             output,
@@ -737,11 +745,23 @@ fn tma_scan(
     output: &std::path::Path,
     dpi: u16,
     film: Option<FilmArg>,
+    calibrate_at: Option<f64>,
 ) -> CliResult {
     use hp3770_core::geometry::Area;
     use hp3770_core::session::{self, Request, Stage, TMA_WARMUP};
     use scan_imaging::adjust::Adjustments;
-    let profile = &hp3770_core::profile::HP3770;
+    let mut moved = hp3770_core::profile::HP3770.clone();
+    if let (Some(mm), Some(adapter)) = (calibrate_at, moved.transparency.as_mut()) {
+        // The glass starts 69 lines from home at 200 dpi (8.76 mm); the
+        // motor makes 1200 steps per inch.
+        let steps = (mm + 69.0 * 25.4 / 200.0) / 25.4 * f64::from(moved.platform.motor_resolution);
+        adapter.strip_steps = steps.round().clamp(0.0, f64::from(u16::MAX)) as u16;
+        eprintln!(
+            "calibrating at   {mm:.1} mm ({} steps from home)",
+            adapter.strip_steps
+        );
+    }
+    let profile = &moved;
     let adapter = profile
         .transparency
         .as_ref()
