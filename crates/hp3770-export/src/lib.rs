@@ -18,7 +18,7 @@ use std::io::{Seek, Write};
 use std::path::{Path, PathBuf};
 
 pub use pdf::PageSize;
-pub use raw::{save_dng, save_tiff16, Linear16};
+pub use raw::{save_deep, save_dng, save_tiff16, Linear16};
 
 /// Error of an export.
 pub type Error = Box<dyn std::error::Error + Send + Sync>;

@@ -266,6 +266,27 @@ impl Adjustments {
     /// The output level of channel `c` for a linear sample `i` in 8-bit
     /// units (fractions allowed).
     fn levels(&self, white: [f64; 3], linear: bool) -> impl Fn(usize, f32) -> u8 + '_ {
+        let level = self.levels_exact(white, linear);
+        move |c, i| (level(c, i) * 255.0).round().clamp(0.0, 255.0) as u8
+    }
+
+    /// The tables for 12-bit samples with 16-bit output levels.
+    pub fn tables_fine16(&self, white: [f64; 3], linear: bool) -> [Vec<u16>; 3] {
+        let level = self.levels_exact(white, linear);
+        std::array::from_fn(|c| {
+            (0..4096)
+                .map(|i| {
+                    (level(c, i as f32 / 16.0) * 65535.0)
+                        .round()
+                        .clamp(0.0, 65535.0) as u16
+                })
+                .collect()
+        })
+    }
+
+    /// The output (0-1) of channel `c` for a linear sample `i` in 8-bit
+    /// units.
+    fn levels_exact(&self, white: [f64; 3], linear: bool) -> impl Fn(usize, f32) -> f32 + '_ {
         let gains = self.gains();
         let black = self.black.clamp(0.0, 254.0);
         let white_point = self.white.clamp(black + 1.0, 255.0);
@@ -289,8 +310,7 @@ impl Adjustments {
             let v = 255.0 * v.powf(1.0 / gamma);
             let v = (v - 128.0) * contrast + 128.0 + brightness;
             let v = (v / 255.0).clamp(0.0, 1.0);
-            let v = self.curve[0].eval(self.curve[c + 1].eval(v));
-            (v * 255.0).round().clamp(0.0, 255.0) as u8
+            self.curve[0].eval(self.curve[c + 1].eval(v))
         }
     }
 }
@@ -671,9 +691,118 @@ pub fn render_samples(
     }
 }
 
+/// [`render_samples`] of 16-bit samples with 16-bit output (RGB, or grey
+/// for the grey mode; `None` for black and white). The tones come from
+/// tables with 16-bit levels; what follows them (colour, noise, descreen,
+/// sharpening) is worked out at 8 bits and added as a difference, so flat
+/// areas and gradients keep all their levels.
+#[allow(clippy::too_many_arguments)]
+pub fn render16(
+    samples: &[u16],
+    width: usize,
+    height: usize,
+    dpi: u16,
+    mode: Mode,
+    adjustments: &Adjustments,
+    linear: bool,
+    profile: &Profile,
+) -> Option<Vec<u16>> {
+    let finished = render_samples(
+        Samples::Sixteen(samples),
+        width,
+        height,
+        dpi,
+        mode,
+        adjustments,
+        linear,
+        profile,
+    );
+    let tone16: Vec<u16> = match mode {
+        Mode::Colour => {
+            let t = adjustments.tables_fine16(geometry::HP_WHITE, linear);
+            samples
+                .iter()
+                .enumerate()
+                .map(|(i, &v)| t[i % 3][usize::from(v >> 4)])
+                .collect()
+        }
+        Mode::Grey => {
+            let gains = adjustments.gains();
+            let white = geometry::host_white(profile);
+            let t = Adjustments {
+                temperature: 0.0,
+                tint: 0.0,
+                curve: [
+                    adjustments.curve[0],
+                    Curve::IDENTITY,
+                    Curve::IDENTITY,
+                    Curve::IDENTITY,
+                ],
+                ..*adjustments
+            }
+            .tables_fine16([white; 3], linear);
+            samples
+                .chunks_exact(3)
+                .map(|p| {
+                    let sum: f32 = (0..3).map(|c| f32::from(p[c]) / 256.0 * gains[c]).sum();
+                    let level = (sum / 3.0 * 16.0).round().clamp(0.0, 4095.0) as usize;
+                    t[1][level]
+                })
+                .collect()
+        }
+        Mode::Lineart { .. } => return None,
+    };
+    Some(
+        tone16
+            .iter()
+            .zip(&finished.data)
+            .map(|(&t, &f)| {
+                // The 8-bit tone this sample had before the later steps.
+                let t8 = (f32::from(t) / 257.0).round();
+                let delta = (f32::from(f) - t8) * 257.0;
+                (f32::from(t) + delta).round().clamp(0.0, 65535.0) as u16
+            })
+            .collect(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn render16_follows_render_and_is_smooth() {
+        use crate::profile::HP3770;
+        // A slow ramp in the shadows.
+        let n = 2000;
+        let rgb16: Vec<u16> = (0..n).flat_map(|i| [(i * 3) as u16; 3]).collect();
+        let a = Adjustments {
+            shadows: 60.0,
+            ..Adjustments::default()
+        };
+        let out = render16(&rgb16, n, 1, 300, Mode::Colour, &a, false, &HP3770).unwrap();
+        let eight = render_samples(
+            Samples::Sixteen(&rgb16),
+            n,
+            1,
+            300,
+            Mode::Colour,
+            &a,
+            false,
+            &HP3770,
+        );
+        for (x, y) in out.iter().zip(&eight.data) {
+            assert!((f32::from(*x) / 257.0 - f32::from(*y)).abs() <= 1.0);
+        }
+        let levels16: std::collections::BTreeSet<u16> = out.iter().copied().collect();
+        let levels8: std::collections::BTreeSet<u8> = eight.data.iter().copied().collect();
+        assert!(
+            levels16.len() > 4 * levels8.len(),
+            "{} vs {}",
+            levels16.len(),
+            levels8.len()
+        );
+    }
 
     #[test]
     fn sixteen_bits_match_eight_and_keep_the_shadows() {

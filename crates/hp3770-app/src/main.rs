@@ -96,6 +96,15 @@ enum Output {
     Image(ImageFormat),
     /// The scanner's linear samples, without adjustments.
     Raw(RawFormat),
+    /// The finished image at 16 bits per channel (scans made at 16 bits).
+    Deep(DeepFormat),
+}
+
+/// Image files with 16 bits per channel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeepFormat {
+    Png,
+    Tiff,
 }
 
 /// Files of the scanner's own samples, for raw editors.
@@ -114,6 +123,8 @@ impl std::fmt::Display for Output {
             Self::TiffPages => f.write_str("TIFF multipagina"),
             Self::Image(format) => write!(f, "{format}"),
             Self::Raw(RawFormat::Tiff16) => f.write_str("RAW · TIFF 16 bit lineare"),
+            Self::Deep(DeepFormat::Png) => f.write_str("PNG 16 bit"),
+            Self::Deep(DeepFormat::Tiff) => f.write_str("TIFF 16 bit"),
             Self::Raw(RawFormat::Dng) => f.write_str("RAW · DNG (Lightroom, Camera Raw)"),
         }
     }
@@ -127,6 +138,8 @@ impl Output {
             Self::Image(format) => format.extension(),
             Self::Raw(RawFormat::Tiff16) => "tif",
             Self::Raw(RawFormat::Dng) => "dng",
+            Self::Deep(DeepFormat::Png) => "png",
+            Self::Deep(DeepFormat::Tiff) => "tif",
         }
     }
 
@@ -141,8 +154,8 @@ impl Output {
 
 /// The outputs that make sense for `kind` and `colour`, in order of
 /// preference.
-fn outputs(kind: Kind, colour: Colour) -> Vec<Output> {
-    let all: Vec<Output> = match kind {
+fn outputs(kind: Kind, colour: Colour, depth: u8) -> Vec<Output> {
+    let mut all: Vec<Output> = match kind {
         Kind::Document => vec![
             Output::Pdf,
             Output::TiffPages,
@@ -160,6 +173,20 @@ fn outputs(kind: Kind, colour: Colour) -> Vec<Output> {
             Output::Raw(RawFormat::Dng),
         ],
     };
+    if depth == 16 && colour != Colour::Lineart {
+        // After the 8-bit formats, before RAW.
+        let at = all
+            .iter()
+            .position(|o| matches!(o, Output::Raw(_)))
+            .unwrap_or(all.len());
+        all.splice(
+            at..at,
+            [
+                Output::Deep(DeepFormat::Png),
+                Output::Deep(DeepFormat::Tiff),
+            ],
+        );
+    }
     all.into_iter()
         .filter(|o| colour != Colour::Lineart || !o.lossy())
         .filter(|o| colour == Colour::Rgb || !matches!(o, Output::Raw(_)))
@@ -288,6 +315,8 @@ impl Settings {
                 Output::Image(ImageFormat::Avif { .. }) => "avif",
                 Output::Raw(RawFormat::Tiff16) => "raw-tiff16",
                 Output::Raw(RawFormat::Dng) => "raw-dng",
+                Output::Deep(DeepFormat::Png) => "png16",
+                Output::Deep(DeepFormat::Tiff) => "tiff16",
                 Output::Image(ImageFormat::Bmp) => "bmp",
             }
             .into(),
@@ -346,9 +375,15 @@ impl Settings {
             "avif" => Output::Image(ImageFormat::Avif { quality: 80 }),
             "raw-tiff16" => Output::Raw(RawFormat::Tiff16),
             "raw-dng" => Output::Raw(RawFormat::Dng),
+            "png16" => Output::Deep(DeepFormat::Png),
+            "tiff16" => Output::Deep(DeepFormat::Tiff),
             _ => base.output,
         };
-        let allowed = outputs(kind, colour);
+        let depth = match m.depth {
+            Some(d @ (8 | 16)) => d,
+            _ => base.depth,
+        };
+        let allowed = outputs(kind, colour, depth);
         let output = allowed
             .iter()
             .copied()
@@ -400,10 +435,7 @@ impl Settings {
             },
             auto_save: m.auto_save,
             auto_crop: m.auto_crop.unwrap_or(base.auto_crop),
-            depth: match m.depth {
-                Some(d @ (8 | 16)) => d,
-                _ => base.depth,
-            },
+            depth,
         }
     }
 }
@@ -1849,6 +1881,9 @@ impl App {
         if let Output::Raw(format) = settings.output {
             return self.write_raw(path, format);
         }
+        if let Output::Deep(_) = settings.output {
+            return self.write_deep(path);
+        }
         let pages: Vec<Image> = self.pages.iter().map(|p| p.finished(settings)).collect();
         if pages.is_empty() {
             return Err("niente da salvare".into());
@@ -1878,6 +1913,78 @@ impl App {
         result
             .map(|()| format!("{} pagine in {}", pages.len(), path.display()))
             .map_err(|e| e.to_string())
+    }
+
+    /// Writes every page (one file each) finished at 16 bits per channel:
+    /// from the 16-bit samples, or the 8-bit image widened for pages
+    /// scanned at 8 bits.
+    fn write_deep(&self, path: &std::path::Path) -> Result<String, String> {
+        if self.pages.is_empty() {
+            return Err("niente da salvare".into());
+        }
+        let shared = self.settings();
+        let n = self.pages.len();
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("foto")
+            .to_string();
+        let ext = shared.output.extension();
+        for (i, page) in self.pages.iter().enumerate() {
+            let target = if n == 1 {
+                path.to_path_buf()
+            } else {
+                path.with_file_name(format!("{stem}-{:03}.{ext}", i + 1))
+            };
+            let settings = page.effective(shared);
+            let full = &page.raw.full;
+            let deep = page.raw16.as_ref().and_then(|samples| {
+                adjust::render16(
+                    samples,
+                    full.width,
+                    full.height,
+                    full.dpi,
+                    settings.mode(),
+                    &settings.adjust,
+                    false,
+                    &HP3770,
+                )
+            });
+            let (data, channels, w, h, dpi) = match deep {
+                Some(data) => {
+                    let channels = if settings.colour == Colour::Grey {
+                        1
+                    } else {
+                        3
+                    };
+                    (data, channels, full.width, full.height, full.dpi)
+                }
+                None => {
+                    let image = page.finished(shared);
+                    let channels = match image.format {
+                        Format::Rgb => 3,
+                        _ => 1,
+                    };
+                    let data = match image.format {
+                        Format::Lineart => {
+                            return Err("bianco e nero: niente 16 bit".into());
+                        }
+                        _ => image.data.iter().map(|&v| u16::from(v) * 257).collect(),
+                    };
+                    (data, channels, image.width, image.height, image.dpi)
+                }
+            };
+            hp3770_export::save_deep(&target, w, h, channels, dpi, &data)
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(if n == 1 {
+            path.display().to_string()
+        } else {
+            format!(
+                "{n} file a 16 bit in {}",
+                path.parent().unwrap_or(path).display()
+            )
+        })
     }
 
     /// Writes the linear samples of every page (one file each), without
@@ -2053,13 +2160,20 @@ impl App {
             }
             Message::Select(selection) => self.selection = selection,
             Message::Dpi(dpi) => self.settings_mut().dpi = dpi,
-            Message::Depth(d) => self.settings_mut().depth = d.0,
+            Message::Depth(d) => {
+                let kind = self.kind;
+                let s = self.settings_mut();
+                s.depth = d.0;
+                if !outputs(kind, s.colour, s.depth).contains(&s.output) {
+                    s.output = outputs(kind, s.colour, s.depth)[0];
+                }
+            }
             Message::Colour(colour) => {
                 let kind = self.kind;
                 self.change(|s| {
                     s.colour = colour;
-                    if !outputs(kind, colour).contains(&s.output) {
-                        s.output = outputs(kind, colour)[0];
+                    if !outputs(kind, colour, s.depth).contains(&s.output) {
+                        s.output = outputs(kind, colour, s.depth)[0];
                     }
                 });
             }
@@ -3808,7 +3922,7 @@ impl App {
 
     fn output_pane(&self) -> Element<'_, Message> {
         let s = self.active();
-        let options = outputs(self.kind, s.colour);
+        let options = outputs(self.kind, s.colour, self.settings().depth);
         let mut pane = column![
             heading("Formato"),
             pick_list(options, Some(self.settings().output), Message::Output).width(Length::Fill),

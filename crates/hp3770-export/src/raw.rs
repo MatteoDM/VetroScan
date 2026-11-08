@@ -152,31 +152,49 @@ impl Value {
     }
 }
 
-/// Lines per strip: strips of about 256 KB.
-fn rows_per_strip(image: &Linear16) -> usize {
-    (256 * 1024 / (image.width * 6).max(1)).clamp(1, image.height.max(1))
+/// 16-bit samples of an image, `channels` (1 or 3) per pixel.
+struct Deep<'a> {
+    width: usize,
+    height: usize,
+    channels: usize,
+    dpi: u16,
+    data: &'a [u16],
 }
 
-/// Writes one uncompressed 16-bit RGB image with `tags` (besides the
-/// layout ones, which are added here).
+impl<'a> From<&'a Linear16> for Deep<'a> {
+    fn from(l: &'a Linear16) -> Self {
+        Deep {
+            width: l.width,
+            height: l.height,
+            channels: 3,
+            dpi: l.dpi,
+            data: &l.data,
+        }
+    }
+}
+
+/// Writes one uncompressed 16-bit image with `tags` (besides the layout
+/// ones, which are added here).
 fn write_tiff(
     path: &Path,
-    image: &Linear16,
+    image: Deep<'_>,
     photometric: u16,
     mut tags: Vec<(u16, Value)>,
 ) -> Result<()> {
-    let (w, h) = (image.width, image.height);
-    if w == 0 || h == 0 || image.data.len() != w * h * 3 {
+    let (w, h, ch) = (image.width, image.height, image.channels);
+    if w == 0 || h == 0 || image.data.len() != w * h * ch {
         return Err("immagine vuota o incoerente".into());
     }
-    let rows = rows_per_strip(image);
+    let line_bytes = w * ch * 2;
+    // Strips of about 256 KB.
+    let rows = (256 * 1024 / line_bytes).clamp(1, h);
     let strips = h.div_ceil(rows);
     let strip_bytes: Vec<u32> = (0..strips)
-        .map(|s| ((rows.min(h - s * rows)) * w * 6) as u32)
+        .map(|s| ((rows.min(h - s * rows)) * line_bytes) as u32)
         .collect();
     // Layout: header, pixel data, then the values, then the directory.
     let data_start = 8u32;
-    let data_len = (w * h * 6) as u64;
+    let data_len = (h * line_bytes) as u64;
     if data_len > u64::from(u32::MAX) - (1 << 20) {
         return Err("immagine troppo grande per un TIFF (oltre 4 GB)".into());
     }
@@ -189,12 +207,12 @@ fn write_tiff(
     tags.extend([
         (256, Value::Long(vec![w as u32])),
         (257, Value::Long(vec![h as u32])),
-        (258, Value::Short(vec![16, 16, 16])),
+        (258, Value::Short(vec![16; ch])),
         (259, Value::Short(vec![1])),
         (262, Value::Short(vec![photometric])),
         (273, Value::Long(offsets)),
         (274, Value::Short(vec![1])),
-        (277, Value::Short(vec![3])),
+        (277, Value::Short(vec![ch as u16])),
         (278, Value::Long(vec![rows as u32])),
         (279, Value::Long(strip_bytes)),
         (282, Value::Rational(vec![(u32::from(image.dpi), 1)])),
@@ -235,8 +253,8 @@ fn write_tiff(
     file.write_all(b"II")?;
     file.write_all(&42u16.to_le_bytes())?;
     file.write_all(&ifd.to_le_bytes())?;
-    let mut line = Vec::with_capacity(w * 6);
-    for row in image.data.chunks_exact(w * 3) {
+    let mut line = Vec::with_capacity(line_bytes);
+    for row in image.data.chunks_exact(w * ch) {
         line.clear();
         for v in row {
             line.extend_from_slice(&v.to_le_bytes());
@@ -346,7 +364,7 @@ fn linear_srgb_icc() -> Vec<u8> {
 pub fn save_tiff16(path: &Path, image: &Linear16) -> Result<()> {
     write_tiff(
         path,
-        image,
+        image.into(),
         2,
         vec![(34675, Value::Undefined(linear_srgb_icc()))],
     )
@@ -370,7 +388,55 @@ pub fn save_dng(path: &Path, image: &Linear16) -> Result<()> {
         (50728, Value::Rational(vec![(1, 1), (1, 1), (1, 1)])),
         (50778, Value::Short(vec![21])),
     ];
-    write_tiff(path, image, 34892, tags)
+    write_tiff(path, image.into(), 34892, tags)
+}
+
+/// Saves a finished 16-bit image (sRGB tones, `channels` 3 or 1) as a TIFF
+/// (`.tif`/`.tiff`) or a PNG.
+pub fn save_deep(
+    path: &Path,
+    width: usize,
+    height: usize,
+    channels: usize,
+    dpi: u16,
+    data: &[u16],
+) -> Result<()> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    if ext == "tif" || ext == "tiff" {
+        let image = Deep {
+            width,
+            height,
+            channels,
+            dpi,
+            data,
+        };
+        let photometric = if channels == 1 { 1 } else { 2 };
+        return write_tiff(path, image, photometric, Vec::new());
+    }
+    let file = std::io::BufWriter::new(std::fs::File::create(path)?);
+    let mut encoder = png::Encoder::new(file, u32::try_from(width)?, u32::try_from(height)?);
+    encoder.set_color(if channels == 1 {
+        png::ColorType::Grayscale
+    } else {
+        png::ColorType::Rgb
+    });
+    encoder.set_depth(png::BitDepth::Sixteen);
+    let ppm = (f64::from(dpi) / 0.0254).round() as u32;
+    encoder.set_pixel_dims(Some(png::PixelDimensions {
+        xppu: ppm,
+        yppu: ppm,
+        unit: png::Unit::Meter,
+    }));
+    encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
+    let mut writer = encoder.write_header()?;
+    let bytes: Vec<u8> = data.iter().flat_map(|v| v.to_be_bytes()).collect();
+    writer.write_image_data(&bytes)?;
+    writer.finish()?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -445,6 +511,38 @@ mod tests {
         let offset = u32::from_le_bytes(find(273).3) as usize;
         let first = u16::from_le_bytes([file[offset + 2], file[offset + 3]]);
         assert_eq!(first, image.data[1]);
+    }
+
+    #[test]
+    fn deep_png_and_tiff_read_back() {
+        let dir = std::env::temp_dir().join("hp3770-raw-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let data: Vec<u16> = (0..9 * 5).map(|i| (i * 1000) as u16).collect();
+        for name in ["g.png", "g.tif"] {
+            let path = dir.join(name);
+            save_deep(&path, 9, 5, 1, 300, &data).unwrap();
+            assert_eq!(read_deep(&path), data, "{name}");
+        }
+    }
+
+    fn read_deep(path: &Path) -> Vec<u16> {
+        if path.extension().unwrap() == "tif" {
+            let mut dec = tiff::decoder::Decoder::new(std::fs::File::open(path).unwrap()).unwrap();
+            match dec.read_image().unwrap() {
+                tiff::decoder::DecodingResult::U16(v) => v,
+                _ => panic!("not 16 bits"),
+            }
+        } else {
+            let dec =
+                png::Decoder::new(std::io::BufReader::new(std::fs::File::open(path).unwrap()));
+            let mut r = dec.read_info().unwrap();
+            let mut buf = vec![0; r.output_buffer_size().unwrap()];
+            let info = r.next_frame(&mut buf).unwrap();
+            buf[..info.buffer_size()]
+                .chunks_exact(2)
+                .map(|w| u16::from_be_bytes([w[0], w[1]]))
+                .collect()
+        }
     }
 
     #[test]
