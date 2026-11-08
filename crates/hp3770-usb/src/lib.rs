@@ -10,7 +10,9 @@
 //!   `usbscan.sys`, the Windows still-image driver that the HP driver
 //!   installs. No driver change is needed, and the HP software keeps working.
 //!
-//! [`open`] picks the first backend that finds a scanner.
+//! [`open`] picks the first backend that finds a scanner, and
+//! [`UsbBackend`] offers the scanners to the application through the
+//! [`scanner_api::Registry`].
 
 mod nusb_backend;
 #[cfg(windows)]
@@ -179,5 +181,57 @@ impl Transport for Scanner {
             #[cfg(windows)]
             Self::Usbscan(s) => s.interrupt_in(timeout),
         }
+    }
+}
+
+/// The scanners on USB, as a backend of the [`scanner_api::Registry`]: the
+/// RTS8822 driver with the profile of each model.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct UsbBackend;
+
+impl scanner_api::Backend for UsbBackend {
+    fn name(&self) -> &'static str {
+        hp3770_core::rts8822::BACKEND
+    }
+
+    /// One entry for each scanner a backend can open (not the ones `nusb`
+    /// sees but cannot open, as on Windows without WinUSB).
+    fn list(&self) -> Vec<scanner_api::DeviceInfo> {
+        let Some(profile) = hp3770_core::profile::for_device(VENDOR_ID, PRODUCT_ID) else {
+            return Vec::new();
+        };
+        list()
+            .into_iter()
+            .filter(|f| f.note.is_none())
+            .map(|f| scanner_api::DeviceInfo {
+                backend: hp3770_core::rts8822::BACKEND,
+                id: f.location,
+                name: format!("{} {}", profile.device.manufacturer, profile.device.name),
+            })
+            .collect()
+    }
+
+    /// Opens the scanner as [`open`] does (`usbscan.sys` first on Windows),
+    /// so its errors say what each way of opening it found.
+    fn open(
+        &self,
+        _device: &scanner_api::DeviceInfo,
+    ) -> scanner_api::Result<Box<dyn scanner_api::Scanner>> {
+        let profile = hp3770_core::profile::for_device(VENDOR_ID, PRODUCT_ID)
+            .ok_or(scanner_api::Error::Unsupported("this USB scanner"))?;
+        let scanner = open().map_err(hp3770_core::rts8822::api_error)?;
+        Ok(Box::new(hp3770_core::rts8822::Rts8822::new(
+            scanner, profile,
+        )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn scanners_can_move_to_the_scanner_thread() {
+        fn send<T: Send>() {}
+        send::<super::Scanner>();
+        send::<super::UsbBackend>();
     }
 }

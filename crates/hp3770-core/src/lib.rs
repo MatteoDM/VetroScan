@@ -27,6 +27,7 @@ pub mod motor_curves;
 pub mod profile;
 pub mod protocol;
 pub mod read;
+pub mod rts8822;
 pub mod scan;
 pub mod scan_modes;
 pub mod session;

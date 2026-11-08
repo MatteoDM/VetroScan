@@ -195,17 +195,17 @@ fn main() -> ExitCode {
             sharpen,
             no_fast_travel,
             depth,
-        } => open(cli.backend).and_then(|s| {
+        } => {
             let area = hp3770_core::geometry::Area::from_mm(dpi, left, top, width, height);
             scan(
-                s,
+                cli.backend,
                 &output,
                 dpi,
                 area,
                 (mode, threshold, linear, sharpen, !no_fast_travel),
                 depth,
             )
-        }),
+        }
         Command::Detect { input, crop } => detect(&input, crop.as_deref()),
         Command::Buttons { count, method, raw } => {
             open(cli.backend).and_then(|s| buttons(s, count, method, raw))
@@ -351,86 +351,84 @@ fn forward(scanner: Scanner, steps: u16) -> CliResult {
 }
 
 fn scan(
-    scanner: Scanner,
+    backend: BackendArg,
     output: &std::path::Path,
     dpi: u16,
     area: hp3770_core::geometry::Area,
     (mode, threshold, linear, sharpen, fast_travel): (Mode, u8, bool, f32, bool),
     depth: u8,
 ) -> CliResult {
-    use hp3770_core::session::{self, Request, Stage};
-    let profile = &hp3770_core::profile::HP3770;
-    let request = Request {
-        fast_travel,
-        adjust: scan_imaging::adjust::Adjustments {
-            sharpen,
-            ..Default::default()
-        },
-        linear,
-        depth,
-        ..Request::new(
-            dpi,
-            area,
-            match mode {
-                Mode::Colour => scan_imaging::Mode::Colour,
-                Mode::Grey => scan_imaging::Mode::Grey,
-                Mode::Lineart => scan_imaging::Mode::Lineart { threshold },
-            },
+    use scanner_api::{Progress, ScanRequest};
+    // Through the registry, like the application; the driver itself when a
+    // USB backend is chosen or the fast travel is off.
+    let mut scanner: Box<dyn scanner_api::Scanner> = if backend == BackendArg::Auto && fast_travel {
+        let scanner = scanner_api::Registry::new()
+            .with(hp3770_usb::UsbBackend)
+            .open_first()?;
+        eprintln!("Opened the {}", scanner.capabilities().name());
+        scanner
+    } else {
+        Box::new(
+            hp3770_core::rts8822::Rts8822::new(open(backend)?, &hp3770_core::profile::HP3770)
+                .fast_travel(fast_travel),
         )
     };
+    let caps = scanner.capabilities().clone();
+    let request = ScanRequest {
+        dpi,
+        area: scanner_api::Area {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: area.height,
+        },
+        depth,
+    };
     let start = Instant::now();
-    let mut chip = Chip::new(scanner);
     let mut last_percent = None;
-    let (image, report) = session::scan(&mut chip, profile, &request, &mut |stage| {
-        match stage {
-            Stage::Starting => eprintln!("starting"),
-            Stage::WarmingUp => eprintln!(
+    let result = scanner.scan(&request, &mut |progress| {
+        match progress {
+            Progress::Starting => eprintln!("starting"),
+            Progress::WarmingUp => eprintln!(
                 "lamp             was off, warming up for {} s",
-                hp3770_core::scan::LAMP_WARMUP.as_secs()
+                caps.lamp.map_or(0, |l| l.warm_up.as_secs())
             ),
-            Stage::Calibrating => eprintln!("calibrating"),
-            Stage::Scanning { done, total } => {
+            Progress::Calibrating => eprintln!("calibrating"),
+            Progress::Scanning { done, total } => {
                 let percent = done * 100 / total.max(1) / 10 * 10;
                 if last_percent != Some(percent) {
                     last_percent = Some(percent);
                     eprintln!("scanning         {percent} %");
                 }
             }
-            Stage::Finishing => eprintln!("finishing"),
+            Progress::Finishing => eprintln!("finishing"),
         }
         true
     })?;
-    eprintln!(
-        "calibration      offsets {:?}, gains {:?}",
-        report.offsets, report.gains
-    );
-    eprintln!(
-        "chip buffer      at most {:.1} MB waiting",
-        report.peak_buffered as f64 / 1e6
-    );
-    // Pixels whose white multiplier is far from their neighbours' (dust on
-    // the white strip, or a weak sensor pixel).
-    for (c, name) in ["red", "green", "blue"].iter().enumerate() {
-        let w = &report.white[c];
-        for x in 0..w.len() {
-            let around: Vec<u16> = (x.saturating_sub(6)..(x + 7).min(w.len()))
-                .filter(|&i| i.abs_diff(x) > 1)
-                .map(|i| w[i])
-                .collect();
-            let mut sorted = around.clone();
-            sorted.sort_unstable();
-            let median = f64::from(sorted[sorted.len() / 2]);
-            let ratio = f64::from(w[x]) / median;
-            if !(0.9..=1.1).contains(&ratio) {
-                eprintln!(
-                    "white shading    {name} pixel {x}: x{:.3} (neighbours x{:.3})",
-                    f64::from(w[x]) / 8192.0,
-                    median / 8192.0
-                );
-            }
-        }
+    for (label, value) in &result.details {
+        eprintln!("{label:<17}{value}");
     }
-    if let Some(samples) = &report.samples16 {
+    // The scanner gives its linear samples: the tone curve, the grey or
+    // black and white and the sharpening are done here.
+    let raw = &result.image;
+    let image = scan_imaging::adjust::render(
+        &raw.data,
+        raw.width,
+        raw.height,
+        raw.dpi,
+        match mode {
+            Mode::Colour => scan_imaging::Mode::Colour,
+            Mode::Grey => scan_imaging::Mode::Grey,
+            Mode::Lineart => scan_imaging::Mode::Lineart { threshold },
+        },
+        &scan_imaging::adjust::Adjustments {
+            sharpen,
+            ..Default::default()
+        },
+        linear,
+        &caps.tone,
+    );
+    if let Some(samples) = &result.samples16 {
         save_png16(output, image.width, image.height, samples)?;
     }
     save_image(output, image.width, image.height, &image.data, image.format)?;

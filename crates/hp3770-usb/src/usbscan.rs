@@ -209,6 +209,12 @@ pub struct UsbscanScanner {
     index: u32,
 }
 
+// SAFETY: every handle is owned by the scanner and closed once, and the
+// buffer of a pending overlapped read is boxed, so it stays where the
+// kernel writes it when the scanner moves. Win32 file and event handles may
+// be used from any thread; the scanner is only used through `&mut self`.
+unsafe impl Send for UsbscanScanner {}
+
 impl fmt::Debug for UsbscanScanner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("UsbscanScanner")

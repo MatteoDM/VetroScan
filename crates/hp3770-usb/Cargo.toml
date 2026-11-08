@@ -11,6 +11,7 @@ publish = false
 
 [dependencies]
 hp3770-core.workspace = true
+scanner-api.workspace = true
 nusb = "0.2"
 
 [target.'cfg(windows)'.dependencies]

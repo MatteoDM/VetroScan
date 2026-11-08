@@ -1,6 +1,6 @@
 # Piano: da «app per l'HP 3770» ad «app per scanner»
 
-Stato: **Fasi 0, 1 e 2 fatte (v0.1.2; le Fasi 1–2 escono con la v0.2.0); prossima: Fase 3**
+Stato: **Fasi 0–3 fatte (v0.1.2; le Fasi 1–3 escono con la v0.2.0); prossima: Fase 4**
 (piano scritto l'8 novembre 2026, dopo la v0.1.1; aggiornato l'8 novembre 2026 con le lingue,
 il nome nuovo e le fasi rimandate). Ogni fase si chiude con un commit, i test verdi e una
 versione; qui si segna cosa è fatto.
@@ -45,6 +45,22 @@ sciogliere:
 - Un passo alla volta, ognuno compilabile; le riesportazioni temporanee si tolgono alla fine
   della fase che le ha introdotte.
 - Le preferenze già salvate dagli utenti si migrano, con un test per ogni migrazione.
+- **Le capacità comandano, sempre** (regola chiesta dall'utente l'8 novembre 2026). Ogni
+  parte dell'app legata a una funzione dello scanner esiste solo se le `Capabilities` di
+  quello scanner la dichiarano: nell'interfaccia (pannelli, voci, opzioni, scorciatoie,
+  testi che la nominano) e nei percorsi del backend e dell'app (comandi, timer, salvataggi).
+  Per esempio: niente lampada né timer della lampada senza `lamp`; niente tasti né azioni dei
+  tasti senza `buttons`, e solo quelli che ci sono; niente 16 bit né RAW senza `16` in
+  `depths`; solo le risoluzioni di `resolutions`; vetro e righelli da `glass_inches`;
+  diapositive solo con `transparency`; dettagli tecnici solo quelli di `DeviceStatus`. Le
+  preferenze di una funzione assente restano salvate (per quando torna lo scanner che ce
+  l'ha) ma non si vedono e non agiscono.
+  - Ogni funzione nuova del contratto arriva insieme a: il campo in `Capabilities`, il ramo
+    dell'app che ne dipende, un e2e con uno scanner finto che ce l'ha e uno con uno che non
+    ce l'ha.
+  - Nel codice dell'app le funzioni dello scanner si chiedono in un punto solo (un modulo
+    di «cosa offre lo scanner aperto»), non con controlli sparsi: così è facile vedere e
+    provare che la regola vale ovunque.
 
 ## Fase 0 · lavoro in corso → v0.1.2 · fatta
 
@@ -115,6 +131,24 @@ Fatta. Com'è andata:
 - La CLI passa dal `Registry`; `probe`, `init`, `lamp` restano solo dove il backend li ha.
 - **Fatto quando:** test delle catture identici, smoke test sullo scanner vero verdi.
 
+Fatta. Com'è andata:
+
+- Il `Profile` ha un `DeviceModel` (produttore, modello, VID/PID, vetro in centesimi di
+  pollice, risoluzioni, tasti); `profile::PROFILES` e `profile::for_device(vid, pid)` sono
+  la tabella. Vetro e risoluzioni sono quelli dell'HP driver (`geometry::GLASS_INCHES`,
+  `RESOLUTIONS`), non ricavabili dalla `Platform`: un test controlla che coincidano.
+- `hp3770_core::rts8822::Rts8822<T: Transport>` implementa `Scanner`: chiede a
+  `session::scan` esattamente la richiesta che faceva l'app (colore lineare, nessuna
+  nitidezza, spostamento veloce) e mette nei dettagli lampada, calibrazione, buffer e i
+  pixel anomali della striscia bianca. Un test prova che i campioni lineari escono
+  intatti, quindi elaborarli dopo dà le stesse immagini di prima.
+- `hp3770_usb::UsbBackend` è il backend del `Registry` (apre come `hp3770_usb::open`, con
+  `usbscan.sys` prima su Windows); `UsbscanScanner` ora è `Send`.
+- `hp3770 scan` passa dal `Registry` (o dal driver diretto con `--backend` o
+  `--no-fast-travel`) ed elabora i campioni con il `Tone` dello scanner; gli altri comandi
+  restano del driver.
+- Smoke test sullo scanner vero: 5 su 5 prima e dopo.
+
 ## Fase 4 · l'app parla solo col contratto → v0.2.0
 
 - `worker.rs` tiene un `Box<dyn Scanner>` scelto dal `Registry`; con più scanner, un menu.
@@ -122,7 +156,9 @@ Fatta. Com'è andata:
   diventano «per id» e le loro azioni si salvano per modello (con migrazione).
 - **Fatto quando:** gli e2e di oggi passano invariati e **nuovi e2e** con un secondo scanner
   finto diverso (vetro A3, al massimo 1200 dpi, due tasti, niente lampada) mostrano che l'app
-  si adatta da sola.
+  si adatta da sola, secondo la regola «le capacità comandano»: per ogni capacità un e2e
+  controlla che con lo scanner che ce l'ha l'app la offra e con quello che non ce l'ha
+  non ne mostri niente.
 - Il nome dell'app e dei pacchetti cambia nella Fase 7.
 
 ## Fase 5 · l'app in italiano e in inglese → v0.3.0

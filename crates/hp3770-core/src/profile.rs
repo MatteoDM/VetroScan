@@ -15,6 +15,7 @@
 //! 127, 128. "Configuration" below means that one.
 
 use crate::calibration::CalibrationConfig;
+use crate::device::{self, Button};
 use crate::geometry;
 use crate::motor::{MotorMove, StepType};
 use crate::motor_curves;
@@ -56,9 +57,41 @@ pub struct Platform {
     pub motor_resource_phase: [u8; 32],
 }
 
+/// What a scanner is, as the user and the application see it: name, USB
+/// identity, glass, resolutions, buttons.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeviceModel {
+    /// Who makes it ("HP").
+    pub manufacturer: &'static str,
+    /// The model ("Scanjet 3770").
+    pub name: &'static str,
+    /// USB vendor id.
+    pub vendor_id: u16,
+    /// USB product id.
+    pub product_id: u16,
+    /// The glass, width and height, hundredths of an inch.
+    pub glass: (u16, u16),
+    /// The resolutions offered for a scan, dpi, smallest first.
+    pub resolutions: &'static [u16],
+    /// The front-panel buttons, left to right.
+    pub buttons: &'static [Button],
+}
+
+impl DeviceModel {
+    /// The glass, inches.
+    pub fn glass_inches(&self) -> (f64, f64) {
+        (
+            f64::from(self.glass.0) / 100.0,
+            f64::from(self.glass.1) / 100.0,
+        )
+    }
+}
+
 /// Parameters of one scanner model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Profile {
+    /// What it is.
+    pub device: DeviceModel,
     /// Spread-spectrum clock.
     pub sscg: Sscg,
     /// Type of the external RAM, as `RTS_DMA_SetType` programs it.
@@ -112,8 +145,28 @@ impl Profile {
     }
 }
 
+/// Every model the driver knows.
+pub const PROFILES: [&Profile; 1] = [&HP3770];
+
+/// The profile of the scanner with this USB identity.
+pub fn for_device(vendor_id: u16, product_id: u16) -> Option<&'static Profile> {
+    PROFILES
+        .into_iter()
+        .find(|p| p.device.vendor_id == vendor_id && p.device.product_id == product_id)
+}
+
 /// HP Scanjet 3770.
 pub const HP3770: Profile = Profile {
+    device: DeviceModel {
+        manufacturer: "HP",
+        name: "Scanjet 3770",
+        vendor_id: device::VENDOR_ID,
+        product_id: device::PRODUCT_ID,
+        // geometry::GLASS_INCHES: the largest area the HP driver accepts.
+        glass: (850, 1170),
+        resolutions: &geometry::RESOLUTIONS,
+        buttons: &[Button::Scan, Button::Copy, Button::InstantShare],
+    },
     // [SCAN_PARAM] SSCGEnable=1, SSCGMode=1, SSCGClockControl=0 (same in
     // every configuration of the file).
     // Capture 00_collegamento, 45.882 s: FE39 written as A3 13.
@@ -243,3 +296,25 @@ pub const HP3770: Profile = Profile {
         ],
     },
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_3770_is_found_by_its_usb_identity() {
+        let p = for_device(0x03f0, 0x2505).unwrap();
+        assert_eq!(p, &HP3770);
+        assert!(for_device(0x03f0, 0x2605).is_none());
+        assert_eq!(p.device.glass_inches(), geometry::GLASS_INCHES);
+        assert_eq!(p.device.resolutions, geometry::RESOLUTIONS);
+    }
+
+    #[test]
+    fn the_tone_is_the_hp_drivers() {
+        let t = HP3770.tone();
+        assert_eq!(t.white, [196.0, 186.0, 184.0]);
+        assert_eq!(t.grey_white, 196.0);
+        assert_eq!(t.gamma, 2.2);
+    }
+}
