@@ -50,6 +50,9 @@ pub struct Request {
     /// Bring the carriage near the area at high speed before a scan at
     /// 600 dpi and up (see [`fast_travel`]).
     pub fast_travel: bool,
+    /// Bits per sample asked of the chip: 8, or 16 (the samples are then
+    /// also in [`Report::samples16`]).
+    pub depth: u8,
 }
 
 impl Request {
@@ -62,6 +65,7 @@ impl Request {
             adjust: Adjustments::default(),
             linear: false,
             fast_travel: true,
+            depth: 8,
         }
     }
 }
@@ -212,6 +216,10 @@ pub struct Report {
     /// White shading multipliers of red, green and blue, one per pixel of
     /// the chip's line (8192 = 1).
     pub white: [Vec<u16>; 3],
+    /// With a depth of 16: the chip's samples (RGB, the chip sends each
+    /// most significant byte first), arranged like the image, before any
+    /// host processing.
+    pub samples16: Option<Vec<u16>>,
 }
 
 /// The carriage move that brings a scan at `resolution_y` starting at line
@@ -247,6 +255,11 @@ pub fn scan<T: Transport>(
     progress: &mut dyn FnMut(Stage) -> bool,
 ) -> Result<(Image, Report)> {
     let (mut params, hw) = geometry::scan_window(request.dpi, request.area)?;
+    match request.depth {
+        8 => {}
+        16 => params.depth = 16,
+        d => return Err(Error::InvalidArgument(format!("depth {d}"))),
+    }
     let gamma = geometry::identity_gamma();
     if !progress(Stage::Starting) {
         return Err(Error::Cancelled("start"));
@@ -278,6 +291,7 @@ pub fn scan<T: Transport>(
                 .map(|w| u16::from_le_bytes([w[0], w[1]]))
                 .collect()
         }),
+        samples16: None,
     };
     let tables = calibration.tables(Some(&gamma));
     if request.fast_travel {
@@ -325,15 +339,33 @@ pub fn scan<T: Transport>(
         return Err(Error::Cancelled("scan"));
     }
 
-    let mut width = job.bytes_per_line / 3;
     let mut height = raw.len() / job.bytes_per_line;
     raw.truncate(height * job.bytes_per_line);
+    let bytes_per_sample = usize::from(params.depth / 8).max(1);
+    let mut width = job.bytes_per_line / 3 / bytes_per_sample;
+    let mut samples16: Option<Vec<u16>> = (params.depth == 16).then(|| {
+        raw.chunks_exact(2)
+            .map(|w| u16::from_be_bytes([w[0], w[1]]))
+            .collect()
+    });
     if hw.arrange_line == ArrangeLine::Software {
         // 2400 dpi: lines arranged here, width doubled.
         let d = arrange::Distances::of(profile, &params, hw.high_resolution);
         height = params.height as usize;
-        raw = arrange::double_width(&arrange::arrange(&raw, width, height, &d), width);
+        if let Some(s) = samples16.take() {
+            samples16 = Some(arrange::double_width(
+                &arrange::arrange(&s, width, height, &d),
+                width,
+            ));
+        } else {
+            raw = arrange::double_width(&arrange::arrange(&raw, width, height, &d), width);
+        }
         width *= 2;
+    }
+    if let Some(s) = samples16 {
+        // The image gets the top 8 bits of each sample.
+        raw = s.iter().map(|&v| (v >> 8) as u8).collect();
+        report.samples16 = Some(s);
     }
     Ok((process(raw, width, height, request, profile), report))
 }

@@ -61,9 +61,9 @@ impl Distances {
 /// The sample of colour `c` at pixel `p` of output line `n` is taken from
 /// line `n + order[c] × colour (+ even_odd if p is odd)` of the chip's
 /// data. Lines the data does not reach are left black.
-pub fn arrange(raw: &[u8], width: usize, lines: usize, d: &Distances) -> Vec<u8> {
+pub fn arrange<T: Copy + Default>(raw: &[T], width: usize, lines: usize, d: &Distances) -> Vec<T> {
     let stride = width * 3;
-    let mut out = vec![0; stride * lines];
+    let mut out = vec![T::default(); stride * lines];
     for n in 0..lines {
         for p in 0..width {
             for c in 0..3 {
@@ -80,9 +80,9 @@ pub fn arrange(raw: &[u8], width: usize, lines: usize, d: &Distances) -> Vec<u8>
     out
 }
 
-/// Doubles the width of an 8-bit RGB image: each pixel is followed by the
-/// average of it and the next one (the last is repeated).
-pub fn double_width(rgb: &[u8], width: usize) -> Vec<u8> {
+/// Doubles the width of an RGB image (8 or 16 bits): each pixel is
+/// followed by the average of it and the next one (the last is repeated).
+pub fn double_width<T: Copy + Into<u32> + TryFrom<u32>>(rgb: &[T], width: usize) -> Vec<T> {
     let stride = width * 3;
     let mut out = Vec::with_capacity(rgb.len() * 2);
     for line in rgb.chunks_exact(stride) {
@@ -94,7 +94,10 @@ pub fn double_width(rgb: &[u8], width: usize) -> Vec<u8> {
                 here
             };
             out.extend_from_slice(here);
-            out.extend((0..3).map(|c| (u16::from(here[c]) + u16::from(next[c])).div_ceil(2) as u8));
+            out.extend((0..3).map(|c| {
+                let mean = (here[c].into() + next[c].into()).div_ceil(2);
+                T::try_from(mean).unwrap_or(here[c])
+            }));
         }
     }
     out
@@ -155,7 +158,7 @@ mod tests {
 
     #[test]
     fn width_doubles_with_averages() {
-        let out = double_width(&[0, 10, 20, 100, 110, 121], 2);
+        let out = double_width(&[0u8, 10, 20, 100, 110, 121], 2);
         assert_eq!(out, [0, 10, 20, 50, 60, 71, 100, 110, 121, 100, 110, 121]);
     }
 }

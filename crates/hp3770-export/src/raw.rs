@@ -54,6 +54,29 @@ impl Linear16 {
         })
     }
 
+    /// From the chip's 16-bit linear samples: `white` (per channel, in
+    /// 16-bit units) to full scale.
+    pub fn from_linear16(
+        width: usize,
+        height: usize,
+        dpi: u16,
+        samples: &[u16],
+        white: [f64; 3],
+    ) -> Self {
+        let scale = white.map(|w| 65535.0 / w.max(1.0));
+        let data = samples
+            .iter()
+            .enumerate()
+            .map(|(i, &v)| (f64::from(v) * scale[i % 3]).round().min(65535.0) as u16)
+            .collect();
+        Self {
+            width,
+            height,
+            dpi,
+            data,
+        }
+    }
+
     /// From 16-bit linear samples already scaled to full scale.
     pub fn new(width: usize, height: usize, dpi: u16, data: Vec<u16>) -> Self {
         Self {

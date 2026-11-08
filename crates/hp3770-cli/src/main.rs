@@ -120,6 +120,11 @@ enum Command {
         /// Sharpening as the HP driver's; 0 for none.
         #[arg(long, default_value_t = hp3770_core::convert::HP_SHARPEN)]
         sharpen: f32,
+        /// Bits per sample asked of the chip (16: saves
+        /// also NAME-16bit.png with the samples as sent, and prints how
+        /// many distinct low bytes they have).
+        #[arg(long, default_value_t = 8)]
+        depth: u8,
     },
     /// Find the originals on a preview of the glass (a PNG scanned at 200
     /// dpi, as `scan --dpi 200 --linear`) and print where they are.
@@ -189,6 +194,7 @@ fn main() -> ExitCode {
             linear,
             sharpen,
             no_fast_travel,
+            depth,
         } => open(cli.backend).and_then(|s| {
             let area = hp3770_core::geometry::Area::from_mm(dpi, left, top, width, height);
             scan(
@@ -197,6 +203,7 @@ fn main() -> ExitCode {
                 dpi,
                 area,
                 (mode, threshold, linear, sharpen, !no_fast_travel),
+                depth,
             )
         }),
         Command::Detect { input, crop } => detect(&input, crop.as_deref()),
@@ -349,6 +356,7 @@ fn scan(
     dpi: u16,
     area: hp3770_core::geometry::Area,
     (mode, threshold, linear, sharpen, fast_travel): (Mode, u8, bool, f32, bool),
+    depth: u8,
 ) -> CliResult {
     use hp3770_core::session::{self, Request, Stage};
     let profile = &hp3770_core::profile::HP3770;
@@ -359,6 +367,7 @@ fn scan(
             ..Default::default()
         },
         linear,
+        depth,
         ..Request::new(
             dpi,
             area,
@@ -421,6 +430,9 @@ fn scan(
             }
         }
     }
+    if let Some(samples) = &report.samples16 {
+        save_png16(output, image.width, image.height, samples)?;
+    }
     save_image(output, image.width, image.height, &image.data, image.format)?;
     println!(
         "scanned          {} x {} pixels in {:.1} s",
@@ -429,6 +441,41 @@ fn scan(
         start.elapsed().as_secs_f32()
     );
     println!("saved            {}", output.display());
+    Ok(())
+}
+
+/// Saves the 16-bit samples next to `output` (NAME-16bit.png) and prints
+/// what their low bytes look like: all zero (or few values) means the
+/// chip only widened 8-bit samples.
+fn save_png16(output: &std::path::Path, width: usize, height: usize, samples: &[u16]) -> CliResult {
+    let mut low = [0u64; 256];
+    for &v in samples {
+        low[usize::from(v & 0xff)] += 1;
+    }
+    let distinct = low.iter().filter(|&&n| n > 0).count();
+    let mean = samples.iter().map(|&v| f64::from(v)).sum::<f64>() / samples.len().max(1) as f64;
+    let max = samples.iter().copied().max().unwrap_or(0);
+    eprintln!(
+        "16 bit           {} samples, mean {mean:.0}, max {max}, {distinct} distinct low bytes",
+        samples.len()
+    );
+    let stem = output
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("scan");
+    let path = output.with_file_name(format!("{stem}-16bit.png"));
+    let file = std::io::BufWriter::new(std::fs::File::create(&path)?);
+    let mut encoder = png::Encoder::new(file, u32::try_from(width)?, u32::try_from(height)?);
+    encoder.set_color(png::ColorType::Rgb);
+    encoder.set_depth(png::BitDepth::Sixteen);
+    let mut writer = encoder.write_header()?;
+    let bytes: Vec<u8> = samples
+        .iter()
+        .take(width * height * 3)
+        .flat_map(|v| v.to_be_bytes())
+        .collect();
+    writer.write_image_data(&bytes)?;
+    eprintln!("saved            {}", path.display());
     Ok(())
 }
 

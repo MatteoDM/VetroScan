@@ -79,6 +79,9 @@ pub struct StoredMode {
     /// Find the originals on the glass and scan each on its own (absent:
     /// the default of the way of working).
     pub auto_crop: Option<bool>,
+    /// Bits per sample asked of the scanner, 8 or 16 (absent: the default
+    /// of the way of working).
+    pub depth: Option<u8>,
     pub adjust: StoredAdjust,
 }
 
@@ -92,6 +95,7 @@ impl Default for StoredMode {
             pdf_size: "scansione".into(),
             auto_save: false,
             auto_crop: None,
+            depth: None,
             adjust: StoredAdjust::default(),
         }
     }

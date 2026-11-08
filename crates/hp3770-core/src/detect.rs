@@ -469,6 +469,107 @@ fn hull(points: &[[f32; 2]]) -> Vec<[f32; 2]> {
     lower
 }
 
+/// The pixels of `found` in an image (`width` × `height`, `channels`
+/// samples a pixel), turned straight with bilinear interpolation; `blank`
+/// where the image does not reach.
+fn resample<T: Copy + Into<f32> + FromF32>(
+    data: &[T],
+    width: usize,
+    height: usize,
+    channels: usize,
+    found: &Found,
+    blank: f32,
+) -> Vec<T> {
+    let (w, h) = (
+        found.width.round().max(1.0) as usize,
+        found.height.round().max(1.0) as usize,
+    );
+    let (s, c) = found.angle.to_radians().sin_cos();
+    let mut out = vec![T::from_f32(blank); w * h * channels];
+    let (iw, ih) = (width as f32, height as f32);
+    for v in 0..h {
+        let dv = v as f32 + 0.5 - h as f32 / 2.0;
+        for u in 0..w {
+            let du = u as f32 + 0.5 - w as f32 / 2.0;
+            // Pixel centres: the source point minus half a pixel.
+            let x = found.cx + du * c - dv * s - 0.5;
+            let y = found.cy + du * s + dv * c - 0.5;
+            if x < -0.5 || y < -0.5 || x > iw - 0.5 || y > ih - 0.5 {
+                continue;
+            }
+            let (x0, y0) = (x.floor(), y.floor());
+            let (fx, fy) = (x - x0, y - y0);
+            let clampx = |x: f32| x.clamp(0.0, iw - 1.0) as usize;
+            let clampy = |y: f32| y.clamp(0.0, ih - 1.0) as usize;
+            let (xa, xb, ya, yb) = (clampx(x0), clampx(x0 + 1.0), clampy(y0), clampy(y0 + 1.0));
+            let at = |x: usize, y: usize, ch: usize| data[(y * width + x) * channels + ch].into();
+            let o = (v * w + u) * channels;
+            for ch in 0..channels {
+                let top = at(xa, ya, ch) * (1.0 - fx) + at(xb, ya, ch) * fx;
+                let bottom = at(xa, yb, ch) * (1.0 - fx) + at(xb, yb, ch) * fx;
+                out[o + ch] = T::from_f32(top * (1.0 - fy) + bottom * fy);
+            }
+        }
+    }
+    out
+}
+
+/// A sample from a value (rounded and clamped).
+pub trait FromF32 {
+    fn from_f32(v: f32) -> Self;
+}
+
+impl FromF32 for u8 {
+    fn from_f32(v: f32) -> Self {
+        v.round().clamp(0.0, 255.0) as u8
+    }
+}
+
+impl FromF32 for u16 {
+    fn from_f32(v: f32) -> Self {
+        v.round().clamp(0.0, 65535.0) as u16
+    }
+}
+
+/// 16-bit RGB samples (`width` × `height`) of `found`, turned straight:
+/// the same as [`Image::straightened`] for the chip's 16-bit samples.
+/// Returns the size and the samples.
+pub fn straightened16(
+    data: &[u16],
+    width: usize,
+    height: usize,
+    found: &Found,
+) -> (usize, usize, Vec<u16>) {
+    let out = resample(data, width, height, 3, found, 65535.0);
+    (
+        found.width.round().max(1.0) as usize,
+        found.height.round().max(1.0) as usize,
+        out,
+    )
+}
+
+/// 16-bit RGB samples turned clockwise by `quarter_turns` × 90°.
+pub fn rotated16(data: &[u16], width: usize, height: usize, quarter_turns: u8) -> Vec<u16> {
+    let turns = quarter_turns % 4;
+    if turns == 0 {
+        return data.to_vec();
+    }
+    let (w, h) = (width, height);
+    let nw = if turns == 2 { w } else { h };
+    let mut out = vec![0u16; data.len()];
+    for y in 0..h {
+        for x in 0..w {
+            let (nx, ny) = match turns {
+                1 => (h - 1 - y, x),
+                2 => (w - 1 - x, h - 1 - y),
+                _ => (y, w - 1 - x),
+            };
+            out[(ny * nw + nx) * 3..][..3].copy_from_slice(&data[(y * w + x) * 3..][..3]);
+        }
+    }
+    out
+}
+
 impl Image {
     /// The object `found` (in pixels of this image) cut out and turned
     /// straight, with bilinear interpolation. Parts outside the image are
@@ -487,35 +588,7 @@ impl Image {
             let [l, t, ..] = found.bounds();
             return self.cropped(l.max(0.0) as usize, t.max(0.0) as usize, w, h);
         }
-        let (s, c) = found.angle.to_radians().sin_cos();
-        let mut data = vec![255u8; w * h * channels];
-        let (iw, ih) = (self.width as f32, self.height as f32);
-        for v in 0..h {
-            let dv = v as f32 + 0.5 - h as f32 / 2.0;
-            for u in 0..w {
-                let du = u as f32 + 0.5 - w as f32 / 2.0;
-                // Pixel centres: the source point minus half a pixel.
-                let x = found.cx + du * c - dv * s - 0.5;
-                let y = found.cy + du * s + dv * c - 0.5;
-                if x < -0.5 || y < -0.5 || x > iw - 0.5 || y > ih - 0.5 {
-                    continue;
-                }
-                let (x0, y0) = (x.floor(), y.floor());
-                let (fx, fy) = (x - x0, y - y0);
-                let clampx = |x: f32| x.clamp(0.0, iw - 1.0) as usize;
-                let clampy = |y: f32| y.clamp(0.0, ih - 1.0) as usize;
-                let (xa, xb, ya, yb) = (clampx(x0), clampx(x0 + 1.0), clampy(y0), clampy(y0 + 1.0));
-                let at = |x: usize, y: usize, ch: usize| {
-                    f32::from(self.data[(y * self.width + x) * channels + ch])
-                };
-                let out = (v * w + u) * channels;
-                for ch in 0..channels {
-                    let top = at(xa, ya, ch) * (1.0 - fx) + at(xb, ya, ch) * fx;
-                    let bottom = at(xa, yb, ch) * (1.0 - fx) + at(xb, yb, ch) * fx;
-                    data[out + ch] = (top * (1.0 - fy) + bottom * fy).round() as u8;
-                }
-            }
-        }
+        let data = resample(&self.data, self.width, self.height, channels, found, 255.0);
         Image {
             width: w,
             height: h,

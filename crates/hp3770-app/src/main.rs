@@ -224,6 +224,8 @@ struct Settings {
     /// Find the originals on the glass (photos, cards, receipts) and scan
     /// each one straightened, as its own image.
     auto_crop: bool,
+    /// Bits per sample asked of the scanner: 8 or 16.
+    depth: u8,
 }
 
 impl Settings {
@@ -237,6 +239,7 @@ impl Settings {
             pdf_size: PdfSize::Fit,
             auto_save: false,
             auto_crop: false,
+            depth: 8,
         }
     }
 
@@ -245,6 +248,7 @@ impl Settings {
             dpi: 600,
             output: Output::Image(ImageFormat::Jpeg { quality: 92 }),
             auto_crop: true,
+            depth: 16,
             ..Self::document()
         }
     }
@@ -295,6 +299,7 @@ impl Settings {
             .into(),
             auto_save: self.auto_save,
             auto_crop: Some(self.auto_crop),
+            depth: Some(self.depth),
             adjust: prefs::StoredAdjust {
                 temperature: a.temperature,
                 tint: a.tint,
@@ -395,6 +400,10 @@ impl Settings {
             },
             auto_save: m.auto_save,
             auto_crop: m.auto_crop.unwrap_or(base.auto_crop),
+            depth: match m.depth {
+                Some(d @ (8 | 16)) => d,
+                _ => base.depth,
+            },
         }
     }
 }
@@ -602,6 +611,16 @@ impl std::fmt::Display for ButtonAction {
     }
 }
 
+/// Bits per sample of the scan, for the choice in the panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Depth(u8);
+
+impl std::fmt::Display for Depth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} bit per canale", self.0)
+    }
+}
+
 /// Which way of working the application opens with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StartMode {
@@ -744,6 +763,9 @@ struct Page {
     /// Where it was found on the glass (pixels of the preview), when it
     /// was cut out by the automatic crop: "Rifai" scans just that again.
     origin: Option<Found>,
+    /// The chip's 16-bit samples (same size as `raw.full`), when the scan
+    /// was made for a RAW file.
+    raw16: Option<Arc<Vec<u16>>>,
 }
 
 impl Page {
@@ -758,6 +780,7 @@ impl Page {
             own: None,
             shown,
             origin: None,
+            raw16: None,
         }
     }
 
@@ -783,13 +806,32 @@ impl Page {
     }
 
     /// The finished image at full resolution.
+    /// The page at full size with its adjustments: from the 16-bit
+    /// samples when the scan has them (smooth shadows after the curves).
     fn finished(&self, shared: &Settings) -> Image {
         let settings = self.effective(shared);
-        render(&self.raw.full, &settings, &settings.adjust)
+        let full = &self.raw.full;
+        match &self.raw16 {
+            Some(samples) => adjust::render_samples(
+                adjust::Samples::Sixteen(samples),
+                full.width,
+                full.height,
+                full.dpi,
+                settings.mode(),
+                &settings.adjust,
+                false,
+                &HP3770,
+            ),
+            None => render(full, &settings, &settings.adjust),
+        }
     }
 
     fn rotate(&mut self, clockwise: bool, shared: &Settings) {
         let turns = if clockwise { 1 } else { 3 };
+        if let Some(samples) = &self.raw16 {
+            let (w, h) = (self.raw.full.width, self.raw.full.height);
+            self.raw16 = Some(Arc::new(detect::rotated16(samples, w, h, turns)));
+        }
         self.raw = Raw {
             full: Arc::new(self.raw.full.rotated(turns)),
             proxy: Arc::new(self.raw.proxy.rotated(turns)),
@@ -1063,6 +1105,7 @@ enum Message {
     ActualSize,
     Select(Option<Selection>),
     Dpi(u16),
+    Depth(Depth),
     Colour(Colour),
     Output(Output),
     PdfSize(PdfSize),
@@ -1542,12 +1585,20 @@ impl App {
     /// The scan of an area given in millimetres.
     fn request_mm(&self, (x, y, w, h): (f64, f64, f64, f64)) -> Request {
         let dpi = self.settings().dpi;
+        // A RAW file always gets the chip's 16-bit samples.
+        let s = self.settings();
+        let depth = if s.depth == 16 || matches!(s.output, Output::Raw(_)) {
+            16
+        } else {
+            8
+        };
         Request {
             linear: true,
             adjust: Adjustments {
                 sharpen: 0.0,
                 ..Adjustments::default()
             },
+            depth,
             ..Request::new(dpi, Area::from_mm(dpi, x, y, w, h), session::Mode::Colour)
         }
     }
@@ -1612,11 +1663,11 @@ impl App {
     fn bytes(request: &Request, dpi: u16) -> f64 {
         let a = request.area;
         let raw = 3.0 * f64::from(a.width) * f64::from(a.height);
-        if dpi > 1200 {
-            raw * 2.0
-        } else {
-            raw
-        }
+        // 2400 dpi: the chip's half-width data and the doubled image; 16
+        // bits: the samples kept besides the 8-bit image.
+        let resolution = if dpi > 1200 { 2.0 } else { 1.0 };
+        let depth = if request.depth == 16 { 3.0 } else { 1.0 };
+        raw * resolution * depth
     }
 
     /// Bytes the scan takes in memory.
@@ -1625,13 +1676,7 @@ impl App {
         if !plan.is_empty() {
             return plan.iter().map(|j| self.job_memory(j)).fold(0.0, f64::max);
         }
-        let a = self.request().area;
-        let raw = 3.0 * f64::from(a.width) * f64::from(a.height);
-        if self.settings().dpi > 1200 {
-            raw * 2.0
-        } else {
-            raw
-        }
+        Self::bytes(&self.request(), self.settings().dpi)
     }
 
     fn start(&mut self, purpose: Purpose) {
@@ -1700,9 +1745,13 @@ impl App {
 
     /// The images of a scan: the originals cut out and straightened, or
     /// the whole scan.
-    fn cut(image: Image, job: Option<&Job>) -> Vec<(Image, Option<Found>)> {
+    fn cut(
+        image: Image,
+        samples16: Option<Vec<u16>>,
+        job: Option<&Job>,
+    ) -> Vec<(Image, Option<Found>, Option<Vec<u16>>)> {
         let Some((job, area)) = job.and_then(|j| Some((j, j.area?))) else {
-            return vec![(image, None)];
+            return vec![(image, None, samples16)];
         };
         let factor = f32::from(image.dpi) / f32::from(PREVIEW_DPI);
         let inset = INSET_MM / 25.4 * f32::from(image.dpi);
@@ -1712,7 +1761,10 @@ impl App {
                 let mut f = c.scaled(factor, -(area.x as f32), -(area.y as f32));
                 f.width = (f.width - 2.0 * inset).max(1.0);
                 f.height = (f.height - 2.0 * inset).max(1.0);
-                (image.straightened(&f), Some(*c))
+                let samples = samples16
+                    .as_ref()
+                    .map(|s| detect::straightened16(s, image.width, image.height, &f).2);
+                (image.straightened(&f), Some(*c), samples)
             })
             .collect()
     }
@@ -1848,8 +1900,18 @@ impl App {
             } else {
                 path.with_file_name(format!("{stem}-{:03}.{ext}", i + 1))
             };
-            let raw = hp3770_export::Linear16::from_linear8(&page.raw.full, HP_WHITE)
-                .map_err(|e| e.to_string())?;
+            let full = &page.raw.full;
+            let raw = match &page.raw16 {
+                Some(samples) => hp3770_export::Linear16::from_linear16(
+                    full.width,
+                    full.height,
+                    full.dpi,
+                    samples,
+                    HP_WHITE.map(|w| w * 256.0),
+                ),
+                None => hp3770_export::Linear16::from_linear8(full, HP_WHITE)
+                    .map_err(|e| e.to_string())?,
+            };
             match format {
                 RawFormat::Tiff16 => hp3770_export::save_tiff16(&target, &raw),
                 RawFormat::Dng => hp3770_export::save_dng(&target, &raw),
@@ -1991,6 +2053,7 @@ impl App {
             }
             Message::Select(selection) => self.selection = selection,
             Message::Dpi(dpi) => self.settings_mut().dpi = dpi,
+            Message::Depth(d) => self.settings_mut().depth = d.0,
             Message::Colour(colour) => {
                 let kind = self.kind;
                 self.change(|s| {
@@ -2403,7 +2466,7 @@ impl App {
             Event::Done(purpose, result) => {
                 self.busy = None;
                 match result {
-                    Ok(done) => self.on_scan(purpose, done.0.clone()),
+                    Ok(done) => self.on_scan(purpose, done.0.clone(), done.1.samples16.clone()),
                     Err(e) => {
                         self.redo = None;
                         self.redo_auto = false;
@@ -2437,7 +2500,7 @@ impl App {
         }
     }
 
-    fn on_scan(&mut self, purpose: Purpose, image: Image) {
+    fn on_scan(&mut self, purpose: Purpose, image: Image, samples16: Option<Vec<u16>>) {
         match purpose {
             Purpose::Preview => {
                 let raw = Raw::new(image);
@@ -2456,8 +2519,8 @@ impl App {
             }
             Purpose::Page => {
                 let job = self.job.take();
-                for (image, origin) in Self::cut(image, job.as_ref()) {
-                    self.add_page(image, origin);
+                for (image, origin, samples) in Self::cut(image, samples16, job.as_ref()) {
+                    self.add_page(image, origin, samples);
                 }
                 self.result_view = View::default();
                 self.tab = Tab::Result;
@@ -2472,10 +2535,11 @@ impl App {
 
     /// A page (or photo) scanned: added, or put in place of the one being
     /// redone.
-    fn add_page(&mut self, image: Image, origin: Option<Found>) {
+    fn add_page(&mut self, image: Image, origin: Option<Found>, samples16: Option<Vec<u16>>) {
         let (w, h, dpi) = (image.width, image.height, image.dpi);
         let mut page = Page::new(Raw::new(image), *self.settings());
         page.origin = origin;
+        page.raw16 = samples16.filter(|s| s.len() == w * h * 3).map(Arc::new);
         let first = self.batch.0 == 0;
         self.batch.0 += 1;
         let of = if self.batch.1 > 1 {
@@ -3192,6 +3256,22 @@ impl App {
                 .width(Length::Fill)
                 .into()
             ),
+            labelled(
+                "Profondità",
+                pick_list(
+                    [Depth(8), Depth(16)],
+                    Some(Depth(self.settings().depth)),
+                    Message::Depth
+                )
+                .width(Length::Fill)
+                .into()
+            ),
+            text(if self.settings().depth == 16 {
+                "16 bit: ombre e sfumature senza scalini anche dopo curve forti;                  più memoria."
+            } else {
+                "8 bit: come il driver HP. Per foto e RAW meglio 16 bit."
+            })
+            .size(11),
             heading("Area"),
             checkbox(self.settings().auto_crop)
                 .label("Ritaglio automatico")

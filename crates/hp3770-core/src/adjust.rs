@@ -250,6 +250,22 @@ impl Adjustments {
     /// white balance, `tone` (the host tone curve of the channel), levels,
     /// brightness and contrast. `linear` leaves out the tone curve.
     pub fn tables(&self, white: [f64; 3], linear: bool) -> [[u8; 256]; 3] {
+        let level = self.levels(white, linear);
+        std::array::from_fn(|c| std::array::from_fn(|i| level(c, i as f32)))
+    }
+
+    /// The same tables for 12-bit samples (4096 entries, a chip sample of
+    /// 16 bits shifted down by 4): the shadows, which the tone curve
+    /// stretches most, keep their gradation instead of the steps of 8-bit
+    /// samples.
+    pub fn tables_fine(&self, white: [f64; 3], linear: bool) -> [Vec<u8>; 3] {
+        let level = self.levels(white, linear);
+        std::array::from_fn(|c| (0..4096).map(|i| level(c, i as f32 / 16.0)).collect())
+    }
+
+    /// The output level of channel `c` for a linear sample `i` in 8-bit
+    /// units (fractions allowed).
+    fn levels(&self, white: [f64; 3], linear: bool) -> impl Fn(usize, f32) -> u8 + '_ {
         let gains = self.gains();
         let black = self.black.clamp(0.0, 254.0);
         let white_point = self.white.clamp(black + 1.0, 255.0);
@@ -261,23 +277,21 @@ impl Adjustments {
         let shadows = self.shadows.clamp(-100.0, 100.0) / 100.0;
         let whites = self.whites.clamp(-100.0, 100.0) / 100.0;
         let blacks = self.blacks.clamp(-100.0, 100.0) / 100.0;
-        std::array::from_fn(|c| {
-            std::array::from_fn(|i| {
-                let x = (i as f32 * gains[c] * exposure).min(255.0);
-                let v = if linear {
-                    x
-                } else {
-                    255.0 * (f64::from(x) / white[c]).min(1.0).powf(1.0 / 2.2) as f32
-                };
-                let v = ((v - black) / (white_point - black)).clamp(0.0, 1.0);
-                let v = tone_regions(v, highlights, shadows, whites, blacks);
-                let v = 255.0 * v.powf(1.0 / gamma);
-                let v = (v - 128.0) * contrast + 128.0 + brightness;
-                let v = (v / 255.0).clamp(0.0, 1.0);
-                let v = self.curve[0].eval(self.curve[c + 1].eval(v));
-                (v * 255.0).round().clamp(0.0, 255.0) as u8
-            })
-        })
+        move |c: usize, i: f32| {
+            let x = (i * gains[c] * exposure).min(255.0);
+            let v = if linear {
+                x
+            } else {
+                255.0 * (f64::from(x) / white[c]).min(1.0).powf(1.0 / 2.2) as f32
+            };
+            let v = ((v - black) / (white_point - black)).clamp(0.0, 1.0);
+            let v = tone_regions(v, highlights, shadows, whites, blacks);
+            let v = 255.0 * v.powf(1.0 / gamma);
+            let v = (v - 128.0) * contrast + 128.0 + brightness;
+            let v = (v / 255.0).clamp(0.0, 1.0);
+            let v = self.curve[0].eval(self.curve[c + 1].eval(v));
+            (v * 255.0).round().clamp(0.0, 255.0) as u8
+        }
     }
 }
 
@@ -542,14 +556,56 @@ pub fn render(
     linear: bool,
     profile: &Profile,
 ) -> Image {
+    render_samples(
+        Samples::Eight(rgb),
+        width,
+        height,
+        dpi,
+        mode,
+        adjustments,
+        linear,
+        profile,
+    )
+}
+
+/// The chip's linear RGB samples, 8 or 16 bits.
+#[derive(Debug, Clone, Copy)]
+pub enum Samples<'a> {
+    Eight(&'a [u8]),
+    Sixteen(&'a [u16]),
+}
+
+/// [`render`] of 8- or 16-bit samples. With 16 bits the tone tables take
+/// 12 bits of each sample, so dark tones lifted by the curves stay smooth.
+#[allow(clippy::too_many_arguments)]
+pub fn render_samples(
+    samples: Samples<'_>,
+    width: usize,
+    height: usize,
+    dpi: u16,
+    mode: Mode,
+    adjustments: &Adjustments,
+    linear: bool,
+    profile: &Profile,
+) -> Image {
     let (format, data) = match mode {
         Mode::Colour => {
-            let tables = adjustments.tables(geometry::HP_WHITE, linear);
-            let mut out: Vec<u8> = rgb
-                .iter()
-                .enumerate()
-                .map(|(i, &v)| tables[i % 3][usize::from(v)])
-                .collect();
+            let mut out: Vec<u8> = match samples {
+                Samples::Eight(rgb) => {
+                    let tables = adjustments.tables(geometry::HP_WHITE, linear);
+                    rgb.iter()
+                        .enumerate()
+                        .map(|(i, &v)| tables[i % 3][usize::from(v)])
+                        .collect()
+                }
+                Samples::Sixteen(rgb) => {
+                    let tables = adjustments.tables_fine(geometry::HP_WHITE, linear);
+                    rgb.iter()
+                        .enumerate()
+                        .map(|(i, &v)| tables[i % 3][usize::from(v >> 4)])
+                        .collect()
+                }
+            };
             saturate(&mut out, adjustments.saturation);
             vibrance(&mut out, adjustments.vibrance);
             descreen(&mut out, width, 3, dpi, adjustments.descreen);
@@ -574,15 +630,22 @@ pub fn render(
                 ],
                 ..*adjustments
             }
-            .tables([white; 3], linear);
-            let mut grey: Vec<u8> = rgb
-                .chunks_exact(3)
-                .map(|p| {
-                    let sum: f32 = (0..3).map(|c| f32::from(p[c]) * gains[c]).sum();
-                    let level = (sum / 3.0).round().clamp(0.0, 255.0) as usize;
-                    tables[1][level]
-                })
-                .collect();
+            .tables_fine([white; 3], linear);
+            let grey_of = |p: [f32; 3]| {
+                let sum: f32 = (0..3).map(|c| p[c] * gains[c]).sum();
+                let level = (sum / 3.0 * 16.0).round().clamp(0.0, 4095.0) as usize;
+                tables[1][level]
+            };
+            let mut grey: Vec<u8> = match samples {
+                Samples::Eight(rgb) => rgb
+                    .chunks_exact(3)
+                    .map(|p| grey_of([p[0], p[1], p[2]].map(f32::from)))
+                    .collect(),
+                Samples::Sixteen(rgb) => rgb
+                    .chunks_exact(3)
+                    .map(|p| grey_of([p[0], p[1], p[2]].map(|v| f32::from(v) / 256.0)))
+                    .collect(),
+            };
             descreen(&mut grey, width, 1, dpi, adjustments.descreen);
             denoise(&mut grey, width, 1, adjustments.noise);
             convert::sharpen(&mut grey, width, 1, adjustments.sharpen);
@@ -611,6 +674,57 @@ pub fn render(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sixteen_bits_match_eight_and_keep_the_shadows() {
+        use crate::profile::HP3770;
+        let rgb8: Vec<u8> = (0..=255u8).flat_map(|v| [v, v, v]).collect();
+        let rgb16: Vec<u16> = rgb8.iter().map(|&v| u16::from(v) << 8).collect();
+        let a = Adjustments::default();
+        for mode in [Mode::Colour, Mode::Grey] {
+            let eight = render(&rgb8, 256, 1, 300, mode, &a, false, &HP3770);
+            let sixteen = render_samples(
+                Samples::Sixteen(&rgb16),
+                256,
+                1,
+                300,
+                mode,
+                &a,
+                false,
+                &HP3770,
+            );
+            for (x, y) in eight.data.iter().zip(&sixteen.data) {
+                assert!(x.abs_diff(*y) <= 1, "{mode:?}: {x} {y}");
+            }
+        }
+        // The darkest tenth of 8-bit samples (0-20) gives few output
+        // levels; 16-bit samples there give many more.
+        let dark16: Vec<u16> = (0..20 * 256)
+            .step_by(4)
+            .flat_map(|v| [v as u16; 3])
+            .collect();
+        let n = dark16.len() / 3;
+        let out = render_samples(
+            Samples::Sixteen(&dark16),
+            n,
+            1,
+            300,
+            Mode::Colour,
+            &a,
+            false,
+            &HP3770,
+        );
+        let levels: std::collections::BTreeSet<u8> = out.data.iter().copied().collect();
+        let dark8: Vec<u8> = (0..20u8).flat_map(|v| [v; 3]).collect();
+        let out8 = render(&dark8, 20, 1, 300, Mode::Colour, &a, false, &HP3770);
+        let levels8: std::collections::BTreeSet<u8> = out8.data.iter().copied().collect();
+        assert!(
+            levels.len() > 3 * levels8.len() / 2,
+            "{} vs {}",
+            levels.len(),
+            levels8.len()
+        );
+    }
 
     #[test]
     fn defaults_are_the_hp_result() {
