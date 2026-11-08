@@ -137,6 +137,7 @@ impl Picture {
 }
 
 /// The viewer of a picture (or of an empty area of `placeholder` size).
+#[allow(clippy::too_many_arguments)]
 pub fn viewer<'a, Message: Clone + 'a>(
     picture: Option<&'a Picture>,
     placeholder: Size,
@@ -145,6 +146,7 @@ pub fn viewer<'a, Message: Clone + 'a>(
     selection: Option<Selection>,
     on_view: fn(View) -> Message,
     on_select: Option<fn(Option<Selection>) -> Message>,
+    on_pick: Option<fn(Point) -> Message>,
 ) -> Element<'a, Message> {
     let size = picture.map_or(placeholder, |p| p.size);
     let below = Canvas::new(ImageLayer {
@@ -161,6 +163,7 @@ pub fn viewer<'a, Message: Clone + 'a>(
         selection,
         on_view,
         on_select,
+        on_pick,
     })
     .width(Length::Fill)
     .height(Length::Fill);
@@ -213,6 +216,9 @@ struct Overlay<Message> {
     selection: Option<Selection>,
     on_view: fn(View) -> Message,
     on_select: Option<fn(Option<Selection>) -> Message>,
+    /// When set, a left click picks the image point under the pointer (the
+    /// eyedropper) instead of drawing a selection.
+    on_pick: Option<fn(Point) -> Message>,
 }
 
 /// What a drag is doing.
@@ -280,6 +286,13 @@ impl<Message> canvas::Program<Message> for Overlay<Message> {
             }
             Event::Mouse(mouse::Event::ButtonPressed(button)) => {
                 let p = cursor.position_in(bounds)?;
+                if let (mouse::Button::Left, Some(on_pick)) = (button, self.on_pick) {
+                    let (rect, _) = self.view.placement(size, self.size);
+                    if !rect.contains(p) {
+                        return None;
+                    }
+                    return Some(Action::publish(on_pick(self.image_point(size, p))).and_capture());
+                }
                 match (button, self.on_select) {
                     (mouse::Button::Left, Some(on_select)) => {
                         let (rect, _) = self.view.placement(size, self.size);
@@ -393,7 +406,9 @@ impl<Message> canvas::Program<Message> for Overlay<Message> {
             Drag::Pan(..) => mouse::Interaction::Grabbing,
             Drag::Select(_) => mouse::Interaction::Crosshair,
             Drag::None => match cursor.position_in(bounds) {
-                Some(_) if self.on_select.is_some() => mouse::Interaction::Crosshair,
+                Some(_) if self.on_pick.is_some() || self.on_select.is_some() => {
+                    mouse::Interaction::Crosshair
+                }
                 Some(_) => mouse::Interaction::Grab,
                 None => mouse::Interaction::default(),
             },
