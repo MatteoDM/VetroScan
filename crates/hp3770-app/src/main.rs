@@ -4591,8 +4591,17 @@ impl App {
             (Kind::Photo, 0 | 1) => "Scansiona foto".into(),
             (Kind::Photo, n) => format!("Scansiona {n} foto"),
         };
-        let bar = row![
+        // The name, and at its top right the version, small.
+        let name = row![
             text("Scanjet 3770").size(15),
+            text(concat!("v", env!("CARGO_PKG_VERSION")))
+                .size(10)
+                .style(text::secondary),
+        ]
+        .spacing(3)
+        .align_y(Alignment::Start);
+        let bar = row![
+            name,
             modes,
             Space::new().width(Length::Fill),
             button(chip)

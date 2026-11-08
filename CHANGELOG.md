@@ -14,6 +14,9 @@ manca.
 
 ## [Unreleased]
 
+### Added
+- La **versione** dell'app, piccola, in alto a destra del nome.
+
 ### Changed
 - **Ogni pagina ha le sue regolazioni**: nel documento «Solo questa pagina» è spuntata fin
   dalla scansione, così cambiare colori o toni di una pagina non cambia le altre. Con

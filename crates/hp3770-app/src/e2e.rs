@@ -183,6 +183,10 @@ fn the_app_finds_the_scanner_when_it_starts() {
     let mut ui = Ui::new();
     assert!(matches!(ui.app.status, Some(Ok(_))));
     assert!(ui.shows("Anteprima"));
+    assert!(
+        ui.shows(concat!("v", env!("CARGO_PKG_VERSION"))),
+        "the version"
+    );
     assert!(ui.app.pages.is_empty());
 }
 
