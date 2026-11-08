@@ -461,11 +461,35 @@ fn render(raw: &Image, settings: &Settings, adjust: &Adjustments) -> Image {
     )
 }
 
-/// A page of the document (or the photo): its raw scan, its own
-/// adjustments and what is shown.
+/// How a scan looks: the adjustments and the black-and-white threshold.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Look {
+    adjust: Adjustments,
+    threshold: u8,
+}
+
+impl Look {
+    fn of(s: &Settings) -> Self {
+        Self {
+            adjust: s.adjust,
+            threshold: s.threshold,
+        }
+    }
+
+    fn put(self, s: &mut Settings) {
+        s.adjust = self.adjust;
+        s.threshold = self.threshold;
+    }
+}
+
+/// A page of the document (or the photo): its raw scan, the settings it
+/// was scanned with, and what is shown. It looks like the shared settings
+/// of its way of working, unless it has a look of its own.
 struct Page {
     raw: Raw,
     settings: Settings,
+    /// "Solo questa pagina": adjustments of its own.
+    own: Option<Look>,
     shown: Image,
     picture: Picture,
     thumb: Picture,
@@ -480,17 +504,26 @@ impl Page {
             thumb: Picture::from_rgb_max(shown.width, shown.height, &rgb, 240),
             raw,
             settings,
+            own: None,
             shown,
         }
     }
 
-    fn redraw(&mut self, before: bool) {
+    /// The settings it is drawn with: its own look, or the shared one.
+    fn effective(&self, shared: &Settings) -> Settings {
+        let mut s = self.settings;
+        self.own.unwrap_or(Look::of(shared)).put(&mut s);
+        s
+    }
+
+    fn redraw(&mut self, before: bool, shared: &Settings) {
+        let settings = self.effective(shared);
         let adjust = if before {
             Adjustments::default()
         } else {
-            self.settings.adjust
+            settings.adjust
         };
-        self.shown = render(&self.raw.proxy, &self.settings, &adjust);
+        self.shown = render(&self.raw.proxy, &settings, &adjust);
         let rgb = self.shown.to_rgb();
         self.picture =
             Picture::from_rgb(self.shown.width, self.shown.height, &rgb).replacing(&self.picture);
@@ -498,17 +531,18 @@ impl Page {
     }
 
     /// The finished image at full resolution.
-    fn finished(&self) -> Image {
-        render(&self.raw.full, &self.settings, &self.settings.adjust)
+    fn finished(&self, shared: &Settings) -> Image {
+        let settings = self.effective(shared);
+        render(&self.raw.full, &settings, &settings.adjust)
     }
 
-    fn rotate(&mut self, clockwise: bool) {
+    fn rotate(&mut self, clockwise: bool, shared: &Settings) {
         let turns = if clockwise { 1 } else { 3 };
         self.raw = Raw {
             full: Arc::new(self.raw.full.rotated(turns)),
             proxy: Arc::new(self.raw.proxy.rotated(turns)),
         };
-        self.redraw(false);
+        self.redraw(false, shared);
     }
 }
 
@@ -653,6 +687,9 @@ enum Target {
     /// The page shown in the result tab (a rescan waiting, or the current
     /// page).
     Page,
+    /// Another page of the document whose shared look changed (its
+    /// thumbnail and picture).
+    Index(usize),
 }
 
 /// An adjusted image computed off the interface thread.
@@ -691,6 +728,8 @@ enum Message {
     Pane(Pane),
     Undo,
     Redo,
+    /// "Solo questa pagina" on or off for the page shown.
+    OwnLook(bool),
     PresetName(String),
     PresetSave,
     PresetApply(String),
@@ -788,8 +827,11 @@ struct App {
     draft: Option<(Field, String)>,
     /// A render is running off the interface thread.
     rendering: bool,
-    /// Something changed since it started: render again when it ends.
-    dirty: Option<Target>,
+    /// What changed and is waiting to be redrawn.
+    dirty_preview: bool,
+    dirty_page: bool,
+    /// Pages following the shared look whose picture is out of date.
+    stale: Vec<usize>,
 }
 
 impl App {
@@ -848,7 +890,9 @@ impl App {
                 redo_stack: Vec::new(),
                 last_edit: None,
                 rendering: false,
-                dirty: None,
+                dirty_preview: false,
+                dirty_page: false,
+                stale: Vec::new(),
             },
             iced::system::theme().map(Message::SystemTheme),
         )
@@ -913,11 +957,34 @@ impl App {
 
     /// The settings the panel shows and edits.
     fn active(&self) -> Settings {
+        let shared = *self.settings();
         if self.editing_page() {
-            self.shown().map(|p| p.settings).unwrap_or(*self.settings())
+            self.shown().map(|p| p.effective(&shared)).unwrap_or(shared)
         } else {
-            *self.settings()
+            shared
         }
+    }
+
+    /// Whether the panel edits a page with a look of its own.
+    fn editing_own(&self) -> bool {
+        self.editing_page() && self.shown().is_some_and(|p| p.own.is_some())
+    }
+
+    /// The shared look changed: redraw the preview, the page shown if it
+    /// follows it, and (in the background) the other pages that do.
+    fn shared_changed(&mut self) {
+        self.dirty_preview = true;
+        let shown = self.current;
+        if self.shown().is_some_and(|p| p.own.is_none()) {
+            self.dirty_page = true;
+        }
+        self.stale = self
+            .pages
+            .iter()
+            .enumerate()
+            .filter(|(i, p)| p.own.is_none() && Some(*i) != shown)
+            .map(|(i, _)| i)
+            .collect();
     }
 
     /// Applies a change to the active settings and redraws what shows it.
@@ -934,7 +1001,8 @@ impl App {
         self.apply(f);
     }
 
-    /// Saves the settings the panel edits for Ctrl+Z.
+    /// Saves the settings the panel edits for Ctrl+Z: the page's own look,
+    /// or the shared settings.
     fn remember(&mut self, field: Option<Field>) {
         let now = std::time::Instant::now();
         let same = matches!(
@@ -945,12 +1013,12 @@ impl App {
         if same {
             return;
         }
-        let target = if self.editing_page() {
-            Target::Page
+        let entry = if self.editing_own() {
+            (Target::Page, self.active())
         } else {
-            Target::Preview
+            (Target::Preview, *self.settings())
         };
-        self.undo.push((target, self.active()));
+        self.undo.push(entry);
         if self.undo.len() > 100 {
             self.undo.remove(0);
         }
@@ -962,33 +1030,47 @@ impl App {
     fn restore(&mut self, target: Target, settings: Settings) -> Option<(Target, Settings)> {
         self.last_edit = None;
         match target {
-            Target::Page if self.editing_page() => {
+            Target::Page if self.editing_own() => {
+                let shared = *self.settings();
                 let page = self.shown_mut()?;
-                let current = page.settings;
-                page.settings = settings;
-                self.dirty = Some(Target::Page);
+                let current = page.effective(&shared);
+                page.own = Some(Look::of(&settings));
+                page.settings.colour = settings.colour;
+                self.dirty_page = true;
                 Some((Target::Page, current))
             }
-            Target::Page => None,
             Target::Preview => {
                 let current = *self.settings();
                 *self.settings_mut() = settings;
-                self.dirty = Some(Target::Preview);
+                self.shared_changed();
                 Some((Target::Preview, current))
             }
+            _ => None,
         }
     }
 
+    /// A change to what the panel edits. On a page with its own look, that
+    /// look; otherwise the shared settings, which every page following
+    /// them shows. The colour mode of a page shown stays its own.
     fn apply(&mut self, f: impl Fn(&mut Settings)) {
         if self.editing_page() {
-            if let Some(page) = self.shown_mut() {
-                f(&mut page.settings);
+            let shared = *self.settings();
+            let Some(page) = self.shown_mut() else {
+                return;
+            };
+            let mut s = page.effective(&shared);
+            f(&mut s);
+            page.settings.colour = s.colour;
+            if page.own.is_some() {
+                page.own = Some(Look::of(&s));
+                self.dirty_page = true;
+            } else {
+                Look::of(&s).put(self.settings_mut());
+                self.shared_changed();
             }
-            f(self.settings_mut());
-            self.dirty = Some(Target::Page);
         } else {
             f(self.settings_mut());
-            self.dirty = Some(Target::Preview);
+            self.shared_changed();
         }
     }
 
@@ -999,16 +1081,30 @@ impl App {
         if self.rendering {
             return Task::none();
         }
-        let Some(target) = self.dirty.take() else {
+        let before = self.before;
+        let shared = *self.settings();
+        let target = if std::mem::take(&mut self.dirty_page) {
+            Target::Page
+        } else if std::mem::take(&mut self.dirty_preview) {
+            Target::Preview
+        } else if let Some(i) = self.stale.pop() {
+            Target::Index(i)
+        } else {
             return Task::none();
         };
-        let before = self.before;
         let job = match target {
             Target::Preview => self
                 .preview
                 .as_ref()
-                .map(|(raw, ..)| (raw.proxy.clone(), *self.settings())),
-            Target::Page => self.shown().map(|p| (p.raw.proxy.clone(), p.settings)),
+                .map(|(raw, ..)| (raw.proxy.clone(), shared)),
+            Target::Page => self
+                .shown()
+                .map(|p| (p.raw.proxy.clone(), p.effective(&shared))),
+            Target::Index(i) => self
+                .pages
+                .get(i)
+                .filter(|p| p.own.is_none())
+                .map(|p| (p.raw.proxy.clone(), p.effective(&shared))),
         };
         let Some((proxy, settings)) = job else {
             return Task::none();
@@ -1024,7 +1120,7 @@ impl App {
                 let shown = render(&proxy, &settings, &adjust);
                 let rgb = shown.to_rgb();
                 let picture = Picture::from_rgb(shown.width, shown.height, &rgb);
-                let thumb = (target == Target::Page)
+                let thumb = (target != Target::Preview)
                     .then(|| Picture::from_rgb_max(shown.width, shown.height, &rgb, 240));
                 Arc::new(Rendered {
                     target,
@@ -1192,8 +1288,12 @@ impl App {
     fn write(&self, path: &std::path::Path) -> Result<String, String> {
         let settings = self.settings();
         let pages: Vec<Image> = match self.kind {
-            Kind::Document => self.pages.iter().map(Page::finished).collect(),
-            Kind::Photo => self.shown().map(Page::finished).into_iter().collect(),
+            Kind::Document => self.pages.iter().map(|p| p.finished(settings)).collect(),
+            Kind::Photo => self
+                .shown()
+                .map(|p| p.finished(settings))
+                .into_iter()
+                .collect(),
         };
         if pages.is_empty() {
             return Err("niente da salvare".into());
@@ -1258,8 +1358,12 @@ impl App {
                             *old_shown = shown;
                         }
                     }
-                    Target::Page => {
-                        if let Some(page) = self.shown_mut() {
+                    Target::Page | Target::Index(_) => {
+                        let page = match target {
+                            Target::Index(i) => self.pages.get_mut(i),
+                            _ => self.shown_mut(),
+                        };
+                        if let Some(page) = page {
                             page.picture = picture.replacing(&page.picture);
                             if let Some(thumb) = thumb {
                                 page.thumb = thumb;
@@ -1394,6 +1498,20 @@ impl App {
                     Err(e) => format!("Preset non salvato: {e}"),
                 };
             }
+            Message::OwnLook(on) => {
+                let shared = *self.settings();
+                if self.kind == Kind::Document && self.editing_page() {
+                    if let Some(page) = self.shown_mut() {
+                        page.own = on.then(|| page.own.unwrap_or(Look::of(&shared)));
+                        self.dirty_page = true;
+                    }
+                    self.note = if on {
+                        "Questa pagina ha ora regolazioni sue".into()
+                    } else {
+                        "Questa pagina segue di nuovo le regolazioni comuni".into()
+                    };
+                }
+            }
             Message::Undo => {
                 if let Some((target, settings)) = self.undo.pop() {
                     match self.restore(target, settings) {
@@ -1496,8 +1614,9 @@ impl App {
             Message::Before(on) => {
                 self.before = on;
                 self.redraw_preview();
+                let shared = *self.settings();
                 if let Some(p) = self.shown_mut() {
-                    p.redraw(on);
+                    p.redraw(on, &shared);
                 }
             }
             Message::RefreshStatus => {
@@ -1556,8 +1675,9 @@ impl App {
                 self.tab = Tab::Result;
             }
             Message::PageRotate(i, clockwise) => {
+                let shared = *self.settings();
                 if let Some(page) = self.pages.get_mut(i) {
-                    page.rotate(clockwise);
+                    page.rotate(clockwise, &shared);
                     self.current = Some(i);
                     self.result_view = View::default();
                 }
@@ -1991,7 +2111,13 @@ impl App {
                 column![
                     thumb,
                     row![
-                        text(format!("{}", i + 1)).size(12).width(Length::Fill),
+                        text(if page.own.is_some() {
+                            format!("{} · propria", i + 1)
+                        } else {
+                            format!("{}", i + 1)
+                        })
+                        .size(12)
+                        .width(Length::Fill),
                         tool("↑", Message::PageMove(i, false), i > 0),
                         tool("↓", Message::PageMove(i, true), i + 1 < n),
                         tool("↻", Message::PageRotate(i, true), idle),
@@ -2518,8 +2644,38 @@ impl App {
                 .align_y(Alignment::Center),
             );
         }
+        let scope: Element<'_, Message> = match (self.kind, self.editing_page()) {
+            (Kind::Document, true) => {
+                let own = self.shown().is_some_and(|p| p.own.is_some());
+                column![
+                    checkbox(own)
+                        .label("Solo questa pagina")
+                        .on_toggle(Message::OwnLook)
+                        .text_size(13),
+                    text(if own {
+                        "Le modifiche valgono solo per questa pagina."
+                    } else {
+                        "Le modifiche valgono per l'anteprima e per tutte le pagine \
+                         che non hanno regolazioni proprie."
+                    })
+                    .size(11),
+                ]
+                .spacing(4)
+                .into()
+            }
+            (Kind::Document, false) => text(
+                "Le modifiche valgono per l'anteprima e per tutte le pagine \
+                 che non hanno regolazioni proprie.",
+            )
+            .size(11)
+            .into(),
+            (Kind::Photo, _) => text("Anteprima e foto hanno sempre le stesse regolazioni.")
+                .size(11)
+                .into(),
+        };
         column![
             text(editing.to_uppercase()).size(11),
+            scope,
             presets,
             histogram,
             base,
