@@ -13,6 +13,9 @@ hp3770-core.workspace = true
 hp3770-usb.workspace = true
 iced = { version = "0.14", features = ["image", "canvas", "tokio"] }
 rfd = "0.18"
+notify-rust = "4"
+dirs = "6"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 hp3770-export.workspace = true
 
 [[bin]]

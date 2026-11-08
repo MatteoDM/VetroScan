@@ -173,6 +173,9 @@ struct App {
     redo: Option<usize>,
     /// Its new scan, waiting for a choice.
     redone: Option<Redo>,
+    /// The rescan was asked from the scanner's Copy button: replace the
+    /// page without asking.
+    redo_auto: bool,
     pdf_size: PdfSize,
     /// Last thing that happened, for the status line.
     note: String,
@@ -200,6 +203,7 @@ impl App {
                 current: None,
                 redo: None,
                 redone: None,
+                redo_auto: false,
                 pdf_size: PdfSize::Fit,
                 note: "Pronto".into(),
             },
@@ -502,6 +506,73 @@ impl App {
         Task::none()
     }
 
+    /// A front-panel button: Scan adds a page, Copy scans the last page
+    /// again and replaces it, Instant Share exports the document as PDF in
+    /// the pictures folder and opens it. Ignored while a scan runs.
+    fn on_button(&mut self, button: hp3770_core::device::Button) {
+        use hp3770_core::device::Button;
+        if self.busy.is_some() {
+            return;
+        }
+        match button {
+            Button::Scan => {
+                self.redone = None;
+                self.start(Purpose::Page);
+            }
+            Button::Copy => match self.pages.len() {
+                0 => self.start(Purpose::Page),
+                n => {
+                    self.redone = None;
+                    self.redo = Some(n - 1);
+                    self.redo_auto = true;
+                    self.start(Purpose::Page);
+                }
+            },
+            Button::InstantShare => {
+                if self.pages.is_empty() {
+                    notify(
+                        "Fascicolo vuoto",
+                        "Premi Scan per acquisire una pagina",
+                        true,
+                    );
+                    return;
+                }
+                let folder = dirs::picture_dir()
+                    .or_else(dirs::document_dir)
+                    .unwrap_or_else(|| PathBuf::from("."))
+                    .join("Scansioni");
+                let name = chrono::Local::now().format("fascicolo-%Y-%m-%d-%H%M%S.pdf");
+                let path = folder.join(name.to_string());
+                let pages: Vec<Image> = self.pages.iter().map(|p| (*p.image).clone()).collect();
+                let size = match self.pdf_size {
+                    PdfSize::Fit => hp3770_export::PageSize::Fit,
+                    PdfSize::A4 => hp3770_export::PageSize::A4,
+                    PdfSize::Letter => hp3770_export::PageSize::Letter,
+                };
+                let result = std::fs::create_dir_all(&folder)
+                    .map_err(|e| e.to_string())
+                    .and_then(|()| {
+                        hp3770_export::save_pdf(&path, &pages, size, 88).map_err(|e| e.to_string())
+                    });
+                match result {
+                    Ok(()) => {
+                        self.note = format!("Fascicolo salvato in {}", path.display());
+                        notify(
+                            &format!("Fascicolo di {} pagine salvato", pages.len()),
+                            &path.display().to_string(),
+                            false,
+                        );
+                        open_folder(&folder);
+                    }
+                    Err(e) => {
+                        self.note = format!("Esportazione non riuscita: {e}");
+                        notify("Esportazione non riuscita", &e, true);
+                    }
+                }
+            }
+        }
+    }
+
     /// The page the result tab shows: a rescan waiting for a choice, else
     /// the current page.
     fn shown(&self) -> Option<&Page> {
@@ -559,6 +630,14 @@ impl App {
                                 );
                                 let page = Page::new(Arc::new(img.clone()));
                                 match self.redo.take() {
+                                    Some(index) if std::mem::take(&mut self.redo_auto) => {
+                                        if index < self.pages.len() {
+                                            self.pages[index] = page;
+                                            self.current = Some(index);
+                                        }
+                                        self.note = format!("Pagina {} rifatta", index + 1);
+                                        notify(&self.note, "", false);
+                                    }
                                     Some(index) => {
                                         self.redone = Some(Redo { index, page });
                                         self.note = format!(
@@ -570,6 +649,11 @@ impl App {
                                         self.pages.push(page);
                                         self.current = Some(self.pages.len() - 1);
                                         self.redone = None;
+                                        notify(
+                                            &format!("Pagina {} acquisita", self.pages.len()),
+                                            &self.note,
+                                            false,
+                                        );
                                         self.note = format!(
                                             "Pagina {} acquisita · {}",
                                             self.pages.len(),
@@ -584,16 +668,18 @@ impl App {
                     }
                     Err(e) => {
                         self.redo = None;
+                        self.redo_auto = false;
                         self.note = format!("Errore: {e}");
+                        if purpose == Purpose::Page {
+                            notify("Scansione non riuscita", &e, true);
+                        }
                     }
                 }
                 if let Some(w) = &self.worker {
                     w.send(Command::Status);
                 }
             }
-            Event::Button(button) => {
-                self.note = format!("Tasto {} premuto", button.name());
-            }
+            Event::Button(button) => self.on_button(button),
         }
     }
 
@@ -905,4 +991,35 @@ impl App {
             .padding(16)
             .into()
     }
+}
+
+/// A desktop notification (with the system sound), so that whoever is at
+/// the scanner hears that a page is done. Shown from a thread: it may take
+/// a moment and must not hold up the interface.
+fn notify(summary: &str, body: &str, error: bool) {
+    let summary = if error {
+        format!("⚠ {summary}")
+    } else {
+        summary.to_string()
+    };
+    let body = body.to_string();
+    std::thread::spawn(move || {
+        let _ = notify_rust::Notification::new()
+            .appname("HP Scanjet 3770")
+            .summary(&summary)
+            .body(&body)
+            .show();
+    });
+}
+
+/// Opens a folder in the file manager.
+fn open_folder(folder: &std::path::Path) {
+    let program = if cfg!(windows) {
+        "explorer"
+    } else if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    let _ = std::process::Command::new(program).arg(folder).spawn();
 }
