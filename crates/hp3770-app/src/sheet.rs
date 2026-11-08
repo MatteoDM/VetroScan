@@ -4,16 +4,32 @@
 //! dashed, and in red the edge of what ends up on paper. What falls
 //! outside (a page filling the sheet with other proportions) shows dimmed
 //! beyond the red edge, and dragging the page chooses which part is kept.
+//!
+//! The marks are a second canvas stacked on the first: the renderer draws
+//! the images of a layer after its lines, so in one canvas the page would
+//! cover the red edge and the dimming wherever it overflows.
 
 use hp3770_export::Placed;
 use iced::mouse;
 use iced::widget::canvas::{self, Action, Event, Frame, Geometry, Path, Stroke};
+use iced::widget::stack;
 use iced::{Color, Element, Length, Point, Rectangle, Renderer, Size, Theme, Vector};
 
 use crate::viewer::Picture;
 
+/// What one of the two stacked canvases draws.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Part {
+    /// The sheet and the page on it.
+    Paper,
+    /// Over them: the dimming, the margin, the red edge, the caption; it
+    /// also takes the drags.
+    Marks,
+}
+
 /// The preview of one page on its sheet.
 pub struct Sheet<'a, Message> {
+    part: Part,
     picture: &'a Picture,
     placed: Placed,
     /// The margin, points (dashed when not zero).
@@ -36,14 +52,23 @@ pub fn sheet<'a, Message: 'a>(
     on_focus: fn([f32; 2]) -> Message,
     caption: String,
 ) -> Element<'a, Message> {
-    canvas::Canvas::new(Sheet {
-        picture,
-        placed,
-        margin,
-        focus,
-        on_focus,
-        caption,
-    })
+    let layer = |part, caption| {
+        canvas::Canvas::new(Sheet {
+            part,
+            picture,
+            placed,
+            margin,
+            focus,
+            on_focus,
+            caption,
+        })
+        .width(Length::Fill)
+        .height(Length::Fill)
+    };
+    stack![
+        layer(Part::Paper, String::new()),
+        layer(Part::Marks, caption)
+    ]
     .width(Length::Fill)
     .height(Length::Fill)
     .into()
@@ -103,6 +128,9 @@ impl<Message> canvas::Program<Message> for Sheet<'_, Message> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<Action<Message>> {
+        if self.part != Part::Marks {
+            return None;
+        }
         let size = bounds.size();
         let at = cursor
             .position()
@@ -154,16 +182,19 @@ impl<Message> canvas::Program<Message> for Sheet<'_, Message> {
         let mut frame = Frame::new(renderer, size);
         let palette = theme.extended_palette();
         let page = self.screen(size, [0.0, 0.0, self.placed.page.0, self.placed.page.1]);
-        // The sheet, with a shadow.
-        frame.fill_rectangle(
-            page.position() + Vector::new(0.0, 4.0),
-            page.size(),
-            Color::from_rgba(0.0, 0.0, 0.0, 0.25),
-        );
-        frame.fill_rectangle(page.position(), page.size(), Color::WHITE);
-        // The page laid on it, all of it, beyond the sheet too.
         let image = self.screen(size, self.placed.image);
-        frame.draw_image(image, &self.picture.handle);
+        if self.part == Part::Paper {
+            // The sheet, with a shadow.
+            frame.fill_rectangle(
+                page.position() + Vector::new(0.0, 4.0),
+                page.size(),
+                Color::from_rgba(0.0, 0.0, 0.0, 0.25),
+            );
+            frame.fill_rectangle(page.position(), page.size(), Color::WHITE);
+            // The page laid on it, all of it, beyond the sheet too.
+            frame.draw_image(image, &self.picture.handle);
+            return vec![frame.into_geometry()];
+        }
         // What does not reach the paper, dimmed: outside what is kept.
         let kept = self.screen(size, self.kept());
         let dim = Color::from_rgba(0.06, 0.07, 0.09, 0.62);
@@ -206,8 +237,7 @@ impl<Message> canvas::Program<Message> for Sheet<'_, Message> {
                 },
             );
         }
-        // In red, the edge of what ends up on paper, a little outside it so
-        // that the page does not hide it.
+        // In red, the edge of what ends up on paper, just outside it.
         let edge = Rectangle {
             x: kept.x - 1.5,
             y: kept.y - 1.5,
@@ -247,6 +277,9 @@ impl<Message> canvas::Program<Message> for Sheet<'_, Message> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
+        if self.part != Part::Marks {
+            return mouse::Interaction::default();
+        }
         if drag.0.is_some() {
             return mouse::Interaction::Grabbing;
         }

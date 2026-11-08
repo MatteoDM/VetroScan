@@ -14,6 +14,10 @@ manca.
 
 ## [Unreleased]
 
+### Fixed
+- Anteprima del foglio nel PDF: il bordo rosso del taglio e la parte oscurata restano sopra la
+  pagina anche dove questa sfora il foglio, invece di finirle sotto.
+
 ## [0.1.2] - 2026-11-08
 
 ### Added
