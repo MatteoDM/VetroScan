@@ -1,0 +1,33 @@
+name: Dependencies
+
+# Known vulnerabilities, yanked versions, licenses and sources of every crate in Cargo.lock,
+# as configured in deny.toml. Weekly too, because an advisory can be published for a crate
+# nobody touched.
+on:
+  push:
+    branches: [main]
+    paths: [Cargo.lock, "**/Cargo.toml", deny.toml, .github/workflows/deny.yml]
+  pull_request:
+    paths: [Cargo.lock, "**/Cargo.toml", deny.toml, .github/workflows/deny.yml]
+  schedule:
+    - cron: "23 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-deny:
+    name: cargo deny (${{ matrix.checks }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # Separate so that a new advisory does not hide a license problem, and the reverse.
+        checks: [advisories, "bans licenses sources"]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check ${{ matrix.checks }}

@@ -1,0 +1,21 @@
+version: 2
+updates:
+  # One grouped pull request a week for the crates that stay within their semver range
+  # (Cargo.lock only); major versions come one per pull request, since they may need code
+  # changes.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      compatible:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]

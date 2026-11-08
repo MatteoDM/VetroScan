@@ -1,0 +1,84 @@
+# nFPM configuration for the .deb, .rpm and Arch (pacman) packages, built by scripts/package.sh:
+#   HP3770_VERSION=0.1.0 HP3770_ARCH=amd64 \
+#     nfpm package -f packaging/linux/nfpm.yaml -p deb -t dist/hp3770.deb
+# Paths are relative to the repository root, where the script runs nfpm. nFPM does not expand
+# variables in paths, so the script copies the binaries to target/package first.
+#
+# The binaries only link libc: windowing (Wayland/X11), keyboard maps and Vulkan/OpenGL are
+# loaded at run time, so they are declared here as dependencies. The "Save" dialog goes through
+# the desktop portal, and the Copy button prints with CUPS's lp: recommended, not required.
+#
+# The udev rule lets the user at the seat open the scanner without root. postinstall.sh reloads
+# the rules and applies them to a scanner already plugged in.
+name: hp3770
+version: ${HP3770_VERSION}
+arch: ${HP3770_ARCH}
+platform: linux
+section: graphics
+priority: optional
+maintainer: Matteo Dal Molin <matteodalmo@gmail.com>
+description: |
+  Free driver and desktop app for the HP Scanjet 3770 scanner.
+  Talks to the scanner directly over USB, without SANE or kernel modules.
+homepage: https://github.com/MatteoDM/scanner
+license: GPL-2.0-or-later
+# The AUR package built from git installs the same files.
+conflicts:
+  - hp3770-git
+
+contents:
+  - src: target/package/hp3770-app
+    dst: /usr/bin/hp3770-app
+    file_info:
+      mode: 0755
+  - src: target/package/hp3770
+    dst: /usr/bin/hp3770
+    file_info:
+      mode: 0755
+  - src: packaging/linux/70-hp3770.rules
+    dst: /usr/lib/udev/rules.d/70-hp3770.rules
+  - src: packaging/linux/hp3770-app.desktop
+    dst: /usr/share/applications/hp3770-app.desktop
+  - src: packaging/linux/hp3770-app.svg
+    dst: /usr/share/icons/hicolor/scalable/apps/hp3770-app.svg
+  - src: packaging/icons/hp3770-app-32.png
+    dst: /usr/share/icons/hicolor/32x32/apps/hp3770-app.png
+  - src: packaging/icons/hp3770-app-128.png
+    dst: /usr/share/icons/hicolor/128x128/apps/hp3770-app.png
+  - src: packaging/icons/hp3770-app-256.png
+    dst: /usr/share/icons/hicolor/256x256/apps/hp3770-app.png
+  - src: README.md
+    dst: /usr/share/doc/hp3770/README.md
+  - src: LICENSE
+    dst: /usr/share/licenses/hp3770/LICENSE
+  # Written by scripts/third_party_licenses.sh, which scripts/package.sh runs first.
+  - src: target/package/THIRD_PARTY_LICENSES.txt
+    dst: /usr/share/licenses/hp3770/THIRD_PARTY_LICENSES.txt
+
+scripts:
+  postinstall: packaging/linux/postinstall.sh
+  postremove: packaging/linux/postremove.sh
+
+overrides:
+  deb:
+    depends:
+      - libxkbcommon0
+      - libwayland-client0
+      - libvulkan1 | libegl1
+    recommends:
+      - xdg-desktop-portal
+      - cups-client
+  rpm:
+    depends:
+      - libxkbcommon
+      - libwayland-client
+      - (vulkan-loader or mesa-libEGL)
+    recommends:
+      - xdg-desktop-portal
+      - cups-client
+  archlinux:
+    depends:
+      - libxkbcommon
+      - wayland
+      - vulkan-icd-loader
+      - xdg-desktop-portal

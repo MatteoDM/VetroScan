@@ -1,0 +1,15 @@
+HP Scanjet 3770 (hp3770-app and hp3770) includes the following third-party software. Each
+license below is followed by the crates distributed under it; the full list of crates and
+versions is in Cargo.lock.
+
+{{#each licenses}}
+================================================================================
+{{{name}}} ({{id}})
+Used by:
+{{#each used_by}}
+  - {{crate.name}} {{crate.version}}{{#if crate.repository}} <{{crate.repository}}>{{/if}}
+{{/each}}
+--------------------------------------------------------------------------------
+{{{text}}}
+
+{{/each}}

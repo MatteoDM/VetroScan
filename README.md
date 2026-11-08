@@ -14,6 +14,36 @@ sulle catture USB del driver HP.
 > (con il driver HP installato) e su Linux (Arch, Wayland). Mancano ancora il backend
 > SANE e l'adattatore per trasparenti; su macOS non è mai stato compilato.
 
+## Installazione
+
+Scarica il file per il tuo sistema dall'[ultima release](https://github.com/MatteoDM/scanner/releases/latest).
+Ogni pacchetto contiene l'app `hp3770-app` e il comando `hp3770`. Le istruzioni complete,
+driver compreso, sistema per sistema (installare, controllare, aggiornare, disinstallare,
+problemi frequenti): **[docs/installazione.md](docs/installazione.md)**.
+
+| Sistema | File | Come |
+|---|---|---|
+| **Windows** (x64) | `hp3770-vX.Y.Z-windows-x86_64-setup.exe` | Avvialo e lascia **Installa solo per me**: va in `%LOCALAPPDATA%\Programs\HP3770` con la voce nel menu Start e in *App installate*, **senza diritti di amministratore**. Usa il driver HP se è installato, altrimenti WinUSB. |
+| Windows, portatile | `hp3770-vX.Y.Z-windows-x86_64-portable.zip` | Estrai dove vuoi e avvia `hp3770-app.exe`; non installa niente. |
+| **macOS** (Apple Silicon / Intel) | `hp3770-vX.Y.Z-macos-arm64.dmg` / `-macos-x86_64.dmg` | Aprilo e trascina **HP Scanjet 3770** in *Applicazioni*. Non ancora provato con lo scanner. |
+| **Arch / Omarchy** | `hp3770-vX.Y.Z-linux-<arch>.pkg.tar.zst` | `sudo pacman -U hp3770-vX.Y.Z-linux-x86_64.pkg.tar.zst` |
+| **Debian / Ubuntu** | `hp3770-vX.Y.Z-linux-<arch>.deb` | `sudo apt install ./hp3770-vX.Y.Z-linux-x86_64.deb` |
+| **Fedora / openSUSE** | `hp3770-vX.Y.Z-linux-<arch>.rpm` | `sudo dnf install ./hp3770-vX.Y.Z-linux-x86_64.rpm` |
+| **Qualunque Linux** | `hp3770-vX.Y.Z-linux-<arch>.AppImage` | `chmod +x hp3770-*.AppImage` e avvialo; non installa niente. |
+
+I pacchetti Linux (`x86_64` e `aarch64`) installano anche la regola udev che lascia usare lo
+scanner senza root, e la applicano subito, anche a uno scanner già collegato. L'AppImage non
+può: al primo avvio l'app offre il pulsante **Permetti l'accesso allo scanner**, che la
+installa con la password del computer. Dal codice, su Arch: `yay -S hp3770-git`
+(il PKGBUILD è in [`packaging/aur`](packaging/aur)).
+
+**Avvisi al primo avvio.** L'installer Windows e l'app macOS non sono firmati con un
+certificato a pagamento: Windows SmartScreen può dire *Windows ha protetto il PC* (clic su
+**Ulteriori informazioni → Esegui comunque**); macOS dice che non può verificare l'app: clic
+su **Fine**, poi *Impostazioni di Sistema → Privacy e sicurezza → Apri comunque*.
+
+Le novità di ogni versione sono in [CHANGELOG.md](CHANGELOG.md).
+
 ## Struttura
 
 | Crate | Cosa contiene |
