@@ -195,8 +195,17 @@ impl<T: Transport> Chip<T> {
     /// Buttons held down right now (`Buttons_Status`): one bit per button,
     /// up to six. The chip reports 0 for a pressed button; this returns the
     /// pressed ones as 1.
+    ///
+    /// Bit 7 of the register is always 1 (idle `BF`). When another program
+    /// (Windows' scan app, opened by WIA on a button press) resets the
+    /// chip, a read can come back `00`, which would look like every button
+    /// held: such a read counts as no button.
     pub fn buttons_held(&mut self) -> Result<u8> {
-        Ok(!self.read_byte(0xe968)? & BUTTON_BITS)
+        let raw = self.read_byte(0xe968)?;
+        if raw & 0x80 == 0 {
+            return Ok(0);
+        }
+        Ok(!raw & BUTTON_BITS)
     }
 
     /// Buttons released since the last call (`Buttons_Released`): one bit per

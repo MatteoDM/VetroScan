@@ -16,7 +16,7 @@ use iced::futures::channel::mpsc;
 use iced::futures::{SinkExt, Stream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc as std_mpsc, Arc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// What the interface asks for.
 #[derive(Debug, Clone)]
@@ -103,6 +103,9 @@ struct Worker {
     chip: Option<Chip<Scanner>>,
     /// Buttons held at the last poll.
     held: u8,
+    /// When the scanner was last opened for the buttons (to retry slowly
+    /// after it went away).
+    last_open: Option<Instant>,
 }
 
 impl Worker {
@@ -112,6 +115,7 @@ impl Worker {
             cancel,
             chip: None,
             held: 0,
+            last_open: None,
         }
     }
 
@@ -184,7 +188,28 @@ impl Worker {
         .map_err(|e| e.to_string())
     }
 
+    /// Reads the buttons. If the scanner went away (unplugged, switched
+    /// off, taken for a moment by another program) it is opened again,
+    /// every 2 seconds at most, so the buttons never stop working.
     fn poll_buttons(&mut self) {
+        if self.chip.is_none() {
+            if self
+                .last_open
+                .is_some_and(|t| t.elapsed() < Duration::from_secs(2))
+            {
+                return;
+            }
+            self.last_open = Some(Instant::now());
+            if self.chip().is_err() {
+                return;
+            }
+            let status = self
+                .chip()
+                .and_then(|c| c.status().map_err(|e| e.to_string()));
+            self.emit(Event::Status(status));
+            // Not a press: whatever is held when the scanner comes back.
+            self.held = 0xff;
+        }
         let Some(chip) = self.chip.as_mut() else {
             return;
         };
@@ -194,6 +219,10 @@ impl Worker {
         };
         let pressed = held & !self.held;
         self.held = held;
+        // One button at a time: several at once is a bad read.
+        if pressed.count_ones() != 1 {
+            return;
+        }
         for button in [Button::Scan, Button::Copy, Button::InstantShare] {
             if pressed & button.mask() != 0 {
                 self.emit(Event::Button(button));
