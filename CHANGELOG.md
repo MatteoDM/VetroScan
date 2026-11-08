@@ -14,6 +14,8 @@ manca.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-08
+
 ### Added
 - **PDF, una pagina diversa dalle altre**: orientamento, posizione sul foglio e margine per
   pagina («Impaginazione propria»), con **Applica a tutte le pagine** e **Come le altre**.
@@ -142,6 +144,7 @@ Prima versione.
 - Testi con una fila di spazi in mezzo (nota sul RAW, sui 16 bit e sui tasti in Windows); il
   pulsante della cartella predefinita usa il separatore del sistema.
 
-[Unreleased]: https://github.com/MatteoDM/scanner/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/MatteoDM/scanner/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/MatteoDM/scanner/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/MatteoDM/scanner/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/MatteoDM/scanner/releases/tag/v0.1.0

@@ -1,6 +1,6 @@
 # Piano: da «app per l'HP 3770» ad «app per scanner»
 
-Stato: **da iniziare** (scritto l'8 novembre 2026, dopo la v0.1.1). Ogni fase si chiude con un
+Stato: **Fase 0 fatta (v0.1.2); prossima: Fase 1** (piano scritto l'8 novembre 2026, dopo la v0.1.1). Ogni fase si chiude con un
 commit, i test verdi e una versione; qui si segna cosa è fatto.
 
 ## Obiettivo
@@ -40,7 +40,7 @@ sciogliere:
   della fase che le ha introdotte.
 - Le preferenze già salvate dagli utenti si migrano, con un test per ogni migrazione.
 
-## Fase 0 · lavoro in corso → v0.1.2
+## Fase 0 · lavoro in corso → v0.1.2 · fatta
 
 PDF con impaginazione per pagina (margine, posizione, orientamento propri, «Applica a tutte
 le pagine»), anteprima di stampa con il bordo rosso del taglio e taglio trascinabile con
