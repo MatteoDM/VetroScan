@@ -14,6 +14,12 @@ manca.
 
 ## [Unreleased]
 
+### Changed
+- **Ogni pagina ha le sue regolazioni**: nel documento «Solo questa pagina» è spuntata fin
+  dalla scansione, così cambiare colori o toni di una pagina non cambia le altre. Con
+  **Applica a tutte le pagine** l'aspetto della pagina mostrata passa a tutte, all'anteprima
+  e alle prossime scansioni; togliendo la spunta una pagina torna alle regolazioni comuni.
+
 ### Fixed
 - Anteprima del foglio nel PDF: il bordo rosso del taglio e la parte oscurata restano sopra la
   pagina anche dove questa sfora il foglio, invece di finirle sotto.

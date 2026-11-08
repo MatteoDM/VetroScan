@@ -952,6 +952,40 @@ fn colour_adjustments_do_not_come_back_after_closing_scan_settings_do() {
 }
 
 #[test]
+fn each_page_has_its_own_look_until_it_is_given_to_all() {
+    use crate::Field;
+    let mut ui = document(2);
+    assert!(
+        ui.app.pages.iter().all(|p| p.own.is_some()),
+        "«Solo questa pagina» from the start"
+    );
+    // A change on the second page leaves the first and the next scans alone.
+    ui.send(Message::PageShow(1));
+    ui.send(Message::Pane(crate::Pane::Adjust));
+    assert!(ui.shows("Solo questa pagina"));
+    ui.send(Message::Adjust(Field::Temperature, 40.0));
+    let temperature = |ui: &Ui, i: usize| ui.app.pages[i].own.unwrap().adjust.temperature;
+    assert_eq!(temperature(&ui, 1), 40.0);
+    assert_eq!(temperature(&ui, 0), 0.0);
+    assert_eq!(ui.app.document.adjust.temperature, 0.0);
+    // The first page keeps its look when the second goes back to the common one.
+    ui.send(Message::OwnLook(false));
+    ui.send(Message::Adjust(Field::Saturation, 30.0));
+    assert_eq!(ui.app.document.adjust.saturation, 30.0);
+    assert_eq!(ui.app.pages[0].own.unwrap().adjust.saturation, 0.0);
+    // Given to all: every page, the preview and the next scans.
+    ui.send(Message::OwnLook(true));
+    ui.send(Message::Adjust(Field::Temperature, 25.0));
+    ui.click("Applica a tutte le pagine");
+    for i in 0..2 {
+        assert_eq!(temperature(&ui, i), 25.0, "page {i}");
+    }
+    assert_eq!(ui.app.document.adjust.temperature, 25.0);
+    ui.scan(1);
+    assert_eq!(temperature(&ui, 2), 25.0);
+}
+
+#[test]
 fn the_sheet_chosen_is_remembered() {
     use crate::{Margin, PdfFit, PdfSize};
     {

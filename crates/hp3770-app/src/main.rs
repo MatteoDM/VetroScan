@@ -1704,6 +1704,9 @@ enum Message {
     Adaptive(bool),
     /// "Solo questa pagina" on or off for the page shown.
     OwnLook(bool),
+    /// The look of the page shown to every page, the preview and the next
+    /// scans.
+    LookApplyToAll,
     PresetName(String),
     PresetSave,
     PresetApply(String),
@@ -2181,6 +2184,7 @@ impl App {
                 | Message::Descreen(_)
                 | Message::Adaptive(_)
                 | Message::OwnLook(_)
+                | Message::LookApplyToAll
                 | Message::PresetApply(_)
                 | Message::Adjust(..)
                 | Message::Commit(_)
@@ -2460,11 +2464,7 @@ impl App {
                 )
             }),
             Target::Page => self.shown().map(|p| self.page_job(p, true)),
-            Target::Index(i) => self
-                .pages
-                .get(i)
-                .filter(|p| p.own.is_none())
-                .map(|p| self.page_job(p, false)),
+            Target::Index(i) => self.pages.get(i).map(|p| self.page_job(p, false)),
         };
         let Some((proxy, settings, adjust, transform, size, thumb)) = job else {
             return Task::none();
@@ -3579,6 +3579,29 @@ impl App {
                     };
                 }
             }
+            Message::LookApplyToAll => {
+                let shared = *self.settings();
+                let look = self
+                    .shown()
+                    .filter(|_| self.kind == Kind::Document && self.editing_page())
+                    .map(|p| Look::of(&p.effective(&shared)));
+                if let Some(look) = look {
+                    look.put(self.settings_mut());
+                    for page in &mut self.pages {
+                        page.own = Some(look);
+                    }
+                    if let Some((_, page)) = &mut self.redone {
+                        page.own = Some(look);
+                    }
+                    let shown = self.current;
+                    self.stale = (0..self.pages.len())
+                        .filter(|&i| Some(i) != shown)
+                        .collect();
+                    self.dirty_preview = true;
+                    self.dirty_page = true;
+                    self.note = "Regolazioni applicate a tutte le pagine".into();
+                }
+            }
             Message::CurveChannel(c) => self.curve_channel = c,
             Message::CurveSet(points) => {
                 let c = self.curve_channel.index();
@@ -4173,6 +4196,11 @@ impl App {
         self.pdf_rev += 1;
         let (w, h, dpi) = (image.width, image.height, image.dpi);
         let mut page = Page::new(Raw::new(image), *self.settings());
+        // "Solo questa pagina" from the start: every page keeps the look it
+        // was scanned with, and changing one does not change the others.
+        if self.kind == Kind::Document {
+            page.own = Some(Look::of(self.settings()));
+        }
         page.origin = origin;
         page.raw16 = samples16.filter(|s| s.len() == w * h * 3).map(Arc::new);
         let first = self.batch.0 == 0;
@@ -5403,7 +5431,7 @@ impl App {
         let scope: Element<'_, Message> = match (self.kind, self.editing_page()) {
             (Kind::Document, true) => {
                 let own = self.shown().is_some_and(|p| p.own.is_some());
-                column![
+                let mut scope = column![
                     checkbox(own)
                         .label("Solo questa pagina")
                         .on_toggle(Message::OwnLook)
@@ -5411,17 +5439,25 @@ impl App {
                     text(if own {
                         "Le modifiche valgono solo per questa pagina."
                     } else {
-                        "Le modifiche valgono per l'anteprima e per tutte le pagine \
-                         che non hanno regolazioni proprie."
+                        "Segue le regolazioni comuni: le modifiche valgono anche per \
+                         l'anteprima e per le pagine senza «Solo questa pagina»."
                     })
                     .size(11),
                 ]
-                .spacing(4)
-                .into()
+                .spacing(4);
+                if self.pages.len() > 1 {
+                    scope = scope.push(
+                        button(text("Applica a tutte le pagine").size(12))
+                            .style(button::text)
+                            .padding([2, 6])
+                            .on_press(Message::LookApplyToAll),
+                    );
+                }
+                scope.into()
             }
             (Kind::Document, false) => text(
-                "Le modifiche valgono per l'anteprima e per tutte le pagine \
-                 che non hanno regolazioni proprie.",
+                "Le modifiche valgono per l'anteprima, per le prossime scansioni \
+                 e per le pagine senza «Solo questa pagina».",
             )
             .size(11)
             .into(),
