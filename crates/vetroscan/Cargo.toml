@@ -1,6 +1,6 @@
 [package]
-name = "hp3770-app"
-description = "Desktop application for the HP Scanjet 3770"
+name = "vetroscan"
+description = "VetroScan: desktop scanning application (HP Scanjet 3770 and more)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -21,14 +21,14 @@ dirs = "6"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-hp3770-export.workspace = true
+vetroscan-export.workspace = true
 sys-locale = "0.3"
 
 [build-dependencies]
 winresource = "0.1"
 
 [[bin]]
-name = "hp3770-app"
+name = "vetroscan"
 path = "src/main.rs"
 
 [lints]

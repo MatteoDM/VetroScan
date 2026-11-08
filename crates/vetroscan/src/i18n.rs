@@ -451,7 +451,7 @@ mod tests {
 #[cfg(test)]
 mod survey {
     /// Lists every literal with letters not through tr()/trf(), for a
-    /// look by hand: `cargo test -p hp3770-app i18n::survey -- --ignored --nocapture`.
+    /// look by hand: `cargo test -p vetroscan i18n::survey -- --ignored --nocapture`.
     #[test]
     #[ignore = "a list to read, not a check"]
     fn short_texts() {

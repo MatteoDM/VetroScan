@@ -25,7 +25,7 @@ new name (phases 5–7), which need no hardware; the other scanners (phases 8–
 |---|---|
 | `transform` (no dependency), `convert` (none), `detect` (only `session::Image`), `adjust` (uses `Profile` only for the reference white, `geometry::host_white`) | `protocol`, `transport`, `setup`, `init`, `lamp`, `motor`, `motor_curves`, `calibration`, `scan`, `scan_modes`, `read`, `arrange`, `session`, `status`, `device`, `profile`, `geometry` |
 
-The app touches the scanner in one place only, `crates/hp3770-app/src/worker.rs` (commands
+The app touches the scanner in one place only, `crates/vetroscan/src/worker.rs` (commands
 and events), and a made-up scanner (`worker::fake`) used by the e2e tests already exists.
 The ties to undo:
 
@@ -75,7 +75,7 @@ because it touches the same files as the refactoring (`main.rs`).
   `Profile`; every scanner will give it.
 - `hp3770-core` becomes the driver only and for this phase re-exports the types moved.
 - **Done when:** all tests green; a "golden" test passes the same scan through `adjust`
-  before and after and gets identical images byte for byte; `hp3770-export` depends only on
+  before and after and gets identical images byte for byte; `vetroscan-export` depends only on
   `scan-imaging`.
 
 How it went (4 commits, from the golden test on):
@@ -91,7 +91,7 @@ How it went (4 commits, from the golden test on):
   on macOS one case (16-bit output, gamma 1.3) rounds one sample differently in the system's
   maths library, so macOS has its own value for it.
 - The re-exports were already removed at the end of the phase: app, CLI and export import from
-  `scan_imaging`. `hp3770-core` stays only as a development dependency of `hp3770-export`, for
+  `scan_imaging`. `hp3770-core` stays only as a development dependency of `vetroscan-export`, for
   the `raw_from_png` example (the HP 3770's paper white).
 
 ## Phase 2 · the "scanner" contract → v0.2.0 · done
@@ -213,9 +213,9 @@ How it went:
   every text twice and changing types in hundreds of places. Gettext style instead: the key
   is the Italian text, `tr("…")` gives a `&'static str` in the language in use (it replaces a
   literal anywhere without touching the types) and `trf("… {n} …", &[("n", &n)])` fills in
-  the places. English is in `crates/hp3770-app/i18n/en.json`; Italian has no catalog.
+  the places. English is in `crates/vetroscan/i18n/en.json`; Italian has no catalog.
   Sentences with different plurals or agreements are separate texts.
-- `crates/hp3770-app/src/i18n.rs`: language per thread in the tests (the English e2e run next
+- `crates/vetroscan/src/i18n.rs`: language per thread in the tests (the English e2e run next
   to the Italian ones), `LangChoice` (Automatic, Italiano, English) saved in
   `impostazioni.json` (`language`, default "automatica"), `sys-locale` for the system's
   language (always Italian in the tests). Decimal numbers follow the language.

@@ -8,7 +8,7 @@
 use hp3770_core::geometry::HP_WHITE;
 use scan_imaging::{Format, Image};
 
-fn main() -> hp3770_export::Result<()> {
+fn main() -> vetroscan_export::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let [_, input, output] = args.as_slice() else {
         return Err("uso: raw_from_png scansione.png uscita".into());
@@ -31,7 +31,7 @@ fn main() -> hp3770_export::Result<()> {
             .chunks_exact(2)
             .map(|b| u16::from_be_bytes([b[0], b[1]]))
             .collect();
-        hp3770_export::Linear16::from_linear16(
+        vetroscan_export::Linear16::from_linear16(
             width,
             height,
             dpi,
@@ -46,10 +46,10 @@ fn main() -> hp3770_export::Result<()> {
             format: Format::Rgb,
             data,
         };
-        hp3770_export::Linear16::from_linear8(&image, HP_WHITE)?
+        vetroscan_export::Linear16::from_linear8(&image, HP_WHITE)?
     };
-    hp3770_export::save_dng(format!("{output}.dng").as_ref(), &raw)?;
-    hp3770_export::save_tiff16(format!("{output}.tif").as_ref(), &raw)?;
+    vetroscan_export::save_dng(format!("{output}.dng").as_ref(), &raw)?;
+    vetroscan_export::save_tiff16(format!("{output}.tif").as_ref(), &raw)?;
     println!("scritti {output}.dng e {output}.tif ({dpi} dpi)");
     Ok(())
 }

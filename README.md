@@ -1,7 +1,9 @@
-# scanner — an open driver for the HP Scanjet 3770
+# VetroScan — scanning, with an open driver for the HP Scanjet 3770
 
-A userspace driver and application for the **HP Scanjet 3770** scanner (USB `03f0:2505`),
-written entirely in Rust, for Linux, macOS and Windows.
+**VetroScan** is a scanning application with a userspace driver for the **HP Scanjet 3770**
+scanner (USB `03f0:2505`), written entirely in Rust, for Linux, macOS and Windows. The app
+talks to scanners through a common contract, so other models can follow (until v0.2 it was
+called "HP Scanjet 3770", after the one scanner it knew).
 
 *In italiano: [README.it.md](README.it.md).*
 
@@ -22,25 +24,27 @@ The app speaks Italian and English (Preferences → *Language*; by default the s
 ## Installing
 
 Download the file for your system from the [latest release](https://github.com/MatteoDM/scanner/releases/latest).
-Every package holds the `hp3770-app` application and the `hp3770` command. The full
+Every package holds the `vetroscan` application and the `hp3770` command (the HP 3770
+driver tool). Installing it over an older `hp3770` package or installer replaces it, and the
+settings come along. The full
 instructions, driver included, system by system (install, check, update, uninstall, common
 problems): **[docs/install.md](docs/install.md)**.
 
 | System | File | How |
 |---|---|---|
-| **Windows** (x64) | `hp3770-vX.Y.Z-windows-x86_64-setup.exe` | Run it and keep **Install for me only**: it goes to `%LOCALAPPDATA%\Programs\HP3770` with an entry in the Start menu and in *Installed apps*, **without administrator rights**. It uses the HP driver if installed, WinUSB otherwise. |
-| Windows, portable | `hp3770-vX.Y.Z-windows-x86_64-portable.zip` | Extract anywhere and run `hp3770-app.exe`; nothing is installed. |
-| **macOS** (Apple Silicon / Intel) | `hp3770-vX.Y.Z-macos-arm64.dmg` / `-macos-x86_64.dmg` | Open it and drag **HP Scanjet 3770** to *Applications*. Not yet tried with the scanner. |
-| **Arch / Omarchy** | `hp3770-vX.Y.Z-linux-<arch>.pkg.tar.zst` | `sudo pacman -U hp3770-vX.Y.Z-linux-x86_64.pkg.tar.zst` |
-| **Debian / Ubuntu** | `hp3770-vX.Y.Z-linux-<arch>.deb` | `sudo apt install ./hp3770-vX.Y.Z-linux-x86_64.deb` |
-| **Fedora / openSUSE** | `hp3770-vX.Y.Z-linux-<arch>.rpm` | `sudo dnf install ./hp3770-vX.Y.Z-linux-x86_64.rpm` |
-| **Any Linux** | `hp3770-vX.Y.Z-linux-<arch>.AppImage` | `chmod +x hp3770-*.AppImage` and run it; nothing is installed. |
+| **Windows** (x64) | `vetroscan-vX.Y.Z-windows-x86_64-setup.exe` | Run it and keep **Install for me only**: it goes to `%LOCALAPPDATA%\Programs\VetroScan` with an entry in the Start menu and in *Installed apps*, **without administrator rights**. It uses the HP driver if installed, WinUSB otherwise. |
+| Windows, portable | `vetroscan-vX.Y.Z-windows-x86_64-portable.zip` | Extract anywhere and run `vetroscan.exe`; nothing is installed. |
+| **macOS** (Apple Silicon / Intel) | `vetroscan-vX.Y.Z-macos-arm64.dmg` / `-macos-x86_64.dmg` | Open it and drag **VetroScan** to *Applications*. Not yet tried with the scanner. |
+| **Arch / Omarchy** | `vetroscan-vX.Y.Z-linux-<arch>.pkg.tar.zst` | `sudo pacman -U vetroscan-vX.Y.Z-linux-x86_64.pkg.tar.zst` |
+| **Debian / Ubuntu** | `vetroscan-vX.Y.Z-linux-<arch>.deb` | `sudo apt install ./vetroscan-vX.Y.Z-linux-x86_64.deb` |
+| **Fedora / openSUSE** | `vetroscan-vX.Y.Z-linux-<arch>.rpm` | `sudo dnf install ./vetroscan-vX.Y.Z-linux-x86_64.rpm` |
+| **Any Linux** | `vetroscan-vX.Y.Z-linux-<arch>.AppImage` | `chmod +x vetroscan-*.AppImage` and run it; nothing is installed. |
 
 The Linux packages (`x86_64` and `aarch64`) also install the udev rule that lets the scanner
 be used without root, and apply it at once, even to a scanner already plugged in. The
 AppImage cannot: at the first start the app offers the button **Allow access to the
 scanner**, which installs it with the computer's password. From source, on Arch:
-`yay -S hp3770-git` (the PKGBUILD is in [`packaging/aur`](packaging/aur)).
+`yay -S vetroscan-git` (the PKGBUILD is in [`packaging/aur`](packaging/aur)).
 
 **Warnings at the first start.** The Windows installer and the macOS app are not signed with
 a paid certificate: Windows SmartScreen may say *Windows protected your PC* (click **More
@@ -65,9 +69,9 @@ What is new in each version is in [CHANGELOG.md](CHANGELOG.md).
 | [`hp3770-core`](crates/hp3770-core) | The RTS8822's USB protocol (vendor requests, registers, EEPROM, DMA), device identity, buttons, a `Transport` trait independent of the USB library, and the `rts8822` backend of the contract |
 | [`hp3770-capture`](crates/hp3770-capture) | A reader of USBPcap captures and the `hp3770-decode` tool, which turns a capture into a readable sequence of operations on the chip |
 | [`hp3770-usb`](crates/hp3770-usb) | USB access: `nusb` (Linux, macOS, Windows with WinUSB) and `usbscan.sys` (Windows with the HP driver installed, no driver change) |
-| [`hp3770-export`](crates/hp3770-export) | Saving as PNG, JPEG, TIFF (also 16-bit and multi-page), WebP, AVIF, DNG, multi-page PDF and ZIP |
+| [`vetroscan-export`](crates/vetroscan-export) | Saving as PNG, JPEG, TIFF (also 16-bit and multi-page), WebP, AVIF, DNG, multi-page PDF and ZIP |
 | [`hp3770-cli`](crates/hp3770-cli) | The `hp3770` command |
-| [`hp3770-app`](crates/hp3770-app) | The `hp3770-app` desktop application (iced): documents and photos, preview, adjustments, scanner buttons, Italian and English |
+| [`vetroscan`](crates/vetroscan) | The `vetroscan` desktop application (iced): documents and photos, preview, adjustments, scanner buttons, Italian and English |
 
 The plan for other scanners is in [docs/architecture-plan.md](docs/architecture-plan.md).
 How to contribute: [CONTRIBUTING.md](CONTRIBUTING.md).
@@ -89,7 +93,7 @@ point to the folder that holds them.
 HP3770_CAPTURES=/path/to/captures cargo test
 ```
 
-**Tests of the app (e2e).** `cargo test -p hp3770-app` tries the whole app without a window
+**Tests of the app (e2e).** `cargo test -p vetroscan` tries the whole app without a window
 and without a scanner: it clicks the real buttons with iced's simulator, and made-up
 scanners (in memory, with three originals on the glass) answer like the real one. They
 cover the questions before losing scans, Document and Photo, Redo, Ctrl+Z, the editor,
@@ -99,7 +103,7 @@ No test touches the settings, the notifications, the printer or the Pictures fol
 The app can be tried by hand with the same made-up scanner:
 
 ```sh
-HP3770_FAKE_SCANNER=1 cargo run -p hp3770-app
+HP3770_FAKE_SCANNER=1 cargo run -p vetroscan
 ```
 
 **Tests on the real scanner.** They move the carriage, so they only run when asked, with the
@@ -167,19 +171,19 @@ cargo run --release --bin hp3770 -- status   # must answer without sudo
 To have the app in the applications menu:
 
 ```sh
-cargo install --path crates/hp3770-app --locked     # into ~/.cargo/bin, which must be in the PATH
-install -Dm 644 packaging/linux/hp3770-app.desktop ~/.local/share/applications/hp3770-app.desktop
-install -Dm 644 packaging/linux/hp3770-app.svg ~/.local/share/icons/hicolor/scalable/apps/hp3770-app.svg
+cargo install --path crates/vetroscan --locked     # into ~/.cargo/bin, which must be in the PATH
+install -Dm 644 packaging/linux/vetroscan.desktop ~/.local/share/applications/vetroscan.desktop
+install -Dm 644 packaging/linux/vetroscan.svg ~/.local/share/icons/hicolor/scalable/apps/vetroscan.svg
 ```
 
 The app on Linux:
 
-- runs on Wayland and on X11; the window presents itself as `hp3770-app`, the same name as
+- runs on Wayland and on X11; the window presents itself as `vetroscan`, the same name as
   the `.desktop` file;
 - uses the desktop portal to choose where to save (`xdg-desktop-portal` with a backend, for
   instance `xdg-desktop-portal-gtk`);
 - opens folders with `xdg-open` and prints photocopies with `lp` (CUPS);
-- keeps its preferences in `~/.config/hp3770`;
+- keeps its preferences in `~/.config/vetroscan`;
 - the scanner buttons work with the app in the background too: it reads them from the chip,
   no system service takes them as WIA does on Windows.
 

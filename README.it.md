@@ -1,9 +1,10 @@
-# scanner — driver aperto per HP Scanjet 3770
+# VetroScan — scansioni, con un driver aperto per HP Scanjet 3770
 
 *English: [README.md](README.md). La documentazione completa del progetto è in inglese.*
 
-Driver e applicazione per lo scanner **HP Scanjet 3770** (USB `03f0:2505`), scritti in Rust,
-per Linux, macOS e Windows. Le scansioni sono uguali a quelle del driver HP, a colori, in
+**VetroScan** è un'app per scansionare con un driver per lo scanner **HP Scanjet 3770** (USB `03f0:2505`), scritti in Rust,
+per Linux, macOS e Windows (fino alla v0.2 si chiamava
+«HP Scanjet 3770»; aggiornando, le impostazioni restano). Le scansioni sono uguali a quelle del driver HP, a colori, in
 grigio e in bianco e nero, da 200 a 2400 dpi, anche a 16 bit per canale.
 
 L'app parla italiano e inglese: nelle **Preferenze**, *Lingua* sceglie fra *Automatica*
@@ -16,8 +17,8 @@ Scarica il file per il tuo sistema dall'[ultima release](https://github.com/Matt
 | Sistema | File | Come |
 |---|---|---|
 | **Windows** (x64) | `…-windows-x86_64-setup.exe` | Avvialo e lascia **Installa solo per me**: niente diritti di amministratore. Usa il driver HP se c'è, altrimenti WinUSB. |
-| Windows, portatile | `…-windows-x86_64-portable.zip` | Estrai e avvia `hp3770-app.exe`. |
-| **macOS** | `…-macos-arm64.dmg` / `…-macos-x86_64.dmg` | Trascina **HP Scanjet 3770** in *Applicazioni* (non ancora provato con lo scanner). |
+| Windows, portatile | `…-windows-x86_64-portable.zip` | Estrai e avvia `vetroscan.exe`. |
+| **macOS** | `…-macos-arm64.dmg` / `…-macos-x86_64.dmg` | Trascina **VetroScan** in *Applicazioni* (non ancora provato con lo scanner). |
 | **Arch / Omarchy** | `…-linux-x86_64.pkg.tar.zst` | `sudo pacman -U …` |
 | **Debian / Ubuntu** | `…-linux-x86_64.deb` | `sudo apt install ./…` |
 | **Fedora / openSUSE** | `…-linux-x86_64.rpm` | `sudo dnf install ./…` |

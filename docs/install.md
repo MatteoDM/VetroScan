@@ -1,6 +1,6 @@
 # Installing the driver and the app, system by system
 
-The **HP Scanjet 3770** (USB `03f0:2505`) works with an app (`hp3770-app`) and a command
+The **HP Scanjet 3770** (USB `03f0:2505`) works with an app, **VetroScan** (`vetroscan`), and a command
 (`hp3770`) that talk to the scanner directly over USB. **No SANE, no kernel modules, no HP
 software are needed**: the "driver" is inside the app. What changes from one system to
 another is only **how the system lets a normal program open the scanner**.
@@ -15,7 +15,7 @@ another is only **how the system lets a normal program open the scanner**.
 | macOS 11 or newer | nothing | `.dmg` |
 
 All the files are on the [Releases](https://github.com/MatteoDM/scanner/releases/latest)
-page, with names like `hp3770-v0.1.0-linux-x86_64.deb`. `SHA256SUMS.txt` has the checksums
+page, with names like `vetroscan-v0.3.0-linux-x86_64.deb`. `SHA256SUMS.txt` has the checksums
 to check them.
 
 How to use the app, once installed: **[usage guide](usage.md)**.
@@ -61,44 +61,46 @@ What the packages install:
 
 | File | What it is |
 |---|---|
-| `/usr/bin/hp3770-app` | the app |
+| `/usr/bin/vetroscan` | the app |
 | `/usr/bin/hp3770` | the command |
 | `/usr/lib/udev/rules.d/70-hp3770.rules` | the permission to use the scanner |
-| `/usr/share/applications/hp3770-app.desktop` | the entry in the applications menu |
-| `/usr/share/icons/hicolor/…/hp3770-app.*` | the icon |
-| `/usr/share/licenses/hp3770/` | licence and the libraries' licences |
+| `/usr/share/applications/vetroscan.desktop` | the entry in the applications menu |
+| `/usr/share/icons/hicolor/…/vetroscan.*` | the icon |
+| `/usr/share/licenses/vetroscan/` | licence and the libraries' licences |
 
 ### Arch / Omarchy
 
-1. Download `hp3770-vX.Y.Z-linux-x86_64.pkg.tar.zst` to the Downloads folder.
+1. Download `vetroscan-vX.Y.Z-linux-x86_64.pkg.tar.zst` to the Downloads folder.
 2. Open a terminal (in Omarchy **Super + Enter**) and install:
    ```bash
    cd ~/Downloads
    ```
    ```bash
-   sudo pacman -U hp3770-v*-linux-x86_64.pkg.tar.zst
+   sudo pacman -U vetroscan-v*-linux-x86_64.pkg.tar.zst
    ```
    Type the computer's password (nothing shows while you type it) and confirm with
    **Enter**.
 3. Check it (see [Checking that it works](#checking-that-it-works-linux)).
 4. Open the app from the application launcher (in Omarchy **Super + Alt + Space**, type
-   "HP Scanjet").
+   "VetroScan").
 
-If you had installed from source with `cargo install` or the AUR package `hp3770-git`, remove
-them first: `cargo uninstall hp3770-app hp3770-cli` or `sudo pacman -R hp3770-git`.
+If you had installed from source with `cargo install` or the AUR package `vetroscan-git`
+(`hp3770-git` before v0.3), remove them first: `cargo uninstall vetroscan hp3770-cli` or
+`sudo pacman -R vetroscan-git`. A package of v0.2 or older (`hp3770`) is replaced by the new
+one by itself.
 
 **Updating:** download the new package and repeat step 2.
-**Uninstalling:** `sudo pacman -R hp3770`
+**Uninstalling:** `sudo pacman -R vetroscan`
 
 ### Debian / Ubuntu
 
-1. Download `hp3770-vX.Y.Z-linux-x86_64.deb`.
+1. Download `vetroscan-vX.Y.Z-linux-x86_64.deb`.
 2. In the terminal:
    ```bash
    cd ~/Downloads
    ```
    ```bash
-   sudo apt install ./hp3770-v*-linux-x86_64.deb
+   sudo apt install ./vetroscan-v*-linux-x86_64.deb
    ```
    The `./` before the name is needed: it tells `apt` that it is a file, not a package to
    look for on the network. `apt` downloads by itself what is missing (graphics libraries,
@@ -106,38 +108,38 @@ them first: `cargo uninstall hp3770-app hp3770-cli` or `sudo pacman -R hp3770-gi
 3. Check it and open the app from the applications menu.
 
 **Updating:** repeat step 2 with the new file.
-**Uninstalling:** `sudo apt remove hp3770`
+**Uninstalling:** `sudo apt remove vetroscan`
 
 ### Fedora / openSUSE
 
-1. Download `hp3770-vX.Y.Z-linux-x86_64.rpm`.
+1. Download `vetroscan-vX.Y.Z-linux-x86_64.rpm`.
 2. In the terminal, from the folder you downloaded it to:
    - Fedora:
      ```bash
-     sudo dnf install ./hp3770-v*-linux-x86_64.rpm
+     sudo dnf install ./vetroscan-v*-linux-x86_64.rpm
      ```
    - openSUSE:
      ```bash
-     sudo zypper install ./hp3770-v*-linux-x86_64.rpm
+     sudo zypper install ./vetroscan-v*-linux-x86_64.rpm
      ```
      `zypper` warns that the package is not signed: answer **i** (ignore) to install it.
 3. Check it and open the app from the applications menu.
 
 **Updating:** repeat step 2 with the new file.
-**Uninstalling:** `sudo dnf remove hp3770` or `sudo zypper remove hp3770`
+**Uninstalling:** `sudo dnf remove vetroscan` or `sudo zypper remove vetroscan`
 
 ### AppImage (any Linux)
 
 A single file that runs without installing anything. It cannot install the udev rule by
 itself: the app does it, once, with a button.
 
-1. Download `hp3770-vX.Y.Z-linux-x86_64.AppImage`, for instance to `~/Applications`.
+1. Download `vetroscan-vX.Y.Z-linux-x86_64.AppImage`, for instance to `~/Applications`.
 2. Make it executable and run it:
    ```bash
-   chmod +x ~/Applications/hp3770-v*-linux-x86_64.AppImage
+   chmod +x ~/Applications/vetroscan-v*-linux-x86_64.AppImage
    ```
    ```bash
-   ~/Applications/hp3770-v*-linux-x86_64.AppImage
+   ~/Applications/vetroscan-v*-linux-x86_64.AppImage
    ```
    From the file manager: right click → *Properties* → *Permissions* → *Allow executing*,
    then double-click.
@@ -148,11 +150,11 @@ itself: the app does it, once, with a button.
    needed the first time.
 
 The `hp3770` command is inside the AppImage: to use it,
-`~/Applications/hp3770-v*-linux-x86_64.AppImage --appimage-extract` makes a
+`~/Applications/vetroscan-v*-linux-x86_64.AppImage --appimage-extract` makes a
 `squashfs-root` folder with `squashfs-root/usr/bin/hp3770`.
 
 If the AppImage does not start and talks about **FUSE**, run it like this:
-`./hp3770-v*-linux-x86_64.AppImage --appimage-extract-and-run`.
+`./vetroscan-v*-linux-x86_64.AppImage --appimage-extract-and-run`.
 
 **Updating:** download the new file and delete the old one.
 **Uninstalling:** delete the file, then the rule: `sudo rm /etc/udev/rules.d/70-hp3770.rules`
@@ -161,7 +163,7 @@ If the AppImage does not start and talks about **FUSE**, run it like this:
 
 To build the app on your own computer, step by step on Omarchy:
 [install-linux.md](install-linux.md). On Arch there is also the AUR package that builds the
-latest version on GitHub: `yay -S hp3770-git` ([PKGBUILD](../packaging/aur/PKGBUILD)).
+latest version on GitHub: `yay -S vetroscan-git` ([PKGBUILD](../packaging/aur/PKGBUILD)).
 
 ### Checking that it works (Linux)
 
@@ -239,23 +241,23 @@ To go back: **Device Manager** → right click on the scanner → **Uninstall de
 
 **Installer (recommended)**
 
-1. Download `hp3770-vX.Y.Z-windows-x86_64-setup.exe` and run it.
+1. Download `vetroscan-vX.Y.Z-windows-x86_64-setup.exe` and run it.
 2. If **Windows protected your PC** appears (SmartScreen: the installer is not signed with a
    paid certificate), press **More info** → **Run anyway**.
 3. Choose **Install for me only**: it does not ask for administrator rights and puts the app
-   in `%LOCALAPPDATA%\Programs\HP3770`. *Install for all users* puts it in
-   `C:\Program Files\HP3770` and asks for them.
+   in `%LOCALAPPDATA%\Programs\VetroScan`. *Install for all users* puts it in
+   `C:\Program Files\VetroScan` and asks for them.
 4. Next until the end; if you like, tick the desktop icon. The app opens from the **Start**
-   menu → **HP Scanjet 3770**.
+   menu → **VetroScan**.
 
 Silent install (for whoever deploys it):
-`hp3770-vX.Y.Z-windows-x86_64-setup.exe /VERYSILENT /CURRENTUSER` (or `/ALLUSERS`).
+`vetroscan-vX.Y.Z-windows-x86_64-setup.exe /VERYSILENT /CURRENTUSER` (or `/ALLUSERS`).
 
 **Portable (without installing)**
 
-1. Download `hp3770-vX.Y.Z-windows-x86_64-portable.zip`.
+1. Download `vetroscan-vX.Y.Z-windows-x86_64-portable.zip`.
 2. Right click → **Extract All** into a folder of your choice.
-3. Double-click `hp3770-app.exe`.
+3. Double-click `vetroscan.exe`.
 
 ### 3. The scanner buttons (with the HP driver only)
 
@@ -270,23 +272,24 @@ With WinUSB the problem does not arise.
 In **PowerShell** (Start → type "PowerShell"), with the scanner plugged in:
 
 ```powershell
-& "$env:LOCALAPPDATA\Programs\HP3770\hp3770.exe" list
+& "$env:LOCALAPPDATA\Programs\VetroScan\hp3770.exe" list
 ```
 
-(With the install for all users: `& "C:\Program Files\HP3770\hp3770.exe" list`; with the
+(With the install for all users: `& "C:\Program Files\VetroScan\hp3770.exe" list`; with the
 portable zip, the path of the extracted folder.) It lists the scanner with the backend that
 opens it: `usbscan.sys` with the HP driver, `nusb` with WinUSB. If `nusb` says
 `bound to …, nusb needs WinUSB`, the scanner has another driver: run Zadig again. Then:
 
 ```powershell
-& "$env:LOCALAPPDATA\Programs\HP3770\hp3770.exe" status
+& "$env:LOCALAPPDATA\Programs\VetroScan\hp3770.exe" status
 ```
 
 ### Updating and uninstalling (Windows)
 
 - **Updating:** run the `-setup.exe` of the new version; it replaces the old one and keeps
-  the settings.
-- **Uninstalling:** **Settings** → **Apps** → **Installed apps** → **HP Scanjet 3770** →
+  the settings. Over a version up to v0.2 ("HP Scanjet 3770") it stays in the same folder
+  and replaces the old Start menu entry.
+- **Uninstalling:** **Settings** → **Apps** → **Installed apps** → **VetroScan** →
   **⋯** → **Uninstall**. The portable zip is simply deleted. The driver (HP or WinUSB)
   stays: to remove it, see *To go back* above.
 - **The photocopy** (Copy button) prints on Windows' default printer through Paint.
@@ -303,19 +306,19 @@ the scanner directly.
 > output of `hp3770 list` and `hp3770 status`.
 
 1. Find out the processor:  → **About This Mac**. **Chip Apple M…** → download
-   `hp3770-vX.Y.Z-macos-arm64.dmg`; **Intel processor** → `hp3770-vX.Y.Z-macos-x86_64.dmg`.
-2. Open the `.dmg` and drag **HP Scanjet 3770** onto the **Applications** folder (or into the
+   `vetroscan-vX.Y.Z-macos-arm64.dmg`; **Intel processor** → `vetroscan-vX.Y.Z-macos-x86_64.dmg`.
+2. Open the `.dmg` and drag **VetroScan** onto the **Applications** folder (or into the
    `Applications` of your home folder, which does not ask for the password).
 3. **First opening.** The app is not signed with a paid Apple certificate, so macOS says it
    cannot check it:
    - macOS 15 and later: press **Done**, open **System Settings** → **Privacy & Security**,
-     scroll down to *Security* and press **Open Anyway** next to HP Scanjet 3770, then
+     scroll down to *Security* and press **Open Anyway** next to VetroScan, then
      confirm with the password. It is needed only once.
    - macOS 14 and earlier: in **Applications** right click (or Ctrl+click) on the app →
      **Open** → **Open**.
    - From the Terminal, the same effect:
      ```bash
-     xattr -dr com.apple.quarantine "/Applications/HP Scanjet 3770.app"
+     xattr -dr com.apple.quarantine "/Applications/VetroScan.app"
      ```
 4. If macOS asks to let the app use a **USB accessory**, press **Allow**.
 
@@ -325,13 +328,13 @@ the scanner directly.
 sudo mkdir -p /usr/local/bin
 ```
 ```bash
-sudo ln -sf "/Applications/HP Scanjet 3770.app/Contents/MacOS/hp3770" /usr/local/bin/hp3770
+sudo ln -sf "/Applications/VetroScan.app/Contents/MacOS/hp3770" /usr/local/bin/hp3770
 ```
 
 Then, with the scanner plugged in, `hp3770 list` and `hp3770 status`.
 
 - **Updating:** download the new `.dmg` and drag the app over the old one.
-- **Uninstalling:** drag **HP Scanjet 3770** from Applications to the Bin, and
+- **Uninstalling:** drag **VetroScan** from Applications to the Bin, and
   `sudo rm /usr/local/bin/hp3770` if you had made the link.
 - **The photocopy** prints on the Mac's default printer.
 
@@ -344,8 +347,11 @@ uninstalling:
 
 | System | Folder |
 |---|---|
-| Linux | `~/.config/hp3770` |
-| Windows | `%APPDATA%\hp3770` |
-| macOS | `~/Library/Application Support/hp3770` |
+| Linux | `~/.config/vetroscan` |
+| Windows | `%APPDATA%\vetroscan` |
+| macOS | `~/Library/Application Support/vetroscan` |
+
+Versions up to v0.2 kept them in a folder called `hp3770` (in the same places): at the
+first start the new version copies them into its own folder, and leaves the old one as it is.
 
 To start from scratch, close the app and delete that folder.

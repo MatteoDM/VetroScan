@@ -3,7 +3,7 @@
 //! the taskbar and "App installate" show).
 
 fn main() {
-    let icon = "../../packaging/icons/hp3770-app.ico";
+    let icon = "../../packaging/icons/vetroscan.ico";
     println!("cargo:rerun-if-changed={icon}");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
@@ -11,8 +11,8 @@ fn main() {
     let mut resource = winresource::WindowsResource::new();
     resource
         .set_icon(icon)
-        .set("ProductName", "HP Scanjet 3770")
-        .set("FileDescription", "HP Scanjet 3770")
+        .set("ProductName", "VetroScan")
+        .set("FileDescription", "VetroScan")
         .set("CompanyName", "Matteo Dal Molin")
         .set("LegalCopyright", "GPL-2.0-or-later");
     resource

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! The print preview of a PDF page: the sheet, the page laid on it exactly
-//! as the PDF will have it ([`hp3770_export::Layout::place`]), the margin
+//! as the PDF will have it ([`vetroscan_export::Layout::place`]), the margin
 //! dashed, and in red the edge of what ends up on paper. What falls
 //! outside (a page filling the sheet with other proportions) shows dimmed
 //! beyond the red edge, and dragging the page chooses which part is kept.
@@ -9,11 +9,11 @@
 //! the images of a layer after its lines, so in one canvas the page would
 //! cover the red edge and the dimming wherever it overflows.
 
-use hp3770_export::Placed;
 use iced::mouse;
 use iced::widget::canvas::{self, Action, Event, Frame, Geometry, Path, Stroke};
 use iced::widget::stack;
 use iced::{Color, Element, Length, Point, Rectangle, Renderer, Size, Theme, Vector};
+use vetroscan_export::Placed;
 
 use crate::viewer::Picture;
 

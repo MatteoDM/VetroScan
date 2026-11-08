@@ -96,7 +96,7 @@ jobs:
           IS_TAG: ${{ startsWith(github.ref, 'refs/tags/v') }}
         run: |
           version=$(cargo metadata --no-deps --format-version 1 \
-            | jq -r '.packages[] | select(.name == "hp3770-app") | .version')
+            | jq -r '.packages[] | select(.name == "vetroscan") | .version')
           if [[ "$IS_TAG" == "true" && "$REF_NAME" != "v$version" ]]; then
             echo "Tag $REF_NAME does not match Cargo.toml version v$version" >&2
             exit 1
@@ -200,7 +200,7 @@ jobs:
           tool: cargo-about@0.9.3
 
       - name: Build release binaries
-        run: cargo build --release --locked --bin hp3770-app --bin hp3770 --target ${{ matrix.target }}
+        run: cargo build --release --locked --bin vetroscan --bin hp3770 --target ${{ matrix.target }}
 
       - name: Package (Linux and macOS)
         if: runner.os != 'Windows'
@@ -220,11 +220,11 @@ jobs:
           $setup = (Get-ChildItem dist/*-setup.exe).FullName
           # /CURRENTUSER: the per-user install, the one that needs no administrator rights.
           Start-Process $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER' -Wait
-          $dir = Join-Path $env:LOCALAPPDATA 'Programs\HP3770'
-          $app = Join-Path $dir 'hp3770-app.exe'
+          $dir = Join-Path $env:LOCALAPPDATA 'Programs\VetroScan'
+          $app = Join-Path $dir 'vetroscan.exe'
           $cli = Join-Path $dir 'hp3770.exe'
           $notices = Join-Path $dir 'THIRD_PARTY_LICENSES.txt'
-          $shortcut = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\HP Scanjet 3770.lnk'
+          $shortcut = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\VetroScan.lnk'
           $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{6B0BD725-4FC5-40CE-A326-BBF50527870C}_is1'
           foreach ($path in @($app, $cli, $notices, $shortcut, $key)) {
             if (-not (Test-Path $path)) { throw "Missing after a per-user install: $path" }
@@ -244,50 +244,50 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           set -euo pipefail
-          sudo apt-get install -y ./dist/hp3770-*.deb
-          test -x /usr/bin/hp3770-app
+          sudo apt-get install -y ./dist/vetroscan-*.deb
+          test -x /usr/bin/vetroscan
           test -x /usr/bin/hp3770
           hp3770 --version
           test -f /usr/lib/udev/rules.d/70-hp3770.rules
-          test -f /usr/share/applications/hp3770-app.desktop
-          test -f /usr/share/icons/hicolor/scalable/apps/hp3770-app.svg
-          test -s /usr/share/licenses/hp3770/THIRD_PARTY_LICENSES.txt
-          sudo apt-get remove -y hp3770
-          test ! -e /usr/bin/hp3770-app
+          test -f /usr/share/applications/vetroscan.desktop
+          test -f /usr/share/icons/hicolor/scalable/apps/vetroscan.svg
+          test -s /usr/share/licenses/vetroscan/THIRD_PARTY_LICENSES.txt
+          sudo apt-get remove -y vetroscan
+          test ! -e /usr/bin/vetroscan
           # Listings go to files first: `cmd | grep -q` stops reading at the first match, and
           # with pipefail the writer's broken pipe would fail the step.
           listing="$RUNNER_TEMP/listing.txt"
-          rpm -qlp dist/hp3770-*.rpm > "$listing"
-          grep -qx /usr/bin/hp3770-app "$listing"
+          rpm -qlp dist/vetroscan-*.rpm > "$listing"
+          grep -qx /usr/bin/vetroscan "$listing"
           grep -qx /usr/lib/udev/rules.d/70-hp3770.rules "$listing"
-          tar --zstd -tf dist/hp3770-*.pkg.tar.zst > "$listing"
-          grep -qx usr/bin/hp3770-app "$listing"
+          tar --zstd -tf dist/vetroscan-*.pkg.tar.zst > "$listing"
+          grep -qx usr/bin/vetroscan "$listing"
           grep -qx usr/lib/udev/rules.d/70-hp3770.rules "$listing"
-          appimage=$(realpath dist/hp3770-*.AppImage)
+          appimage=$(realpath dist/vetroscan-*.AppImage)
           (cd "$RUNNER_TEMP" && "$appimage" --appimage-extract >/dev/null \
-            && test -x squashfs-root/usr/bin/hp3770-app && test -x squashfs-root/usr/bin/hp3770 \
-            && test -f squashfs-root/hp3770-app.desktop \
-            && test -s squashfs-root/usr/share/licenses/hp3770/THIRD_PARTY_LICENSES.txt)
+            && test -x squashfs-root/usr/bin/vetroscan && test -x squashfs-root/usr/bin/hp3770 \
+            && test -f squashfs-root/vetroscan.desktop \
+            && test -s squashfs-root/usr/share/licenses/vetroscan/THIRD_PARTY_LICENSES.txt)
           echo "deb installed and removed; rpm, pacman and AppImage contents checked"
 
       - name: Smoke test the disk image (macOS)
         if: runner.os == 'macOS'
         run: |
           set -euo pipefail
-          mount="$RUNNER_TEMP/hp3770-dmg"
-          hdiutil attach -nobrowse -readonly -mountpoint "$mount" dist/hp3770-*.dmg
-          test -x "$mount/HP Scanjet 3770.app/Contents/MacOS/hp3770-app"
-          test -x "$mount/HP Scanjet 3770.app/Contents/MacOS/hp3770"
-          test -s "$mount/HP Scanjet 3770.app/Contents/Resources/THIRD_PARTY_LICENSES.txt"
-          test -f "$mount/HP Scanjet 3770.app/Contents/Resources/icon.icns"
+          mount="$RUNNER_TEMP/vetroscan-dmg"
+          hdiutil attach -nobrowse -readonly -mountpoint "$mount" dist/vetroscan-*.dmg
+          test -x "$mount/VetroScan.app/Contents/MacOS/vetroscan"
+          test -x "$mount/VetroScan.app/Contents/MacOS/hp3770"
+          test -s "$mount/VetroScan.app/Contents/Resources/THIRD_PARTY_LICENSES.txt"
+          test -f "$mount/VetroScan.app/Contents/Resources/icon.icns"
           test -L "$mount/Applications"
-          codesign --verify "$mount/HP Scanjet 3770.app"
+          codesign --verify "$mount/VetroScan.app"
           hdiutil detach "$mount"
           echo "dmg mounts with a signed app and an Applications link"
 
       - uses: actions/upload-artifact@v5
         with:
-          name: hp3770-${{ matrix.artifact }}
+          name: vetroscan-${{ matrix.artifact }}
           path: dist/*
           if-no-files-found: error
           retention-days: 14
@@ -305,13 +305,13 @@ jobs:
 
       - uses: actions/download-artifact@v5
         with:
-          pattern: hp3770-*
+          pattern: vetroscan-*
           merge-multiple: true
           path: dist
 
       - name: Write checksums
         working-directory: dist
-        run: sha256sum hp3770-* > SHA256SUMS.txt
+        run: sha256sum vetroscan-* > SHA256SUMS.txt
 
       - name: Create or update release
         env:
@@ -330,7 +330,7 @@ jobs:
             exit 1
           fi
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --title "HP Scanjet 3770 $TAG" --notes-file notes.md \
+            gh release create "$TAG" --title "VetroScan $TAG" --notes-file notes.md \
               --verify-tag "${prerelease[@]}"
           fi
           gh release upload "$TAG" dist/* --clobber

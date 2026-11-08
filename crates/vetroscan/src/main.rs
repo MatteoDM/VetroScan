@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! `hp3770-app`: desktop application for the HP Scanjet 3770.
+//! `vetroscan`: desktop scanning application (the HP Scanjet 3770, and the
+//! scanners the backends of `scanner-api` reach).
 //!
 //! Two ways of working, chosen first: **Documento** (one or more pages,
 //! exported as PDF, multi-page TIFF or one image per page) and **Foto**
@@ -31,7 +32,6 @@ mod worker;
 
 use editor::{Edit, EditMsg, Editor, Section};
 use histogram::Histogram;
-use hp3770_export::{ImageFormat, PageSize};
 use i18n::{tr, trf};
 use iced::widget::{
     button, canvas, center, checkbox, column, container, mouse_area, opaque, pick_list,
@@ -50,12 +50,17 @@ use scanner_api::{
 use std::borrow::Cow;
 use std::path::PathBuf;
 use std::sync::Arc;
+use vetroscan_export::{ImageFormat, PageSize};
 use viewer::{Picture, Selection, View};
 use worker::{Command, Event, Handle, Purpose};
 
 /// Resolution of the preview of the whole glass (the lowest the scanner
 /// has).
 const PREVIEW_DPI: u16 = 200;
+
+/// The app's name, as shown (title, bar, notifications). Until v0.2 it
+/// was "HP Scanjet 3770", the name of the one scanner it knew.
+const APP_NAME: &str = "VetroScan"; // not translated: a name
 
 /// Above this size (bytes in memory) the interface warns before scanning.
 const LARGE_SCAN: f64 = 400e6;
@@ -65,8 +70,7 @@ const PROXY: usize = 2400;
 
 fn main() -> iced::Result {
     iced::application(App::new, App::update, App::view)
-        // not translated: the name of the app
-        .title("HP Scanjet 3770")
+        .title(APP_NAME)
         .subscription(App::subscription)
         .theme(App::theme)
         .window(window_settings())
@@ -82,7 +86,7 @@ fn window_settings() -> iced::window::Settings {
         // The title bar's and the taskbar's icon (the .exe has its own,
         // from build.rs, for Explorer).
         icon: iced::window::icon::from_file_data(
-            include_bytes!("../../../packaging/icons/hp3770-app-256.png"),
+            include_bytes!("../../../packaging/icons/vetroscan-256.png"),
             None,
         )
         .ok(),
@@ -90,7 +94,7 @@ fn window_settings() -> iced::window::Settings {
         exit_on_close_request: false,
         #[cfg(target_os = "linux")]
         platform_specific: iced::window::settings::PlatformSpecific {
-            application_id: "hp3770-app".into(),
+            application_id: "vetroscan".into(),
             ..Default::default()
         },
         ..Default::default()
@@ -410,7 +414,7 @@ impl std::fmt::Display for Sheet {
     }
 }
 
-impl From<Sheet> for hp3770_export::Orientation {
+impl From<Sheet> for vetroscan_export::Orientation {
     fn from(s: Sheet) -> Self {
         match s {
             Sheet::Auto => Self::Auto,
@@ -473,8 +477,8 @@ type EstimateKey = (u64, Kind, u8, Option<u32>);
 struct Estimated {
     key: EstimateKey,
     /// The pages measured (kept while the pages do not change).
-    samples: Arc<Vec<hp3770_export::Sample>>,
-    result: Result<hp3770_export::Planned, String>,
+    samples: Arc<Vec<vetroscan_export::Sample>>,
+    result: Result<vetroscan_export::Planned, String>,
 }
 
 /// A size in bytes as people read it: "850 KB", "4,7 MB".
@@ -494,17 +498,17 @@ fn human_size(bytes: u64) -> String {
 }
 
 /// The encoding of a quality percentage.
-fn e_base(percent: u8) -> hp3770_export::Encoding {
-    hp3770_export::Encoding::from_percent(percent)
+fn e_base(percent: u8) -> vetroscan_export::Encoding {
+    vetroscan_export::Encoding::from_percent(percent)
 }
 
 /// What the limit cost: "3 pagine su 10 alleggerite, fino a 200 dpi e
 /// JPEG 65" (none when no page was).
 fn lightened(
-    encodings: &[hp3770_export::Encoding],
-    base: hp3770_export::Encoding,
+    encodings: &[vetroscan_export::Encoding],
+    base: vetroscan_export::Encoding,
 ) -> Option<String> {
-    let changed: Vec<&hp3770_export::Encoding> = encodings
+    let changed: Vec<&vetroscan_export::Encoding> = encodings
         .iter()
         .filter(|e| e.quality != base.quality || e.max_dpi != base.max_dpi)
         .collect();
@@ -649,15 +653,15 @@ impl Settings {
 
     /// How a PDF page is laid out: on the document's sheet, with its own
     /// layout if it has one, the part `focus` kept when it overflows.
-    fn layout(&self, own: Option<PageLayout>, focus: [f32; 2]) -> hp3770_export::Layout {
+    fn layout(&self, own: Option<PageLayout>, focus: [f32; 2]) -> vetroscan_export::Layout {
         let l = own.unwrap_or(self.page_layout());
-        hp3770_export::Layout {
+        vetroscan_export::Layout {
             size: self.pdf_size.into(),
             orientation: l.sheet.into(),
             placement: match l.fit {
-                PdfFit::Actual => hp3770_export::Placement::Actual,
-                PdfFit::Page => hp3770_export::Placement::FitPage,
-                PdfFit::Fill => hp3770_export::Placement::Fill,
+                PdfFit::Actual => vetroscan_export::Placement::Actual,
+                PdfFit::Page => vetroscan_export::Placement::FitPage,
+                PdfFit::Fill => vetroscan_export::Placement::Fill,
             },
             margin_mm: f64::from(l.margin),
             focus: focus.map(f64::from),
@@ -1470,7 +1474,7 @@ impl Page {
     /// A small copy of the finished page (its geometry and look drawn on
     /// the small copy of the scan) and the real page's size: what the
     /// estimate of a PDF measures.
-    fn pdf_sample(&self, shared: &Settings) -> hp3770_export::Sample {
+    fn pdf_sample(&self, shared: &Settings) -> vetroscan_export::Sample {
         let settings = self.effective(shared);
         let full = &self.raw.full;
         // The crop and turns, at the small copy's size.
@@ -1492,7 +1496,7 @@ impl Page {
         };
         let (w, h) = self.transform.output_size(full.width, full.height);
         let dpi = self.transform.output_dpi(full.width, full.height, full.dpi);
-        hp3770_export::Sample::of(&small, w, h, dpi)
+        vetroscan_export::Sample::of(&small, w, h, dpi)
     }
 
     /// A quarter turn, part of the page's geometry edits.
@@ -2225,14 +2229,14 @@ impl App {
             Vec::new()
         };
         self.estimating = true;
-        let base = hp3770_export::Encoding::from_percent(s.pdf_quality);
+        let base = vetroscan_export::Encoding::from_percent(s.pdf_quality);
         let limit = s.pdf_limit_kb.map(|kb| u64::from(kb) * 1024);
         Task::perform(
             async move {
                 let samples = measured
                     .unwrap_or_else(|| Arc::new(pages.iter().map(|p| p.pdf_sample(&s)).collect()));
-                let result =
-                    hp3770_export::compress::plan(&samples, base, limit).map_err(|e| e.to_string());
+                let result = vetroscan_export::compress::plan(&samples, base, limit)
+                    .map_err(|e| e.to_string());
                 Arc::new(Estimated {
                     key,
                     samples,
@@ -3154,11 +3158,13 @@ impl App {
                 let summary = self.write_pdf(path, &pages)?;
                 return Ok(format!("{} · {summary}", path.display()));
             }
-            Writer::Tiff => hp3770_export::save_tiff(path, &pages),
-            Writer::Zip => hp3770_export::save_zip(path, &name, &pages, ImageFormat::Png),
+            Writer::Tiff => vetroscan_export::save_tiff(path, &pages),
+            Writer::Zip => vetroscan_export::save_zip(path, &name, &pages, ImageFormat::Png),
             // One image per page, next to the chosen name.
-            Writer::Folder => hp3770_export::save_folder(folder, &name, &pages, format).map(|_| ()),
-            Writer::One => hp3770_export::save_as(path, &pages[0], format),
+            Writer::Folder => {
+                vetroscan_export::save_folder(folder, &name, &pages, format).map(|_| ())
+            }
+            Writer::One => vetroscan_export::save_as(path, &pages[0], format),
         }
         .map_err(|e| e.to_string())?;
         Ok(match writer(settings.output, path, n) {
@@ -3187,7 +3193,7 @@ impl App {
     /// again tighter if the estimate fell short). Says how large it is and
     /// what was lightened.
     fn write_pdf(&self, path: &std::path::Path, pages: &[Image]) -> Result<String, String> {
-        use hp3770_export::{compress, Encoding, PdfPage, Sample};
+        use vetroscan_export::{compress, Encoding, PdfPage, Sample};
         let settings = self.settings();
         let base = Encoding::from_percent(settings.pdf_quality);
         let limit = settings.pdf_limit_kb.map(|kb| u64::from(kb) * 1024);
@@ -3217,7 +3223,7 @@ impl App {
                     encoding,
                 })
                 .collect();
-            hp3770_export::save_pdf_pages(path, &laid).map_err(|e| e.to_string())?;
+            vetroscan_export::save_pdf_pages(path, &laid).map_err(|e| e.to_string())?;
             let written = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
             match (limit, budget) {
                 // Over the limit by the estimate's error: plan again for
@@ -3239,8 +3245,8 @@ impl App {
         &self,
         bytes: u64,
         limit: Option<u64>,
-        encodings: &[hp3770_export::Encoding],
-        base: hp3770_export::Encoding,
+        encodings: &[vetroscan_export::Encoding],
+        base: vetroscan_export::Encoding,
     ) -> String {
         let mut out = trf("PDF di {size}", &[("size", &human_size(bytes))]);
         if let Some(l) = limit {
@@ -3318,7 +3324,7 @@ impl App {
                     (data, channels, image.width, image.height, image.dpi)
                 }
             };
-            hp3770_export::save_deep(&target, w, h, channels, dpi, &data)
+            vetroscan_export::save_deep(&target, w, h, channels, dpi, &data)
                 .map_err(|e| e.to_string())?;
         }
         Ok(if n == 1 {
@@ -3353,19 +3359,19 @@ impl App {
             };
             let (full, raw16) = page.full_samples();
             let raw = match &raw16 {
-                Some(samples) => hp3770_export::Linear16::from_linear16(
+                Some(samples) => vetroscan_export::Linear16::from_linear16(
                     full.width,
                     full.height,
                     full.dpi,
                     samples,
                     page.raw.tone.white.map(|w| w * 256.0),
                 ),
-                None => hp3770_export::Linear16::from_linear8(&full, page.raw.tone.white)
+                None => vetroscan_export::Linear16::from_linear8(&full, page.raw.tone.white)
                     .map_err(|e| e.to_string())?,
             };
             match format {
-                RawFormat::Tiff16 => hp3770_export::save_tiff16(&target, &raw),
-                RawFormat::Dng => hp3770_export::save_dng(&target, &raw),
+                RawFormat::Tiff16 => vetroscan_export::save_tiff16(&target, &raw),
+                RawFormat::Dng => vetroscan_export::save_dng(&target, &raw),
             }
             .map_err(|e| e.to_string())?;
             written.push(target);
@@ -4666,7 +4672,7 @@ impl App {
             return;
         };
         let path = std::env::temp_dir().join(Self::stamped("fotocopia", "png"));
-        match hp3770_export::save(&path, &image) {
+        match vetroscan_export::save(&path, &image) {
             Ok(()) => match print_file(&path) {
                 Ok(()) => {
                     self.note = tr("Fotocopia inviata alla stampante predefinita").into();
@@ -4860,8 +4866,7 @@ impl App {
         };
         // The name, and at its top right the version, small.
         let name = row![
-            // not translated: the name
-            text("Scanjet 3770").size(15),
+            text(APP_NAME).size(15),
             text(concat!("v", env!("CARGO_PKG_VERSION")))
                 .size(10)
                 .style(text::secondary),
@@ -5066,7 +5071,7 @@ impl App {
     /// and how large it will be.
     fn pdf_compression(&self) -> Element<'_, Message> {
         let s = self.settings();
-        let e = hp3770_export::Encoding::from_percent(s.pdf_quality);
+        let e = vetroscan_export::Encoding::from_percent(s.pdf_quality);
         let what = match (s.pdf_quality, e.max_dpi) {
             (100, _) => tr("come la scansione, JPEG 95").to_string(),
             (_, None) => trf(
@@ -6501,11 +6506,14 @@ impl App {
         let s = self.settings();
         let request = self.request();
         let link = match &self.status {
-            // What the scanner says first about itself ("USB 2.0").
-            Some(Ok(st)) => st
-                .details
-                .first()
-                .map_or_else(|| tr("collegato").to_string(), |(l, v)| format!("{l} {v}")),
+            // The scanner, and what it says first about itself ("USB 2.0").
+            Some(Ok(st)) => {
+                let detail = st
+                    .details
+                    .first()
+                    .map_or_else(|| tr("collegato").to_string(), |(l, v)| format!("{l} {v}"));
+                format!("{} · {detail}", self.caps.name())
+            }
             Some(Err(_)) => tr("non collegato").to_string(),
             None => "…".to_string(),
         };
@@ -6633,8 +6641,7 @@ fn notify(summary: &str, body: &str, error: bool) {
     let body = body.to_string();
     std::thread::spawn(move || {
         let _ = notify_rust::Notification::new()
-            // not translated: the name of the app
-            .appname("HP Scanjet 3770")
+            .appname(APP_NAME)
             .summary(&summary)
             .body(&body)
             .show();

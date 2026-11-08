@@ -1,6 +1,6 @@
 [package]
-name = "hp3770-export"
-description = "Image, PDF and multi-page export of HP Scanjet 3770 scans"
+name = "vetroscan-export"
+description = "Image, PDF and multi-page export of VetroScan scans"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

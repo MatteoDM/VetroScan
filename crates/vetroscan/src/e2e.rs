@@ -841,7 +841,7 @@ fn pdf_bytes(ui: &Ui) -> u64 {
 }
 
 /// The estimate shown now, in bytes (it must be up to date).
-fn estimate(ui: &Ui) -> hp3770_export::Planned {
+fn estimate(ui: &Ui) -> vetroscan_export::Planned {
     let e = ui.app.pdf_estimate.as_ref().expect("an estimate");
     assert_eq!(e.key, ui.app.estimate_key(), "up to date");
     e.result.clone().expect("estimated")
@@ -1014,7 +1014,7 @@ fn the_sheet_chosen_is_remembered() {
 
 #[test]
 fn saving_twice_in_the_same_second_writes_over_nothing() {
-    use hp3770_export::ImageFormat;
+    use vetroscan_export::ImageFormat;
     let mut ui = document(2);
     // One image per page: NAME-001.png and NAME-002.png.
     ui.send(Message::Output(crate::Output::Image(ImageFormat::Png)));
@@ -1117,7 +1117,7 @@ fn duplica_copies_a_page_that_is_then_edited_on_its_own() {
 #[test]
 fn several_photos_cut_from_one_scan_are_saved_one_file_each() {
     use crate::EditMsg;
-    use hp3770_export::ImageFormat;
+    use vetroscan_export::ImageFormat;
     let mut ui = Ui::new();
     ui.send(Message::Kind(Kind::Photo));
     ui.send(Message::AutoCrop(false));

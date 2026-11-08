@@ -1,7 +1,7 @@
 # Installing the scanner on a new computer with Omarchy
 
 A step-by-step guide, also for people who have never used the terminal. At the end the
-**HP Scanjet 3770** works with its app, which opens from the applications menu like any
+**HP Scanjet 3770** works with its app, **VetroScan**, which opens from the applications menu like any
 other program.
 
 Time: about 15 minutes, almost all of it waiting while the computer compiles.
@@ -12,7 +12,7 @@ directly.
 > **There is a shorter way.** This guide builds the app from source, which is why Rust and a
 > few minutes of waiting are needed. Since the first published version, the
 > [Releases](https://github.com/MatteoDM/scanner/releases/latest) page has the ready-made
-> package for Omarchy/Arch (`hp3770-vX.Y.Z-linux-x86_64.pkg.tar.zst`): download it and
+> package for Omarchy/Arch (`vetroscan-vX.Y.Z-linux-x86_64.pkg.tar.zst`): download it and
 > install it with `sudo pacman -U` followed by the file's name. It does steps 3, 4 and 6 by
 > itself (udev rule included); then skip to step 5 to check. The instructions for every
 > system, packages and AppImage included, are in [install.md](install.md).
@@ -94,7 +94,7 @@ Then **unplug the scanner's USB cable and plug it back in**: the rule applies fr
 ## Step 4 — Compiling and installing
 
 ```sh
-cargo install --path crates/hp3770-app --locked
+cargo install --path crates/vetroscan --locked
 cargo install --path crates/hp3770-cli --locked
 ```
 
@@ -132,14 +132,14 @@ of step 3 is not active: redo step 3 and **plug the USB cable back in**. If it s
 ## Step 6 — Putting the app in the applications menu
 
 ```sh
-install -Dm 644 packaging/linux/hp3770-app.desktop ~/.local/share/applications/hp3770-app.desktop
-install -Dm 644 packaging/linux/hp3770-app.svg ~/.local/share/icons/hicolor/scalable/apps/hp3770-app.svg
+install -Dm 644 packaging/linux/vetroscan.desktop ~/.local/share/applications/vetroscan.desktop
+install -Dm 644 packaging/linux/vetroscan.svg ~/.local/share/icons/hicolor/scalable/apps/vetroscan.svg
 ```
 
 The first line puts the app in the menu, the second gives it its icon.
 
 Now open the app launcher with **Super + Alt + Space**, type **scanner** (or **HP**) and
-**HP Scanjet 3770** appears. Enter, and the app opens.
+**VetroScan** appears. Enter, and the app opens.
 
 Done: from here on the terminal is no longer needed.
 
@@ -186,11 +186,11 @@ problems) is explained in the **[usage guide](usage.md)**.
 ```sh
 cd ~/Work/scanner
 git pull
-cargo install --path crates/hp3770-app --locked
+cargo install --path crates/vetroscan --locked
 cargo install --path crates/hp3770-cli --locked
 ```
 
-The app's settings stay: they are saved in `~/.config/hp3770`.
+The app's settings stay: they are saved in `~/.config/vetroscan`.
 
 ---
 
@@ -238,13 +238,13 @@ logging out of the session and back in.
 ## Uninstalling
 
 ```sh
-cargo uninstall hp3770-app
+cargo uninstall vetroscan
 cargo uninstall hp3770-cli
-rm ~/.local/share/applications/hp3770-app.desktop
-rm ~/.local/share/icons/hicolor/scalable/apps/hp3770-app.svg
+rm ~/.local/share/applications/vetroscan.desktop
+rm ~/.local/share/icons/hicolor/scalable/apps/vetroscan.svg
 sudo rm /etc/udev/rules.d/70-hp3770.rules
 rm -r ~/Work/scanner          # the downloaded code
-rm -r ~/.config/hp3770        # the settings (optional)
+rm -r ~/.config/vetroscan        # the settings (optional)
 ```
 
 The saved scans are not touched.

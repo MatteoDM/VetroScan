@@ -1,5 +1,5 @@
 # Packages a release build into dist/ on Windows: the portable zip and the Inno Setup installer
-# (packaging/windows/hp3770.iss). Linux and macOS use scripts/package.sh.
+# (packaging/windows/vetroscan.iss). Linux and macOS use scripts/package.sh.
 #
 # Usage: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package.ps1
 #        scripts/package.ps1 -Target x86_64-pc-windows-msvc -Version 0.1.0   (as CI calls it)
@@ -19,15 +19,15 @@ $ErrorActionPreference = 'Stop'
 Set-Location (Split-Path -Parent $PSScriptRoot)
 
 if (-not $Version) {
-    cargo build --release --locked --bin hp3770-app --bin hp3770
+    cargo build --release --locked --bin vetroscan --bin hp3770
     if ($LASTEXITCODE -ne 0) { throw "cargo build failed with exit code $LASTEXITCODE" }
-    # "path+file:///.../crates/hp3770-app#0.1.0" or "...#hp3770-app@0.1.0": after the last # or @.
-    $Version = (cargo pkgid -p hp3770-app) -replace '.*[#@]', ''
-    if ($LASTEXITCODE -ne 0 -or -not $Version) { throw "Could not read the hp3770-app version" }
+    # "path+file:///.../crates/vetroscan#0.1.0" or "...#vetroscan@0.1.0": after the last # or @.
+    $Version = (cargo pkgid -p vetroscan) -replace '.*[#@]', ''
+    if ($LASTEXITCODE -ne 0 -or -not $Version) { throw "Could not read the vetroscan version" }
 }
 
 $bindir = if ($Target) { "target\$Target\release" } else { 'target\release' }
-$app = (Resolve-Path "$bindir\hp3770-app.exe").Path
+$app = (Resolve-Path "$bindir\vetroscan.exe").Path
 $cli = (Resolve-Path "$bindir\hp3770.exe").Path
 
 $iscc = @(
@@ -45,7 +45,7 @@ if (-not $iscc -or -not (Test-Path $iscc)) {
 }
 
 New-Item -ItemType Directory -Force dist, target\package | Out-Null
-$name = "hp3770-v$Version-windows-x86_64"
+$name = "vetroscan-v$Version-windows-x86_64"
 
 # The notices of the crates built into the binaries (as scripts/third_party_licenses.sh).
 $notices = 'target\package\THIRD_PARTY_LICENSES.txt'
@@ -59,6 +59,6 @@ if ($LASTEXITCODE -ne 0) { throw "cargo about failed with exit code $LASTEXITCOD
 Compress-Archive -Path $app, $cli, README.md, LICENSE, $notices -DestinationPath "dist\$name-portable.zip" -Force
 Write-Host "packaged dist\$name-portable.zip"
 
-& $iscc /Qp "/DAppVersion=$Version" "/DSourceDir=$((Resolve-Path $bindir).Path)" "/DOutputDir=$((Resolve-Path dist).Path)" packaging\windows\hp3770.iss
+& $iscc /Qp "/DAppVersion=$Version" "/DSourceDir=$((Resolve-Path $bindir).Path)" "/DOutputDir=$((Resolve-Path dist).Path)" packaging\windows\vetroscan.iss
 if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
 Write-Host "packaged dist\$name-setup.exe"

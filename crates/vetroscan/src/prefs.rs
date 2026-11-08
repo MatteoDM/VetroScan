@@ -197,9 +197,14 @@ impl Default for Prefs {
     }
 }
 
-/// The folder of the preferences, the presets and the log of the buttons.
-/// In tests, a folder of the test's own: tests never touch the real
-/// settings, nor each other's.
+/// The name of the settings folder before v0.3, when the app was named
+/// after the scanner.
+pub const LEGACY_DIR: &str = "hp3770";
+
+/// The folder of the preferences, the presets and the log of the buttons:
+/// the app's own (its package name), filled the first time with a copy of
+/// the folder of older versions. In tests, a folder of the test's own:
+/// tests never touch the real settings, nor each other's.
 pub fn config_dir() -> Option<PathBuf> {
     #[cfg(test)]
     {
@@ -207,8 +212,31 @@ pub fn config_dir() -> Option<PathBuf> {
     }
     #[cfg(not(test))]
     {
-        Some(dirs::config_dir()?.join("hp3770"))
+        let base = dirs::config_dir()?;
+        let dir = base.join(env!("CARGO_PKG_NAME"));
+        static MIGRATED: std::sync::Once = std::sync::Once::new();
+        MIGRATED.call_once(|| {
+            let _ = migrate_dir(&base.join(LEGACY_DIR), &dir);
+        });
+        Some(dir)
     }
+}
+
+/// Copies the files of the settings folder of older versions (`old`) into
+/// the new one (`new`), only when the new one does not exist yet; says
+/// whether it did. The old folder stays as it is, for an older version.
+pub fn migrate_dir(old: &std::path::Path, new: &std::path::Path) -> std::io::Result<bool> {
+    if new.exists() || !old.is_dir() {
+        return Ok(false);
+    }
+    std::fs::create_dir_all(new)?;
+    for entry in std::fs::read_dir(old)? {
+        let entry = entry?;
+        if entry.file_type()?.is_file() {
+            std::fs::copy(entry.path(), new.join(entry.file_name()))?;
+        }
+    }
+    Ok(true)
 }
 
 impl Prefs {
@@ -300,6 +328,32 @@ pub fn save_presets(presets: &[Preset]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_settings_of_older_versions_move_to_the_new_folder_once() {
+        let base = crate::testing::dir().join("migration");
+        let (old, new) = (base.join(LEGACY_DIR), base.join("app"));
+        // Nothing to bring: no old folder.
+        assert!(!migrate_dir(&old, &new).unwrap());
+        assert!(!new.exists());
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("impostazioni.json"), "{\"theme\": \"scuro\"}").unwrap();
+        std::fs::write(old.join("preset.json"), "[]").unwrap();
+        assert!(migrate_dir(&old, &new).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(new.join("impostazioni.json")).unwrap(),
+            "{\"theme\": \"scuro\"}"
+        );
+        assert!(new.join("preset.json").exists());
+        // The old folder stays, and a second start copies nothing over.
+        assert!(old.join("impostazioni.json").exists());
+        std::fs::write(new.join("impostazioni.json"), "{}").unwrap();
+        assert!(!migrate_dir(&old, &new).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(new.join("impostazioni.json")).unwrap(),
+            "{}"
+        );
+    }
 
     #[test]
     fn button_actions_by_position_become_actions_by_id() {

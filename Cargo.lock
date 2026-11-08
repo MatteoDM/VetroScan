@@ -1596,28 +1596,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 
 [[package]]
-name = "hp3770-app"
-version = "0.2.0"
-dependencies = [
- "chrono",
- "dirs",
- "hp3770-core",
- "hp3770-export",
- "hp3770-usb",
- "iced",
- "iced_runtime",
- "iced_test",
- "notify-rust",
- "rfd",
- "scan-imaging",
- "scanner-api",
- "serde",
- "serde_json",
- "sys-locale",
- "winresource",
-]
-
-[[package]]
 name = "hp3770-capture"
 version = "0.2.0"
 dependencies = [
@@ -1642,19 +1620,6 @@ version = "0.2.0"
 dependencies = [
  "scan-imaging",
  "scanner-api",
-]
-
-[[package]]
-name = "hp3770-export"
-version = "0.2.0"
-dependencies = [
- "flate2",
- "hp3770-core",
- "image",
- "png",
- "scan-imaging",
- "tiff",
- "zip",
 ]
 
 [[package]]
@@ -4383,6 +4348,41 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "vetroscan"
+version = "0.2.0"
+dependencies = [
+ "chrono",
+ "dirs",
+ "hp3770-core",
+ "hp3770-usb",
+ "iced",
+ "iced_runtime",
+ "iced_test",
+ "notify-rust",
+ "rfd",
+ "scan-imaging",
+ "scanner-api",
+ "serde",
+ "serde_json",
+ "sys-locale",
+ "vetroscan-export",
+ "winresource",
+]
+
+[[package]]
+name = "vetroscan-export"
+version = "0.2.0"
+dependencies = [
+ "flate2",
+ "hp3770-core",
+ "image",
+ "png",
+ "scan-imaging",
+ "tiff",
+ "zip",
+]
 
 [[package]]
 name = "walkdir"

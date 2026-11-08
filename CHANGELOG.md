@@ -24,6 +24,13 @@ GitHub; here they are in English.
   2,5 in Italian).
 
 ### Changed
+- **The app is called VetroScan** (it was "HP Scanjet 3770", after the one scanner it knew):
+  window, menu entry, installer, packages (`vetroscan-vX.Y.Z-…`) and the app's program
+  (`vetroscan`). Installing it over an older version replaces it: the Windows installer
+  stays in the same folder and replaces the Start menu entry, the Linux packages replace the
+  `hp3770` package, and the settings and presets are copied from the old `hp3770` folder at
+  the first start. The `hp3770` command and the HP 3770 driver keep their names.
+- The status bar names the scanner in use next to its connection.
 - The «Film» mode (disabled) only appears with a scanner that has the adapter for slides and
   negatives: the HP 3770 does not.
 - The project's documentation is in English (README, guides, changelog); a short Italian
@@ -89,7 +96,7 @@ GitHub; here they are in English.
 First version.
 
 ### Added
-- **Desktop app** `hp3770-app` for Linux and Windows (on macOS it builds, but it has not yet
+- **Desktop app** `vetroscan` for Linux and Windows (on macOS it builds, but it has not yet
   been tried with the scanner), with two ways of working:
   - **Document**: one or more pages, saved as PDF, multi-page TIFF or one image per page;
   - **Photo**: one image per scan, also as RAW (DNG and linear 16-bit TIFF, with the chip's

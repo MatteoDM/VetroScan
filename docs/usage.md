@@ -1,6 +1,6 @@
-# Using the HP Scanjet 3770 app
+# Using VetroScan
 
-This guide explains how to use the **HP Scanjet 3770** app (`hp3770-app`) to acquire
+This guide explains how to use **VetroScan** (`vetroscan`) with the HP Scanjet 3770 to acquire
 documents and photos: what each button does, which format to choose, how to correct a scan
 already made and what to do when something goes wrong. It applies to Linux, Windows and
 macOS; where a system behaves differently, it says so.
@@ -53,11 +53,11 @@ The rest of this guide is about doing these same things better.
 
 | Where | What is there |
 |---|---|
-| **At the top** | the scanner's name and the app's version, the **Document** and **Photo** modes, the scanner's state, the **Preview** and **Scan…** buttons, the choice of theme (**System**, **Light**, **Dark**) |
+| **At the top** | the app's name and version, the **Document** and **Photo** modes, the scanner's state, the **Preview** and **Scan…** buttons, the choice of theme (**System**, **Light**, **Dark**) |
 | **On the left** | the column of the **pages** (always in Document, in Photo when there are several photos) |
 | **In the middle** | the **viewer**: the preview of the glass or the scan made |
 | **On the right** | four tabs: **Scan**, **Adjust**, **Output**, **Preferences**; below them, the **Save …** button |
-| **At the bottom** | the status bar: the scanner's connection, resolution and colour, size of the image in pixels, the app's last message |
+| **At the bottom** | the status bar: the scanner in use and its connection, resolution and colour, size of the image in pixels, the app's last message |
 
 The **scanner's state**, at the top right:
 

@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=VetroScan
+GenericName=Scanner
+GenericName[it]=Scanner
+Comment=Scan documents and photos (HP Scanjet 3770 and more)
+Comment[it]=Scansiona documenti e foto (HP Scanjet 3770 e altri)
+Exec=vetroscan
+Icon=vetroscan
+Terminal=false
+Categories=Graphics;Scanning;
+Keywords=scan;scanner;hp;3770;vetroscan;
+StartupWMClass=vetroscan

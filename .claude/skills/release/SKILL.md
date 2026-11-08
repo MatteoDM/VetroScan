@@ -9,14 +9,14 @@ The packages are made by the `CI and Release` workflow (`.github/workflows/relea
 release is just a version bump plus a matching tag.
 
 Pipeline: `test` (Linux, Windows, macOS) and `lint` (Linux: `cargo fmt --all --check`, clippy
-with `-D warnings`) → `prepare` (reads the version of the `hp3770-app` package with
+with `-D warnings`) → `prepare` (reads the version of the `vetroscan` package with
 `cargo metadata`; stops if the tag is not exactly `v<version>`) → `build` (5 targets: linux
 x86_64/aarch64, windows x86_64, macOS arm64/x86_64; each packages and then tries what it
 produced) → `release` (only on `v*` tags: creates the GitHub release with the CHANGELOG's
 notes, uploads the files and `SHA256SUMS.txt`).
 
-Files of every release (each with `hp3770-app` and `hp3770`): Windows
-`…-windows-x86_64-setup.exe` (Inno Setup, `packaging/windows/hp3770.iss`; by default a
+Files of every release (each with `vetroscan` and `hp3770`): Windows
+`…-windows-x86_64-setup.exe` (Inno Setup, `packaging/windows/vetroscan.iss`; by default a
 per-user install without administrator) and `…-windows-x86_64-portable.zip`; macOS
 `…-macos-{arm64,x86_64}.dmg`; Linux `…-linux-{x86_64,aarch64}.{deb,rpm,pkg.tar.zst,AppImage}`
 (nFPM `packaging/linux/nfpm.yaml` + appimagetool). deb, rpm and pacman install the udev rule
@@ -30,7 +30,7 @@ in the build job) from `packaging/about.toml` and `packaging/about.hbs`; the pac
 check it is there. A new dependency with a licence missing from `packaging/about.toml`
 blocks the build: add it there and in `deny.toml` (workflow *Dependencies*,
 `cargo deny check`), only if it is compatible with GPL-2.0-or-later. Never change the `AppId`
-in `hp3770.iss`: Windows uses it to update and uninstall. A tag with `-` (e.g.
+in `vetroscan.iss`: Windows uses it to update and uninstall. A tag with `-` (e.g.
 `v0.2.0-rc.1`) comes out as a prerelease. `workflow_dispatch` builds the packages without
 publishing them.
 
@@ -88,8 +88,8 @@ the tags: it is not touched at every release.
 scripts/package.sh
 ```
 
-Without arguments it runs `cargo build --release --locked --bin hp3770-app --bin hp3770`,
-takes the version from `Cargo.toml` (`cargo pkgid -p hp3770-app`) and the label from the
+Without arguments it runs `cargo build --release --locked --bin vetroscan --bin hp3770`,
+takes the version from `Cargo.toml` (`cargo pkgid -p vetroscan`) and the label from the
 machine (`linux-x86_64`, `macos-arm64`, …, the same as the CI). The CI passes the three
 arguments and builds first: `scripts/package.sh <target|""> <label> <version>`. On Linux it
 makes `.deb`, `.rpm`, `.pkg.tar.zst` and `.AppImage`; it needs `nfpm` and `appimagetool` in
@@ -103,8 +103,8 @@ for `THIRD_PARTY_LICENSES.txt` (`scripts/third_party_licenses.sh`). The output g
 and the portable zip; the CI uses the same script with `-Target` and `-Version`.
 
 The icons in `packaging/icons` (PNG and `.ico`) are generated from
-`packaging/linux/hp3770-app.svg`: if you change the SVG, generate them again.
+`packaging/linux/vetroscan.svg`: if you change the SVG, generate them again.
 ```bash
-for s in 32 128 256 512 1024; do rsvg-convert -w $s -h $s packaging/linux/hp3770-app.svg -o packaging/icons/hp3770-app-$s.png; done
-magick packaging/icons/hp3770-app-256.png -define icon:auto-resize=256,64,48,32,16 packaging/icons/hp3770-app.ico
+for s in 32 128 256 512 1024; do rsvg-convert -w $s -h $s packaging/linux/vetroscan.svg -o packaging/icons/vetroscan-$s.png; done
+magick packaging/icons/vetroscan-256.png -define icon:auto-resize=256,64,48,32,16 packaging/icons/vetroscan.ico
 ```

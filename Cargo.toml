@@ -7,8 +7,8 @@ members = [
     "crates/hp3770-capture",
     "crates/hp3770-usb",
     "crates/hp3770-cli",
-    "crates/hp3770-app",
-    "crates/hp3770-export",
+    "crates/vetroscan",
+    "crates/vetroscan-export",
 ]
 
 [workspace.package]
@@ -24,7 +24,7 @@ scan-imaging = { path = "crates/scan-imaging" }
 scanner-api = { path = "crates/scanner-api" }
 hp3770-core = { path = "crates/hp3770-core" }
 hp3770-usb = { path = "crates/hp3770-usb" }
-hp3770-export = { path = "crates/hp3770-export" }
+vetroscan-export = { path = "crates/vetroscan-export" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -45,5 +45,5 @@ opt-level = 2
 opt-level = 2
 [profile.dev.package.hp3770-core]
 opt-level = 2
-[profile.dev.package.hp3770-export]
+[profile.dev.package.vetroscan-export]
 opt-level = 2
