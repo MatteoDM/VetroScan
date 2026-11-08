@@ -518,9 +518,25 @@ It needs no new hardware, only slides and negatives to put in the holder.
     their preview at those only (the preview at 600 dpi, brought to 200). 2400 dpi left out:
     never tried. Lower resolutions would need the HP configuration's longer lines (three to six
     times) or a ramp of our own;
-  - still to try on the real scanner from the app at 600 dpi.
+  - **tried from the app on the real scanner** (9 November 2026, after the fix): Film at
+    1200 dpi works, natural colours, a picture per frame. Committed and pushed as `74ac32b`,
+    not released yet (CHANGELOG `[Unreleased]`).
   The driver of HP cannot scan with the adapter on Windows 11 (above): the comparison with its
   images in **Done when** cannot be made; the reference are our own scans.
+- **Next** (where to start again), in order:
+  1. a **preview at 600 dpi** watched on the real scanner (hand on the switch): the film
+     preview is always at 600 dpi, it may not have run yet; then a scan at 600 dpi;
+  2. **blue on a negative's base**, the lowest signal: try HP's exposure per colour again
+     (`NEGATIVE_EXPOSURES`, how the chip uses `EXPT`/`MEXPT`) or a longer line for blue only;
+  3. the **light along the strip**: a correction measured once on the empty holder, only if
+     the few percent show in the pictures;
+  4. **slides**, when Matteo has some: `Source::Slide` in the 3770's `Adapter::sources`, its
+     mode (the glass's line at the gains' maximum, or the negatives' longer line), `Slide` in
+     `film`, an e2e like the negatives' one, a try on the scanner;
+  5. lower resolutions for films (300, 200 dpi) only with a motor ramp or HP's longer lines,
+     and never without a guard in `session::scan` first;
+  6. a **release** with the Film mode (the `release` skill: tag, CI publishes), when Matteo
+     wants it.
 - **Done when:** the adapter's start-up and calibration match the captures; a slide and a
   negative come out comparable to the HP driver's (or better for negatives); smoke tests on
   the real scanner with a slide in the holder.
