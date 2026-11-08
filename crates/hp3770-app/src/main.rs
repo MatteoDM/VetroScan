@@ -727,6 +727,17 @@ impl Settings {
         }
     }
 
+    /// The same settings with the look of a new session: the adjustments
+    /// and the black-and-white threshold back to their defaults.
+    fn fresh_look(self) -> Self {
+        let defaults = Settings::document();
+        Self {
+            adjust: defaults.adjust,
+            threshold: defaults.threshold,
+            ..self
+        }
+    }
+
     /// Settings from the stored form; what does not make sense for `kind`
     /// falls back to the defaults.
     fn from_stored(kind: Kind, m: &prefs::StoredMode) -> Self {
@@ -1949,8 +1960,11 @@ impl App {
                 system_dark: false,
                 theme,
                 kind,
-                document: Settings::from_stored(Kind::Document, &stored.document),
-                photo: Settings::from_stored(Kind::Photo, &stored.photo),
+                // How the scan is made and saved comes back; the look (the
+                // adjustments, the black-and-white threshold) starts clean
+                // at every opening: a look to keep is a preset.
+                document: Settings::from_stored(Kind::Document, &stored.document).fresh_look(),
+                photo: Settings::from_stored(Kind::Photo, &stored.photo).fresh_look(),
                 tab: Tab::Preview,
                 pane: Pane::Scan,
                 start_mode,
@@ -5658,8 +5672,9 @@ impl App {
                 .into()
             ),
             text(
-                "Risoluzione, colore, formato, pagina PDF e regolazioni di ogni modo \
-                 restano come li lasci: li ritrovi alla prossima apertura."
+                "Risoluzione, colore, formato e pagina PDF di ogni modo restano come li \
+                 lasci. Le regolazioni ripartono da zero a ogni apertura: per ritrovarle, \
+                 salvale in un preset."
             )
             .size(12),
             heading("Cartella dei file"),

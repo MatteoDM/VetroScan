@@ -14,6 +14,11 @@ manca.
 
 ## [Unreleased]
 
+### Changed
+- Riaprendo l'app le **regolazioni** (colori, toni, curva, nitidezza, soglia del bianco e
+  nero) ripartono da zero invece di tornare quelle della volta prima; risoluzione, colore,
+  formato, PDF e tasti restano come lasciati. Un aspetto da riusare si salva come preset.
+
 ## [0.1.1] - 2026-11-08
 
 ### Added

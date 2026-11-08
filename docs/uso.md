@@ -87,7 +87,10 @@ davanti allo scanner.
 
 L'app ha due modi di lavorare, scelti in alto. Ognuno ricorda le sue impostazioni
 (risoluzione, colore, formato, regolazioni, tasti dello scanner): passando dall'uno all'altro
-ritrovi quelle che avevi lasciato.
+ritrovi quelle che avevi lasciato. Chiudendo e riaprendo l'app tornano risoluzione, colore,
+formato e tasti; le **regolazioni** invece ripartono da zero, perché una scansione nuova non
+erediti per sbaglio i colori della sessione prima. Un aspetto da riusare si salva come
+[preset](#la-scheda-regola).
 
 | | **Documento** | **Foto** |
 |---|---|---|
@@ -587,8 +590,8 @@ sono ancora stati provati.
 La quarta scheda a destra. Ogni cambiamento si salva da solo.
 
 - **All'avvio · Modo**: con quale modo si apre l'app: *L'ultimo usato*, *Documento* o *Foto*.
-  Risoluzione, colore, formato, pagina PDF e regolazioni di ogni modo si ritrovano comunque come
-  li hai lasciati.
+  Risoluzione, colore, formato e pagina PDF di ogni modo si ritrovano comunque come li hai
+  lasciati; le regolazioni ripartono da zero (per ritrovarle, salvale in un preset).
 - **Cartella dei file**: dove si salvano le scansioni. **Scegli…** ne indica un'altra; il
   pulsante accanto torna a quella di base, **Scansioni** dentro la cartella **Immagini**:
 

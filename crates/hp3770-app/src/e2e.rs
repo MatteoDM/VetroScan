@@ -762,6 +762,36 @@ fn a_limit_that_is_not_a_number_is_pointed_out() {
 }
 
 #[test]
+fn colour_adjustments_do_not_come_back_after_closing_scan_settings_do() {
+    use crate::Field;
+    {
+        let mut ui = Ui::new();
+        ui.send(Message::Kind(Kind::Photo));
+        ui.send(Message::Adjust(Field::Temperature, 40.0));
+        ui.send(Message::Adjust(Field::Saturation, 30.0));
+        ui.send(Message::Dpi(600));
+        ui.send(Message::Colour(crate::Colour::Grey));
+        assert_eq!(ui.app.photo.adjust.temperature, 40.0);
+        // A look to keep is a preset.
+        ui.send(Message::PresetName("Caldo".into()));
+        ui.send(Message::PresetSave);
+        std::mem::forget(ui);
+    }
+    let (app, _) = App::new();
+    let fresh = hp3770_core::adjust::Adjustments::default();
+    assert_eq!(app.photo.adjust, fresh, "the look starts clean");
+    assert_eq!(app.document.adjust, fresh);
+    assert_eq!(app.photo.dpi, 600, "the scan settings stay");
+    assert_eq!(app.photo.colour, crate::Colour::Grey);
+    // The preset brings it back.
+    let mut ui = Ui::new();
+    ui.send(Message::Kind(Kind::Photo));
+    ui.send(Message::PresetApply("Caldo".into()));
+    assert_eq!(ui.app.photo.adjust.temperature, 40.0);
+    assert_eq!(ui.app.photo.adjust.saturation, 30.0);
+}
+
+#[test]
 fn the_sheet_chosen_is_remembered() {
     use crate::{Margin, PdfFit, PdfSize};
     {
