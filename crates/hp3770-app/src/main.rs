@@ -384,18 +384,102 @@ enum Group {
     Lineart,
 }
 
-#[derive(Debug, Clone, Copy)]
-enum Adjust {
-    Temperature(f32),
-    Tint(f32),
-    Black(f32),
-    White(f32),
-    Gamma(f32),
-    Brightness(f32),
-    Contrast(f32),
-    Saturation(f32),
-    Sharpen(f32),
-    Threshold(u8),
+/// An adjustment with a slider and a number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Field {
+    Temperature,
+    Tint,
+    Black,
+    White,
+    Gamma,
+    Brightness,
+    Contrast,
+    Saturation,
+    Sharpen,
+    Threshold,
+}
+
+impl Field {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Temperature => "Temperatura",
+            Self::Tint => "Tinta",
+            Self::Black => "Punto del nero",
+            Self::White => "Punto del bianco",
+            Self::Gamma => "Gamma (mezzitoni)",
+            Self::Brightness => "Luminosità",
+            Self::Contrast => "Contrasto",
+            Self::Saturation => "Saturazione",
+            Self::Sharpen => "Nitidezza (1,5 = come HP)",
+            Self::Threshold => "Soglia (più alta = più nero)",
+        }
+    }
+
+    fn range(self) -> std::ops::RangeInclusive<f32> {
+        match self {
+            Self::Black => 0.0..=254.0,
+            Self::White => 1.0..=255.0,
+            Self::Gamma => 0.2..=5.0,
+            Self::Sharpen => 0.0..=4.0,
+            Self::Threshold => 0.0..=255.0,
+            _ => -100.0..=100.0,
+        }
+    }
+
+    fn step(self) -> f32 {
+        match self {
+            Self::Gamma => 0.05,
+            Self::Sharpen => 0.1,
+            _ => 1.0,
+        }
+    }
+
+    fn get(self, s: &Settings) -> f32 {
+        let a = &s.adjust;
+        match self {
+            Self::Temperature => a.temperature,
+            Self::Tint => a.tint,
+            Self::Black => a.black,
+            Self::White => a.white,
+            Self::Gamma => a.gamma,
+            Self::Brightness => a.brightness,
+            Self::Contrast => a.contrast,
+            Self::Saturation => a.saturation,
+            Self::Sharpen => a.sharpen,
+            Self::Threshold => f32::from(s.threshold),
+        }
+    }
+
+    /// The value of a fresh setup (double click on the slider).
+    fn default(self) -> f32 {
+        let s = Settings::document();
+        self.get(&s)
+    }
+
+    fn set(self, s: &mut Settings, v: f32) {
+        let v = v.clamp(*self.range().start(), *self.range().end());
+        let a = &mut s.adjust;
+        match self {
+            Self::Temperature => a.temperature = v,
+            Self::Tint => a.tint = v,
+            Self::Black => a.black = v.min(a.white - 1.0),
+            Self::White => a.white = v.max(a.black + 1.0),
+            Self::Gamma => a.gamma = v,
+            Self::Brightness => a.brightness = v,
+            Self::Contrast => a.contrast = v,
+            Self::Saturation => a.saturation = v,
+            Self::Sharpen => a.sharpen = v,
+            Self::Threshold => s.threshold = v.round() as u8,
+        }
+    }
+
+    fn format(self, v: f32) -> String {
+        if self.step() < 1.0 {
+            format!("{v:.2}").replace('.', ",")
+        } else {
+            format!("{v:.0}")
+        }
+    }
 }
 
 /// What a background render redraws.
@@ -441,7 +525,11 @@ enum Message {
     PdfSize(PdfSize),
     AutoSave(bool),
     Toggle(Group),
-    Adjust(Adjust),
+    Adjust(Field, f32),
+    /// Text typed in the number of a field.
+    Draft(Field, String),
+    /// Enter in the number of a field.
+    Commit(Field),
     AutoLevels,
     AutoThreshold,
     Eyedropper,
@@ -492,6 +580,8 @@ struct App {
     redo_auto: bool,
     redone: Option<(usize, Page)>,
     note: String,
+    /// A number being typed, not applied yet.
+    draft: Option<(Field, String)>,
     /// A render is running off the interface thread.
     rendering: bool,
     /// Something changed since it started: render again when it ends.
@@ -524,6 +614,7 @@ impl App {
                 redo_auto: false,
                 redone: None,
                 note: "Pronto: fai un'anteprima, scegli l'area e scansiona".into(),
+                draft: None,
                 rendering: false,
                 dirty: None,
             },
@@ -873,21 +964,21 @@ impl App {
                     self.open.push(group);
                 }
             }
-            Message::Adjust(a) => self.change(|s| {
-                let j = &mut s.adjust;
-                match a {
-                    Adjust::Temperature(v) => j.temperature = v,
-                    Adjust::Tint(v) => j.tint = v,
-                    Adjust::Black(v) => j.black = v.min(j.white - 1.0),
-                    Adjust::White(v) => j.white = v.max(j.black + 1.0),
-                    Adjust::Gamma(v) => j.gamma = v,
-                    Adjust::Brightness(v) => j.brightness = v,
-                    Adjust::Contrast(v) => j.contrast = v,
-                    Adjust::Saturation(v) => j.saturation = v,
-                    Adjust::Sharpen(v) => j.sharpen = v,
-                    Adjust::Threshold(t) => s.threshold = t,
+            Message::Adjust(field, v) => {
+                self.draft = None;
+                self.change(|s| field.set(s, v));
+            }
+            Message::Draft(field, text) => self.draft = Some((field, text)),
+            Message::Commit(field) => {
+                if let Some((f, text)) = self.draft.take() {
+                    if f == field {
+                        match text.trim().replace(',', ".").parse::<f32>() {
+                            Ok(v) => self.change(|s| field.set(s, v)),
+                            Err(_) => self.note = format!("«{text}» non è un numero"),
+                        }
+                    }
                 }
-            }),
+            }
             Message::AutoLevels => {
                 if let Some(raw) = self.active_raw() {
                     let settings = self.active();
@@ -1438,7 +1529,6 @@ impl App {
 
     fn panel(&self) -> iced::widget::Column<'_, Message> {
         let s = self.active();
-        let a = s.adjust;
         let editing = if self.editing_page() {
             "Regolazioni della pagina mostrata"
         } else {
@@ -1549,23 +1639,11 @@ impl App {
                 button(text("Livelli automatici").size(13))
                     .style(button::secondary)
                     .on_press(Message::AutoLevels),
-                adjuster("Punto del nero", a.black, 0.0..=254.0, 1.0, Adjust::Black),
-                adjuster("Punto del bianco", a.white, 1.0..=255.0, 1.0, Adjust::White),
-                adjuster("Gamma (mezzitoni)", a.gamma, 0.2..=5.0, 0.05, Adjust::Gamma),
-                adjuster(
-                    "Luminosità",
-                    a.brightness,
-                    -100.0..=100.0,
-                    1.0,
-                    Adjust::Brightness
-                ),
-                adjuster(
-                    "Contrasto",
-                    a.contrast,
-                    -100.0..=100.0,
-                    1.0,
-                    Adjust::Contrast
-                ),
+                self.adjuster(Field::Black, &s),
+                self.adjuster(Field::White, &s),
+                self.adjuster(Field::Gamma, &s),
+                self.adjuster(Field::Brightness, &s),
+                self.adjuster(Field::Contrast, &s),
             ]
             .spacing(6)
             .into(),
@@ -1585,24 +1663,12 @@ impl App {
                 button::secondary
             })
             .on_press(Message::Eyedropper),
-            adjuster(
-                "Temperatura",
-                a.temperature,
-                -100.0..=100.0,
-                1.0,
-                Adjust::Temperature
-            ),
-            adjuster("Tinta", a.tint, -100.0..=100.0, 1.0, Adjust::Tint),
+            self.adjuster(Field::Temperature, &s),
+            self.adjuster(Field::Tint, &s),
         ]
         .spacing(6);
         if colour_mode {
-            colour_body = colour_body.push(adjuster(
-                "Saturazione",
-                a.saturation,
-                -100.0..=100.0,
-                1.0,
-                Adjust::Saturation,
-            ));
+            colour_body = colour_body.push(self.adjuster(Field::Saturation, &s));
         }
         let colour = self.group(
             Group::Colour,
@@ -1616,13 +1682,7 @@ impl App {
             "Dettaglio",
             true,
             "",
-            adjuster(
-                "Nitidezza (1,5 = come HP)",
-                a.sharpen,
-                0.0..=4.0,
-                0.1,
-                Adjust::Sharpen,
-            ),
+            self.adjuster(Field::Sharpen, &s),
         );
         let bw = self.group(
             Group::Lineart,
@@ -1633,13 +1693,7 @@ impl App {
                 button(text("Soglia automatica").size(13))
                     .style(button::secondary)
                     .on_press(Message::AutoThreshold),
-                adjuster(
-                    "Soglia (più alta = più nero)",
-                    f32::from(s.threshold),
-                    0.0..=255.0,
-                    1.0,
-                    |v| Adjust::Threshold(v.round() as u8)
-                ),
+                self.adjuster(Field::Threshold, &s),
             ]
             .spacing(6)
             .into(),
@@ -1750,6 +1804,36 @@ impl App {
         .spacing(12)
     }
 
+    /// A labelled slider with an editable number: double click on the
+    /// slider gives back the default value, a number typed and confirmed
+    /// with Enter is applied.
+    fn adjuster(&self, field: Field, s: &Settings) -> Element<'_, Message> {
+        let value = field.get(s);
+        let number = match &self.draft {
+            Some((f, text)) if *f == field => text.clone(),
+            _ => field.format(value),
+        };
+        column![
+            row![
+                text(field.label()).size(12).width(Length::Fill),
+                iced::widget::text_input("", &number)
+                    .on_input(move |t| Message::Draft(field, t))
+                    .on_submit(Message::Commit(field))
+                    .size(12)
+                    .padding([2, 6])
+                    .width(64)
+                    .align_x(iced::alignment::Horizontal::Right),
+            ]
+            .align_y(Alignment::Center),
+            iced::widget::mouse_area(
+                slider(field.range(), value, move |v| Message::Adjust(field, v)).step(field.step())
+            )
+            .on_double_click(Message::Adjust(field, field.default())),
+        ]
+        .spacing(2)
+        .into()
+    }
+
     /// A collapsible group of adjustments, disabled (with the reason) when
     /// it does not apply.
     fn group<'a>(
@@ -1843,30 +1927,6 @@ fn labelled<'a>(label: &'a str, control: Element<'a, Message>) -> Element<'a, Me
         .spacing(8)
         .align_y(Alignment::Center)
         .into()
-}
-
-/// A labelled slider with its value.
-fn adjuster<'a>(
-    label: &'a str,
-    value: f32,
-    range: std::ops::RangeInclusive<f32>,
-    step: f32,
-    message: impl Fn(f32) -> Adjust + 'a,
-) -> Element<'a, Message> {
-    let shown = if step < 1.0 {
-        format!("{value:.2}")
-    } else {
-        format!("{value:.0}")
-    };
-    column![
-        row![
-            text(label).size(12).width(Length::Fill),
-            text(shown).size(12)
-        ],
-        slider(range, value, move |v| Message::Adjust(message(v))).step(step),
-    ]
-    .spacing(2)
-    .into()
 }
 
 /// A desktop notification (with the system sound), so that whoever is at
