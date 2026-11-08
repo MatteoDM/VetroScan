@@ -1,7 +1,13 @@
 # Piano: da «app per l'HP 3770» ad «app per scanner»
 
-Stato: **Fase 0 fatta (v0.1.2); prossima: Fase 1** (piano scritto l'8 novembre 2026, dopo la v0.1.1). Ogni fase si chiude con un
-commit, i test verdi e una versione; qui si segna cosa è fatto.
+Stato: **Fasi 0 e 1 fatte (v0.1.2; la Fase 1 esce con la v0.2.0); prossima: Fase 2**
+(piano scritto l'8 novembre 2026, dopo la v0.1.1; aggiornato l'8 novembre 2026 con le lingue,
+il nome nuovo e le fasi rimandate). Ogni fase si chiude con un commit, i test verdi e una
+versione; qui si segna cosa è fatto.
+
+Ordine: prima il refactoring (Fasi 1–4), poi lingue, progetto in inglese e nome nuovo
+(Fasi 5–7), che non chiedono hardware; gli altri scanner (Fasi 8–9) sono **rimandati** finché
+non c'è hardware su cui provarli.
 
 ## Obiettivo
 
@@ -46,7 +52,7 @@ PDF con impaginazione per pagina (margine, posizione, orientamento propri, «App
 le pagine»), anteprima di stampa con il bordo rosso del taglio e taglio trascinabile con
 «Riempi il foglio». Viene prima perché tocca gli stessi file del refactoring (`main.rs`).
 
-## Fase 1 · separare l'imaging dal driver → v0.2.0
+## Fase 1 · separare l'imaging dal driver → v0.2.0 · fatta
 
 - Nuovo crate **`scan-imaging`**: `Image` e `Format` (oggi in `session`), `transform`,
   `convert`, `detect`, `adjust`.
@@ -56,6 +62,20 @@ le pagine»), anteprima di stampa con il bordo rosso del taglio e taglio trascin
 - **Fatto quando:** tutti i test verdi; un test «golden» passa la stessa scansione in
   `adjust` prima e dopo e ottiene immagini identiche byte per byte; `hp3770-export` dipende
   solo da `scan-imaging`.
+
+Com'è andata (4 commit, dal test golden in poi):
+
+- In `scan-imaging` è passato anche `Mode` (colore, grigio, bianco e nero): `adjust` ne ha
+  bisogno. `session::Request` lo usa da lì.
+- `Tone` = bianchi del colore per canale, bianco del grigio, gamma, con `Tone::table` (prima
+  `geometry::host_tone`). Il driver lo dà con `Profile::tone()`; la spiegazione della curva
+  dell'HP sta su `geometry::HOST_GAMMA`.
+- Test golden: `crates/hp3770-core/tests/golden_adjust.rs`, 36 casi (`render`,
+  `render_samples` a 16 bit, `render16`; tre modi; regolazioni di base, tutte cambiate,
+  soglia adattiva; lineare e no). Valori fissati sulla v0.1.2, uguali su Windows e Linux.
+- Le riesportazioni sono già tolte alla fine della fase: app, CLI ed export importano da
+  `scan_imaging`. `hp3770-core` resta solo come dipendenza di sviluppo di `hp3770-export`,
+  per l'esempio `raw_from_png` (il bianco della carta dell'HP 3770).
 
 ## Fase 2 · il contratto «scanner» → v0.2.0
 
@@ -89,9 +109,112 @@ Nuovo crate **`scanner-api`**, che non sa niente di USB né di chip:
 - **Fatto quando:** gli e2e di oggi passano invariati e **nuovi e2e** con un secondo scanner
   finto diverso (vetro A3, al massimo 1200 dpi, due tasti, niente lampada) mostrano che l'app
   si adatta da sola.
-- **Decisione dell'utente:** il nome dell'app e dei pacchetti, se gli scanner diventano tanti.
+- Il nome dell'app e dei pacchetti cambia nella Fase 7.
 
-## Fase 5 · altri HP con chip RTS88xx → v0.3.0 (sperimentale)
+## Fase 5 · l'app in italiano e in inglese → v0.3.0
+
+L'italiano resta la lingua di base; l'inglese si sceglie dalle Preferenze, e se il sistema è
+in inglese l'app parte in inglese.
+
+- **Preferenza «Lingua»**: *Automatica* (di base), *Italiano*, *English*. Automatica = inglese
+  se la lingua del sistema comincia con `en` (crate `sys-locale`, MIT/Apache), altrimenti
+  italiano. Si salva in `impostazioni.json`; chi non ce l'ha ancora riceve *Automatica*
+  (migrazione con il suo test). Cambiarla ridisegna subito l'interfaccia, senza riavvio.
+- **Catalogo dei testi**: un file Fluent per lingua (`crates/hp3770-app/i18n/it.ftl`,
+  `en.ftl`), incluso nel binario con `include_str!`, letto con `fluent-bundle`
+  (Apache/MIT; da aggiungere a `deny.toml` e `packaging/about.toml` se serve). Fluent
+  gestisce plurali («1 pagina» / «3 pagine») e parametri, e i file si traducono senza
+  toccare il codice. Nel codice una macro `t!("chiave", n = 3)`.
+- **Cosa si traduce**: etichette, pulsanti, menu, suggerimenti, note di stato
+  (`self.note`), domande e titoli delle finestre di dialogo (`rfd`), notifiche, errori del
+  worker mostrati all'utente, nomi di file proposti («Documento», «Pagina»), metadati del PDF.
+  La CLI `hp3770` segue la stessa regola della lingua.
+- **Pacchetti**: installer Windows con italiano e inglese (`[Languages]` di Inno Setup),
+  `Comment` e `GenericName` del `.desktop` in tutte e due le lingue,
+  `CFBundleLocalizations` nell'`Info.plist` del `.app` macOS.
+- **Passi**, ognuno con i test verdi: (1) catalogo e macro con il solo italiano, i testi
+  spostati a gruppi (barra, pannelli, editor, PDF, dialoghi, note): l'app non cambia di un
+  carattere; (2) `en.ftl` completo; (3) preferenza e scelta automatica; (4) pacchetti.
+- **Fatto quando:** un test verifica che ogni chiave usata nel codice esista in tutti e due i
+  cataloghi e che non ce ne siano di avanzate; un test cerca stringhe scritte a mano nei widget
+  (`text("…")` con lettere) e fallisce se ne trova; gli e2e di oggi passano invariati in
+  italiano e un gruppo di e2e gira in inglese (avvio, scansione, salvataggio, Preferenze).
+
+## Fase 6 · il progetto in inglese → con la v0.3.0
+
+Documentazione, commit e note di rilascio passano all'inglese; l'app resta italiana di base
+(Fase 5).
+
+- **Da quando**: dal primo commit di questa fase tutti i messaggi di commit sono in inglese.
+  La storia già pubblicata non si riscrive.
+- **Documenti**: `README.md` in inglese, più un `README.it.md` corto per chi usa l'app in
+  italiano (installazione e primi passi). In inglese anche `docs/uso.md`,
+  `docs/installazione.md`, `docs/installazione-linux.md`, `docs/protocollo-usb.md`, questo
+  piano, la skill `.claude/skills/release`, i commenti di `packaging/` e il `PKGBUILD`.
+  I nomi dei file diventano inglesi (`docs/usage.md`, `docs/install.md`, …) con i link
+  aggiornati ovunque.
+- **CHANGELOG**: dalla versione di questa fase in inglese; le sezioni passate si traducono
+  anche loro, così il file è in una lingua sola (le note delle release già pubblicate su
+  GitHub restano come sono). I titoli `Added`/`Changed`/… sono già in inglese.
+- **Codice**: commenti e documentazione sono già in inglese; restano da controllare i
+  messaggi degli errori e i testi di log, che vanno in inglese o nel catalogo della Fase 5.
+- **Regola scritta**: un `CONTRIBUTING.md` in inglese (lingua di commit, CHANGELOG, test da
+  far passare, come aggiungere una traduzione).
+
+## Fase 7 · un nome nuovo, non legato all'HP 3770 → v0.4.0
+
+Con più scanner il nome «HP Scanjet 3770» non descrive più l'app. Proposta: **Scansia**
+(italiano: lo scaffale dove si mettono in ordine le carte; contiene «scan» e si pronuncia
+facilmente anche in inglese). Alternative: **Platen** (il vetro dello scanner, in inglese),
+**Vetro**. Prima di scegliere si controlla che il nome sia libero: crates.io, GitHub,
+Flathub, AUR, Homebrew, marchi registrati. **Decisione dell'utente.**
+
+- **Cosa cambia nome**: titolo della finestra e nome nella barra, binari (`scansia` per
+  l'app, la CLI resta anche come `hp3770` finché serve), pacchetti
+  (`scansia-vX.Y.Z-<sistema>.<ext>`), `.desktop` e icona, bundle macOS e `.dmg`,
+  crate dell'app e dell'export (`scansia-app`, `scansia-export`; il driver resta
+  `hp3770-core`, o diventa `rts88xx` con la Fase 8), README e documenti.
+- **Cosa non deve rompersi**:
+  - Windows: **l'`AppId` dell'installer non cambia** (è così che Windows aggiorna e
+    disinstalla); cambiano nome mostrato e cartella, e l'installer nuovo toglie la vecchia
+    voce di menu.
+  - Linux: i pacchetti nuovi dichiarano `replaces`/`conflicts`/`provides: hp3770`, così
+    l'aggiornamento sostituisce il vecchio; la regola udev resta valida (cambia solo il nome
+    del file, con la vecchia tolta in `postinstall.sh`). AUR: pacchetto nuovo e `hp3770-git`
+    che rimanda a quello.
+  - Preferenze e preset: la cartella passa da `…/hp3770` a `…/scansia`; al primo avvio si
+    copiano i file vecchi (migrazione con test), senza perdere niente.
+  - Il repository GitHub (`MatteoDM/scanner`) è già generico; i link alle release vecchie
+    restano validi.
+- **Fatto quando:** un'installazione della v0.3.x si aggiorna alla nuova su Windows e su
+  Linux (deb e rpm) tenendo preferenze e preset, e i controlli finali qui sotto sono puliti.
+
+## Controllo finale di coerenza (doppio) · dopo la Fase 7
+
+Due passate indipendenti, la seconda solo dopo aver corretto tutto quello che trova la
+prima.
+
+1. **Automatica**:
+   - `git grep` del nome vecchio («Scanjet», «hp3770», «HP3770») fuori dal driver, dalle
+     catture e dalle voci passate del CHANGELOG: nessun risultato non spiegato;
+   - `git grep` di parole italiane comuni nei documenti e nei commenti («della», «sono»,
+     «questo», …): solo in `README.it.md`, in `it.ftl` e nei testi dell'app;
+   - test di completezza dei cataloghi e delle stringhe scritte a mano (Fase 5) verdi;
+   - CI completa con i pacchetti dai nomi nuovi; prova di aggiornamento dalla versione
+     precedente su Windows e Linux; test di migrazione delle preferenze;
+   - tutti i link di README e `docs/` funzionano.
+2. **A mano**:
+   - giro completo dell'app in italiano e in inglese (avvio, anteprima, scansione, regolazioni,
+     editor, PDF, salvataggio, Preferenze, tasti dello scanner), con schermate: niente testo
+     tagliato, misto o non tradotto;
+   - lettura di README, `docs/`, CHANGELOG e note della release dall'inizio alla fine: stesso
+     nome, stessa lingua, stesse parole per le stesse cose;
+   - installazione pulita su ogni sistema e controllo di nome, icona e voce di menu.
+
+## Fase 8 · altri HP con chip RTS88xx · rimandata (sperimentale)
+
+Rimandata: senza questi scanner non si prova niente. Riparte quando arriva un tester o un
+modello in prestito.
 
 - Profili per HP 3800, 3970, 4070, 4370, G3010, G3110 (e gli altri della famiglia) dai dati
   del backend SANE `hp3900`, con la fonte citata come per il 3770.
@@ -100,7 +223,10 @@ Nuovo crate **`scanner-api`**, che non sa niente di USB né di chip:
 - **Rischio alto:** motore, sensore e calibrazione cambiano per modello e senza hardware non
   si verificano; per questo dopo il refactoring e uno alla volta.
 
-## Fase 6 · altre marche → v0.4.0 e oltre
+## Fase 9 · altre marche · rimandata
+
+Rimandata come la Fase 8: eSCL si prova con una qualsiasi multifunzione di rete, quindi è la
+prima a ripartire appena ce n'è una a disposizione.
 
 In ordine di resa per costo:
 
@@ -116,6 +242,10 @@ Ogni backend implementa solo `trait Scanner`: app, imaging ed export non cambian
 | Fase | Versione | Rischio | Senza hardware nuovo? |
 |---|---|---|---|
 | 0 · PDF per pagina | 0.1.2 | basso | sì |
-| 1–4 · refactoring | 0.2.0 | medio, coperto dai test | sì |
-| 5 · altri HP | 0.3.0 | alto | no: servono tester |
-| 6 · altre marche | 0.4.0+ | medio | eSCL sì, con uno scanner di rete |
+| 1 · imaging separato (fatta) | 0.2.0 | medio, coperto dai test | sì |
+| 2–4 · refactoring | 0.2.0 | medio, coperto dai test | sì |
+| 5 · italiano e inglese | 0.3.0 | basso, coperto dai test | sì |
+| 6 · progetto in inglese | con la 0.3.0 | basso | sì |
+| 7 · nome nuovo + controllo finale | 0.4.0 | medio: aggiornamenti e preferenze | sì |
+| 8 · altri HP (rimandata) | da decidere | alto | no: servono tester |
+| 9 · altre marche (rimandata) | da decidere | medio | eSCL sì, con uno scanner di rete |
