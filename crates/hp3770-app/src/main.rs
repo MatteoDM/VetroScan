@@ -276,7 +276,7 @@ impl Settings {
                 whites: a.whites,
                 blacks: a.blacks,
                 vibrance: a.vibrance,
-                curve: a.curve,
+                curve_points: a.curve.iter().map(|c| c.points().to_vec()).collect(),
                 noise: a.noise,
                 descreen: a.descreen,
                 adaptive: a.adaptive,
@@ -322,7 +322,7 @@ impl Settings {
                     && o.extension() == output.extension()
             })
             .unwrap_or(allowed[0]);
-        let a = m.adjust;
+        let a = &m.adjust;
         Self {
             dpi: if RESOLUTIONS.contains(&m.dpi) {
                 m.dpi
@@ -340,7 +340,12 @@ impl Settings {
                 whites: a.whites,
                 blacks: a.blacks,
                 vibrance: a.vibrance,
-                curve: a.curve,
+                curve: std::array::from_fn(|i| {
+                    a.curve_points
+                        .get(i)
+                        .map(|p| hp3770_core::adjust::Curve::new(p))
+                        .unwrap_or(hp3770_core::adjust::Curve::IDENTITY)
+                }),
                 noise: a.noise,
                 descreen: a.descreen,
                 adaptive: a.adaptive,
@@ -360,6 +365,135 @@ impl Settings {
             },
             auto_save: m.auto_save,
         }
+    }
+}
+
+/// The factory presets of a way of working: read-only, ahead of the
+/// three of the user. Chosen after what Epson Scan, VueScan, NAPS2 and
+/// ScanSnap offer: text for OCR in black and white with an adaptive
+/// threshold, clean colour documents, receipts, printed matter with
+/// descreening, lossless archives; photos for everyday use, for archiving,
+/// faded prints, black and white, photos printed in magazines.
+fn factory_presets(kind: Kind) -> Vec<(&'static str, Settings)> {
+    let d = Settings::document();
+    let f = Settings::photo();
+    let a = Adjustments::default();
+    match kind {
+        Kind::Document => vec![
+            (
+                "Testo per OCR (bianco e nero)",
+                Settings {
+                    colour: Colour::Lineart,
+                    adjust: Adjustments {
+                        adaptive: true,
+                        sharpen: 1.0,
+                        ..a
+                    },
+                    ..d
+                },
+            ),
+            (
+                "Documento a colori",
+                Settings {
+                    adjust: Adjustments {
+                        whites: 25.0,
+                        blacks: -10.0,
+                        ..a
+                    },
+                    ..d
+                },
+            ),
+            (
+                "Ricevuta / scontrino",
+                Settings {
+                    colour: Colour::Grey,
+                    adjust: Adjustments {
+                        contrast: 30.0,
+                        whites: 30.0,
+                        blacks: -25.0,
+                        ..a
+                    },
+                    ..d
+                },
+            ),
+            (
+                "Rivista / giornale",
+                Settings {
+                    adjust: Adjustments {
+                        descreen: 133.0,
+                        sharpen: 1.0,
+                        ..a
+                    },
+                    ..d
+                },
+            ),
+            (
+                "Archivio (600 dpi, senza perdita)",
+                Settings {
+                    dpi: 600,
+                    adjust: Adjustments { sharpen: 0.0, ..a },
+                    output: Output::TiffPages,
+                    ..d
+                },
+            ),
+        ],
+        Kind::Photo => vec![
+            (
+                "Foto standard",
+                Settings {
+                    adjust: Adjustments {
+                        vibrance: 10.0,
+                        sharpen: 1.0,
+                        ..a
+                    },
+                    ..f
+                },
+            ),
+            (
+                "Archivio foto (1200 dpi, TIFF)",
+                Settings {
+                    dpi: 1200,
+                    adjust: Adjustments { sharpen: 0.0, ..a },
+                    output: Output::Image(ImageFormat::Tiff),
+                    ..f
+                },
+            ),
+            (
+                "Foto sbiadita (recupero colori)",
+                Settings {
+                    adjust: Adjustments {
+                        contrast: 15.0,
+                        vibrance: 35.0,
+                        saturation: 10.0,
+                        blacks: -15.0,
+                        ..a
+                    },
+                    ..f
+                },
+            ),
+            (
+                "Foto in bianco e nero",
+                Settings {
+                    colour: Colour::Grey,
+                    adjust: Adjustments {
+                        contrast: 10.0,
+                        ..a
+                    },
+                    ..f
+                },
+            ),
+            (
+                "Foto stampata su rivista",
+                Settings {
+                    adjust: Adjustments {
+                        descreen: 150.0,
+                        sharpen: 1.0,
+                        ..a
+                    },
+                    ..f
+                },
+            ),
+        ],
     }
 }
 
@@ -670,10 +804,10 @@ impl Eq for Screen {}
 impl std::fmt::Display for Screen {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.0 as u32 {
-            0 => f.write_str("Nessuno"),
+            0 => f.write_str("Spento"),
             85 => f.write_str("Giornale (85 lpi)"),
             133 => f.write_str("Rivista (133 lpi)"),
-            150 => f.write_str("Rivista fine (150 lpi)"),
+            150 => f.write_str("Rivista patinata (150 lpi)"),
             175 => f.write_str("Stampa d'arte (175 lpi)"),
             n => write!(f, "{n} lpi"),
         }
@@ -865,7 +999,8 @@ enum Message {
     Undo,
     Redo,
     CurveChannel(CurveChannel),
-    CurvePoint(usize, f32),
+    /// New points of the curve of the channel shown.
+    CurveSet(Vec<[f32; 2]>),
     Descreen(Screen),
     Adaptive(bool),
     /// "Solo questa pagina" on or off for the page shown.
@@ -1366,7 +1501,7 @@ impl App {
             self.request()
         };
         if let (Some(worker), None) = (&self.worker, &self.busy) {
-            worker.send(Command::Scan(purpose, request));
+            worker.send(Command::Scan(purpose, Box::new(request)));
             self.busy = Some((purpose, None));
             self.eyedropper = false;
         }
@@ -1653,8 +1788,18 @@ impl App {
                 self.preset_name.clear();
             }
             Message::PresetApply(name) => {
-                if let Some(p) = self.presets.iter().find(|p| p.name == name) {
-                    let new = Settings::from_stored(self.kind, &p.setup);
+                let factory = factory_presets(self.kind)
+                    .into_iter()
+                    .find(|(n, _)| *n == name)
+                    .map(|(_, s)| s);
+                let user = self
+                    .presets
+                    .iter()
+                    .find(|p| p.name == name)
+                    .map(|p| Settings::from_stored(self.kind, &p.setup));
+                if let Some(mut new) = factory.or(user) {
+                    // The output folder behaviour stays the user's.
+                    new.auto_save = self.settings().auto_save;
                     self.change(|s| *s = new);
                     self.note = format!("Preset «{name}» applicato (Ctrl+Z per tornare indietro)");
                 }
@@ -1681,7 +1826,7 @@ impl App {
                 }
             }
             Message::CurveChannel(c) => self.curve_channel = c,
-            Message::CurvePoint(i, y) => {
+            Message::CurveSet(points) => {
                 let c = self.curve_channel.index();
                 // A drag is one step of Ctrl+Z.
                 let now = std::time::Instant::now();
@@ -1692,19 +1837,8 @@ impl App {
                     self.remember(None);
                 }
                 self.curve_drag = Some(now);
-                self.apply(|s| {
-                    let mut points = s.adjust.curve[c];
-                    points[i] = y;
-                    // Keep the points in order.
-                    for (k, p) in points.iter_mut().enumerate() {
-                        if k < i {
-                            *p = p.min(y);
-                        } else if k > i {
-                            *p = p.max(y);
-                        }
-                    }
-                    s.adjust.curve[c] = points;
-                });
+                let curve = hp3770_core::adjust::Curve::new(&points);
+                self.apply(|s| s.adjust.curve[c] = curve);
             }
             Message::Descreen(screen) => self.change(|s| s.adjust.descreen = screen.0),
             Message::Adaptive(on) => self.change(|s| s.adjust.adaptive = on),
@@ -2832,14 +2966,13 @@ impl App {
                 self.adjuster(Field::Sharpen, &s),
                 self.adjuster(Field::Noise, &s),
                 labelled(
-                    "Antiretino",
+                    "Descreening",
                     pick_list(SCREENS, Some(Screen(s.adjust.descreen)), Message::Descreen)
                         .width(Length::Fill)
                         .text_size(13)
                         .into()
                 ),
-                text("Per riviste e giornali: toglie il retino della stampa (effetto moiré).")
-                    .size(11),
+                text("Rimuove il retino di stampa di riviste e giornali (effetto moiré).").size(11),
             ]
             .spacing(8)
             .into(),
@@ -2872,6 +3005,18 @@ impl App {
         } else {
             0
         };
+        let curve_preset = |label: &'static str, c: hp3770_core::adjust::Curve| {
+            button(text(label).size(11))
+                .padding([3, 8])
+                .style(button::secondary)
+                .on_press(Message::CurveSet(c.points().to_vec()))
+        };
+        let curve_histogram = if self.editing_page() {
+            self.shown().map(|p| &p.shown)
+        } else {
+            self.preview.as_ref().map(|(_, s, _)| s)
+        }
+        .and_then(|img| Histogram::of(img).levels());
         let curve_group = self.group(
             Group::Curve,
             "Curva",
@@ -2880,14 +3025,31 @@ impl App {
             column![
                 tabs,
                 canvas(curve::Editor {
-                    points: s.adjust.curve[channel],
+                    curve: s.adjust.curve[channel],
                     colour: curve_colour,
-                    on_change: Message::CurvePoint,
+                    histogram: curve_histogram,
+                    on_change: Message::CurveSet,
                 })
                 .width(Length::Fill)
-                .height(200),
-                text("Trascina i punti in su o in giù: a sinistra le ombre, a destra le luci.")
-                    .size(11),
+                .height(220),
+                row![
+                    curve_preset("Lineare", hp3770_core::adjust::Curve::IDENTITY),
+                    curve_preset(
+                        "Contrasto medio",
+                        hp3770_core::adjust::Curve::MEDIUM_CONTRAST
+                    ),
+                    curve_preset(
+                        "Contrasto forte",
+                        hp3770_core::adjust::Curve::STRONG_CONTRAST
+                    ),
+                ]
+                .spacing(4),
+                text(
+                    "Clic per aggiungere un punto (fino a 16), trascina per spostarlo, \
+                     doppio clic o trascina fuori per toglierlo. Gli estremi sono il punto \
+                     del nero e del bianco."
+                )
+                .size(11),
             ]
             .spacing(6)
             .into(),
@@ -2910,13 +3072,13 @@ impl App {
             .spacing(8)
             .into(),
         );
-        let names: Vec<String> = self.presets.iter().map(|p| p.name.clone()).collect();
+        let names: Vec<String> = factory_presets(self.kind)
+            .into_iter()
+            .map(|(n, _)| n.to_string())
+            .chain(self.presets.iter().map(|p| p.name.clone()))
+            .collect();
         let mut presets = column![row![pick_list(names, None::<String>, Message::PresetApply)
-            .placeholder(if self.presets.is_empty() {
-                "Nessun preset salvato"
-            } else {
-                "Applica un preset…"
-            })
+            .placeholder("Applica un preset…")
             .text_size(13)
             .width(Length::Fill),]]
         .spacing(6);

@@ -37,10 +37,8 @@ pub struct Adjustments {
     pub blacks: f32,
     /// Vibrance, −100 to 100: saturation that spares colours already vivid.
     pub vibrance: f32,
-    /// Tone curve: the output (0-1) at inputs ¼, ½ and ¾, for all channels
-    /// together, then red, green and blue. `CURVE_IDENTITY` leaves the
-    /// tones alone.
-    pub curve: [[f32; 3]; 4],
+    /// Tone curves for all channels together, then red, green and blue.
+    pub curve: [Curve; 4],
     /// Noise reduction, 0-100: smooths small differences, keeps edges.
     pub noise: f32,
     /// Screen of printed matter to remove (descreen), in lines per inch;
@@ -77,7 +75,7 @@ impl Default for Adjustments {
             whites: 0.0,
             blacks: 0.0,
             vibrance: 0.0,
-            curve: [CURVE_IDENTITY; 4],
+            curve: [Curve::IDENTITY; 4],
             noise: 0.0,
             descreen: 0.0,
             adaptive: false,
@@ -92,8 +90,133 @@ impl Default for Adjustments {
     }
 }
 
-/// The points of a curve that changes nothing.
-pub const CURVE_IDENTITY: [f32; 3] = [0.25, 0.5, 0.75];
+/// A tone curve: 2 to [`Curve::MAX`] points (input, output), both 0-1,
+/// in order of input, the first and last being the black and white
+/// points. Between the points it is a monotone cubic (Fritsch-Carlson):
+/// it never overshoots, so it never inverts tones (the solarization of
+/// ordinary splines); outside them it is flat.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Curve {
+    len: u8,
+    points: [[f32; 2]; Curve::MAX],
+}
+
+impl Curve {
+    /// Most points of a curve, as Photoshop (14 plus the two ends).
+    pub const MAX: usize = 16;
+
+    /// The curve that changes nothing.
+    pub const IDENTITY: Curve = Curve::fixed([[0.0, 0.0], [1.0, 1.0]]);
+
+    /// A gentle S: shadows a little darker, highlights a little lighter.
+    pub const MEDIUM_CONTRAST: Curve =
+        Curve::fixed4([[0.0, 0.0], [0.25, 0.215], [0.75, 0.785], [1.0, 1.0]]);
+
+    /// A stronger S.
+    pub const STRONG_CONTRAST: Curve =
+        Curve::fixed4([[0.0, 0.0], [0.25, 0.16], [0.75, 0.84], [1.0, 1.0]]);
+
+    const fn fixed(p: [[f32; 2]; 2]) -> Curve {
+        let mut points = [[0.0; 2]; Curve::MAX];
+        points[0] = p[0];
+        points[1] = p[1];
+        Curve { len: 2, points }
+    }
+
+    const fn fixed4(p: [[f32; 2]; 4]) -> Curve {
+        let mut points = [[0.0; 2]; Curve::MAX];
+        points[0] = p[0];
+        points[1] = p[1];
+        points[2] = p[2];
+        points[3] = p[3];
+        Curve { len: 4, points }
+    }
+
+    /// A curve through `points` (sorted, kept within 0-1, two points never
+    /// at the same input, at most [`Curve::MAX`]). Fewer than two points
+    /// give the identity.
+    pub fn new(points: &[[f32; 2]]) -> Curve {
+        let mut v: Vec<[f32; 2]> = points
+            .iter()
+            .map(|p| [p[0].clamp(0.0, 1.0), p[1].clamp(0.0, 1.0)])
+            .collect();
+        v.sort_by(|a, b| a[0].total_cmp(&b[0]));
+        v.dedup_by(|a, b| (a[0] - b[0]).abs() < 1e-3);
+        if v.len() < 2 {
+            return Curve::IDENTITY;
+        }
+        v.truncate(Curve::MAX);
+        let mut out = [[0.0; 2]; Curve::MAX];
+        out[..v.len()].copy_from_slice(&v);
+        Curve {
+            len: v.len() as u8,
+            points: out,
+        }
+    }
+
+    /// The points.
+    pub fn points(&self) -> &[[f32; 2]] {
+        &self.points[..usize::from(self.len)]
+    }
+
+    pub fn is_identity(&self) -> bool {
+        self.points() == Curve::IDENTITY.points()
+    }
+
+    /// The output at input `t`.
+    pub fn eval(&self, t: f32) -> f32 {
+        if self.is_identity() {
+            return t;
+        }
+        let p = self.points();
+        let n = p.len();
+        let t = t.clamp(0.0, 1.0);
+        if t <= p[0][0] {
+            return p[0][1];
+        }
+        if t >= p[n - 1][0] {
+            return p[n - 1][1];
+        }
+        // Secant slopes, then tangents limited so that each piece stays
+        // monotone (Fritsch-Carlson).
+        let d: Vec<f32> = (0..n - 1)
+            .map(|i| (p[i + 1][1] - p[i][1]) / (p[i + 1][0] - p[i][0]))
+            .collect();
+        let mut m = vec![0.0f32; n];
+        m[0] = d[0];
+        m[n - 1] = d[n - 2];
+        for i in 1..n - 1 {
+            m[i] = if d[i - 1] * d[i] <= 0.0 {
+                0.0
+            } else {
+                (d[i - 1] + d[i]) / 2.0
+            };
+        }
+        for i in 0..n - 1 {
+            if d[i] == 0.0 {
+                m[i] = 0.0;
+                m[i + 1] = 0.0;
+            } else {
+                let (a, b) = (m[i] / d[i], m[i + 1] / d[i]);
+                let r = a * a + b * b;
+                if r > 9.0 {
+                    let k = 3.0 / r.sqrt();
+                    m[i] = k * a * d[i];
+                    m[i + 1] = k * b * d[i];
+                }
+            }
+        }
+        let i = (0..n - 1).find(|&i| t < p[i + 1][0]).unwrap_or(n - 2);
+        let h = p[i + 1][0] - p[i][0];
+        let u = (t - p[i][0]) / h;
+        let (u2, u3) = (u * u, u * u * u);
+        let v = (2.0 * u3 - 3.0 * u2 + 1.0) * p[i][1]
+            + (u3 - 2.0 * u2 + u) * h * m[i]
+            + (-2.0 * u3 + 3.0 * u2) * p[i + 1][1]
+            + (u3 - u2) * h * m[i + 1];
+        v.clamp(0.0, 1.0)
+    }
+}
 
 /// How strongly temperature and tint move the channels at ±100.
 const BALANCE_RANGE: f32 = 0.35;
@@ -151,56 +274,11 @@ impl Adjustments {
                 let v = 255.0 * v.powf(1.0 / gamma);
                 let v = (v - 128.0) * contrast + 128.0 + brightness;
                 let v = (v / 255.0).clamp(0.0, 1.0);
-                let v = curve(&self.curve[0], curve(&self.curve[c + 1], v));
+                let v = self.curve[0].eval(self.curve[c + 1].eval(v));
                 (v * 255.0).round().clamp(0.0, 255.0) as u8
             })
         })
     }
-}
-
-/// A tone curve through (0, 0), (¼, y0), (½, y1), (¾, y2) and (1, 1),
-/// monotone cubic (Fritsch-Carlson): no overshoot between the points.
-pub fn curve(points: &[f32; 3], t: f32) -> f32 {
-    if *points == CURVE_IDENTITY {
-        return t;
-    }
-    let xs = [0.0, 0.25, 0.5, 0.75, 1.0];
-    let ys = [0.0, points[0], points[1], points[2], 1.0];
-    let d: Vec<f32> = (0..4).map(|i| (ys[i + 1] - ys[i]) / 0.25).collect();
-    let mut m = [0.0f32; 5];
-    m[0] = d[0];
-    m[4] = d[3];
-    for i in 1..4 {
-        m[i] = if d[i - 1] * d[i] <= 0.0 {
-            0.0
-        } else {
-            (d[i - 1] + d[i]) / 2.0
-        };
-    }
-    for i in 0..4 {
-        if d[i] == 0.0 {
-            m[i] = 0.0;
-            m[i + 1] = 0.0;
-        } else {
-            let (a, b) = (m[i] / d[i], m[i + 1] / d[i]);
-            let n = a * a + b * b;
-            if n > 9.0 {
-                let k = 3.0 / n.sqrt();
-                m[i] = k * a * d[i];
-                m[i + 1] = k * b * d[i];
-            }
-        }
-    }
-    let t = t.clamp(0.0, 1.0);
-    let i = ((t / 0.25) as usize).min(3);
-    let h = 0.25;
-    let u = (t - xs[i]) / h;
-    let (u2, u3) = (u * u, u * u * u);
-    let v = (2.0 * u3 - 3.0 * u2 + 1.0) * ys[i]
-        + (u3 - 2.0 * u2 + u) * h * m[i]
-        + (-2.0 * u3 + 3.0 * u2) * ys[i + 1]
-        + (u3 - u2) * h * m[i + 1];
-    v.clamp(0.0, 1.0)
 }
 
 /// Box blur of radius `r` across and down, `channels` samples per pixel.
@@ -490,9 +568,9 @@ pub fn render(
                 tint: 0.0,
                 curve: [
                     adjustments.curve[0],
-                    CURVE_IDENTITY,
-                    CURVE_IDENTITY,
-                    CURVE_IDENTITY,
+                    Curve::IDENTITY,
+                    Curve::IDENTITY,
+                    Curve::IDENTITY,
                 ],
                 ..*adjustments
             }
@@ -614,17 +692,31 @@ mod tests {
     fn curve_is_identity_by_default_and_monotone() {
         for i in 0..=20 {
             let t = i as f32 / 20.0;
-            assert_eq!(curve(&CURVE_IDENTITY, t), t);
+            assert_eq!(Curve::IDENTITY.eval(t), t);
         }
-        // An S curve: darker shadows, lighter highlights, never backwards.
-        let s = [0.18, 0.5, 0.82];
-        assert!(curve(&s, 0.25) < 0.2 && curve(&s, 0.75) > 0.8);
-        let mut last = 0.0;
-        for i in 0..=100 {
-            let v = curve(&s, i as f32 / 100.0);
-            assert!(v >= last - 1e-6);
-            last = v;
+        for c in [Curve::MEDIUM_CONTRAST, Curve::STRONG_CONTRAST] {
+            assert!(c.eval(0.25) < 0.25 && c.eval(0.75) > 0.75);
+            let mut last = 0.0;
+            for i in 0..=200 {
+                let v = c.eval(i as f32 / 200.0);
+                assert!(v >= last - 1e-6, "monotone");
+                last = v;
+            }
         }
+        // It goes through its points.
+        let c = Curve::new(&[[0.0, 0.1], [0.3, 0.5], [0.6, 0.55], [1.0, 0.9]]);
+        for p in c.points() {
+            assert!((c.eval(p[0]) - p[1]).abs() < 1e-5);
+        }
+        // Flat outside the end points (black and white point moved in).
+        let c = Curve::new(&[[0.1, 0.0], [0.9, 1.0]]);
+        assert_eq!((c.eval(0.05), c.eval(0.95)), (0.0, 1.0));
+        // Sorted, deduplicated, at most 16 points, at least 2.
+        let many: Vec<[f32; 2]> = (0..30)
+            .map(|i| [i as f32 / 29.0, i as f32 / 29.0])
+            .collect();
+        assert_eq!(Curve::new(&many).points().len(), Curve::MAX);
+        assert_eq!(Curve::new(&[[0.5, 0.5]]), Curve::IDENTITY);
     }
 
     #[test]

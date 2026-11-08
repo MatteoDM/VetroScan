@@ -24,7 +24,7 @@ pub enum Command {
     /// Read the scanner state.
     Status,
     /// Make a scan.
-    Scan(Purpose, Request),
+    Scan(Purpose, Box<Request>),
 }
 
 /// Why a scan is made: the interface puts the image in different places.

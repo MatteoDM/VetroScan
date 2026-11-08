@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// The adjustments, as stored.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct StoredAdjust {
     pub temperature: f32,
@@ -21,7 +21,9 @@ pub struct StoredAdjust {
     pub whites: f32,
     pub blacks: f32,
     pub vibrance: f32,
-    pub curve: [[f32; 3]; 4],
+    /// Points (input, output) of the curves: all channels, red, green,
+    /// blue.
+    pub curve_points: Vec<Vec<[f32; 2]>>,
     pub noise: f32,
     pub descreen: f32,
     pub adaptive: bool,
@@ -46,7 +48,7 @@ impl Default for StoredAdjust {
             whites: a.whites,
             blacks: a.blacks,
             vibrance: a.vibrance,
-            curve: a.curve,
+            curve_points: a.curve.iter().map(|c| c.points().to_vec()).collect(),
             noise: a.noise,
             descreen: a.descreen,
             adaptive: a.adaptive,

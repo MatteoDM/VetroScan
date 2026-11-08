@@ -46,6 +46,17 @@ impl Histogram {
         (share(0), share(255))
     }
 
+    /// The counts of the mean level of the channels (for the curve).
+    pub fn levels(&self) -> Option<[u32; 256]> {
+        if self.channels.is_empty() {
+            return None;
+        }
+        let n = self.channels.len() as u32;
+        Some(std::array::from_fn(|i| {
+            self.channels.iter().map(|c| c[i]).sum::<u32>() / n
+        }))
+    }
+
     /// Is there anything to draw.
     pub fn is_empty(&self) -> bool {
         self.channels.is_empty()
