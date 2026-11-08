@@ -39,12 +39,13 @@ pub struct Request {
     /// Bits per sample asked of the chip: 8, or 16 (the samples are then
     /// also in [`Report::samples16`]).
     pub depth: u8,
-    /// Experimental: scan with the transparency adapter's lamp, switched on
-    /// after the usual calibration (on the white strip, with the flatbed
-    /// lamp) and given [`TMA_WARMUP`]; at the end it is switched off and the
-    /// flatbed lamp on again, as hp3900 does. For finding where the
-    /// adapter's light falls on the glass, not for pictures: the
-    /// calibration of the adapter is not done yet.
+    /// Scan with the transparency adapter: its lamp switched on and given
+    /// [`TMA_WARMUP`], the calibration on its slot without film
+    /// ([`Chip::calibrate_transparency`]); at the end its lamp is switched
+    /// off and the flatbed lamp on again, as hp3900 does. The area is still
+    /// one of the glass (the adapter's is in
+    /// [`crate::profile::Transparency::area`]). Experimental: checked on
+    /// one scanner, no capture of the HP driver to compare with.
     pub transparency: bool,
 }
 
@@ -164,10 +165,27 @@ pub fn scan<T: Transport>(
         }
         std::thread::sleep(LAMP_WARMUP);
     }
+    if request.transparency {
+        chip.lamp_transparency(&mut init, true)?;
+        if !progress(Stage::WarmingUp) {
+            chip.lamp_transparency(&mut init, false)?;
+            chip.lamp_flatbed(&mut init, true)?;
+            return Err(Error::Cancelled("lamp warm-up"));
+        }
+        std::thread::sleep(TMA_WARMUP);
+    }
     if !progress(Stage::Calibrating) {
+        if request.transparency {
+            chip.lamp_transparency(&mut init, false)?;
+            chip.lamp_flatbed(&mut init, true)?;
+        }
         return Err(Error::Cancelled("calibration"));
     }
-    let calibration = chip.calibrate(&mut init, profile, &params)?;
+    let calibration = if request.transparency {
+        chip.calibrate_transparency(&mut init, profile, &params)?
+    } else {
+        chip.calibrate(&mut init, profile, &params)?
+    };
     let mut report = Report {
         warmed_up: !link.lamp_was_on,
         gains: calibration.gain_offset.gain,
@@ -181,15 +199,6 @@ pub fn scan<T: Transport>(
         samples16: None,
     };
     let tables = calibration.tables(Some(&gamma));
-    if request.transparency {
-        chip.lamp_transparency(&mut init, true)?;
-        if !progress(Stage::WarmingUp) {
-            chip.lamp_transparency(&mut init, false)?;
-            chip.lamp_flatbed(&mut init, true)?;
-            return Err(Error::Cancelled("lamp warm-up"));
-        }
-        std::thread::sleep(TMA_WARMUP);
-    }
     if request.fast_travel {
         if let Some((steps, top)) = fast_travel(profile, params.resolution_y, params.top) {
             chip.motor_move(

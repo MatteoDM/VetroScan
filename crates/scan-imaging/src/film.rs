@@ -58,6 +58,10 @@ pub const TONE: Tone = Tone {
 /// white.
 pub const NEGATIVE_GAMMA: f32 = 0.6;
 
+/// The widest range of light a positive spans, in decades: a photographic
+/// print's, about 100:1.
+const MAX_RANGE: f32 = 2.0;
+
 /// A 35 mm frame, along the strip and across it, in millimetres.
 pub const FRAME_MM: [f32; 2] = [36.0, 24.0];
 
@@ -112,6 +116,61 @@ pub fn base_in(samples: &[u16], image_width: usize, rect: [usize; 4]) -> Option<
             let i = (row * image_width + col) * 3;
             for (c, values) in channels.iter_mut().enumerate() {
                 values.push(samples[i + c]);
+            }
+        }
+    }
+    if channels[0].is_empty() {
+        return None;
+    }
+    Some(channels.map(|mut v| {
+        let mid = v.len() / 2;
+        transmission(*v.select_nth_unstable(mid).1)
+    }))
+}
+
+/// The film base in the gaps between frames of a strip: the median of the
+/// samples between each two consecutive `frames` (in pixels of the linear
+/// RGB `samples`, `image_width` pixels wide, as [`frames`] gives them),
+/// over the middle half of the gap along the strip and of the frames'
+/// breadth across it. The gaps are bare film, never exposed: unlike
+/// [`base_auto`], light leaking past the film's edges cannot pass for it.
+/// `None` with fewer than two frames or no gap between them.
+pub fn base_between(samples: &[u16], image_width: usize, frames: &[Found]) -> Option<[f32; 3]> {
+    let height = samples.len() / 3 / image_width.max(1);
+    let mut channels: [Vec<u16>; 3] = Default::default();
+    for pair in frames.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        let (dx, dy) = (b.cx - a.cx, b.cy - a.cy);
+        let distance = (dx * dx + dy * dy).sqrt();
+        if distance <= 0.0 {
+            continue;
+        }
+        let (ux, uy) = (dx / distance, dy / distance);
+        // The frames' length along the line joining them, and breadth.
+        let along_u = (ux * a.angle.to_radians().cos() + uy * a.angle.to_radians().sin()).abs();
+        let (length, breadth) = if along_u > 0.7 {
+            (a.width, a.height)
+        } else {
+            (a.height, a.width)
+        };
+        let gap = distance - length;
+        if gap < 2.0 {
+            continue;
+        }
+        let (mx, my) = ((a.cx + b.cx) / 2.0, (a.cy + b.cy) / 2.0);
+        let (half_along, half_across) = (gap / 4.0, breadth / 4.0);
+        let reach = (half_along.max(half_across) + 1.0) as i64;
+        for y in (my as i64 - reach).max(0)..=(my as i64 + reach).min(height as i64 - 1) {
+            for x in (mx as i64 - reach).max(0)..=(mx as i64 + reach).min(image_width as i64 - 1) {
+                let (px, py) = (x as f32 + 0.5 - mx, y as f32 + 0.5 - my);
+                let along = px * ux + py * uy;
+                let across = -px * uy + py * ux;
+                if along.abs() <= half_along && across.abs() <= half_across {
+                    let i = (y as usize * image_width + x as usize) * 3;
+                    for (c, values) in channels.iter_mut().enumerate() {
+                        values.push(samples[i + c]);
+                    }
+                }
             }
         }
     }
@@ -214,11 +273,13 @@ impl Negative {
         Some(Negative { base, high, black })
     }
 
-    /// The range of the scene's light the negative holds, in decades
-    /// (log10 units; 2 is 100:1, about 6.6 stops).
+    /// The range of light the positive spans, in decades (log10 units; 2 is
+    /// 100:1, about 6.6 stops): the scene's range the negative holds, at
+    /// most 2, the range of a photographic print (a first scan of real
+    /// negatives with up to 3 came out with the midtones in the shadows).
     pub fn scene_range(&self) -> f32 {
         let high = self.high.iter().sum::<f32>() / 3.0;
-        (high * (1.0 - self.black) / NEGATIVE_GAMMA).clamp(1.0, 3.0)
+        (high * (1.0 - self.black) / NEGATIVE_GAMMA).clamp(1.0, MAX_RANGE)
     }
 
     /// The positive of linear RGB `samples`: linear 16-bit samples of the
@@ -439,20 +500,68 @@ fn strip_frames(image: &Image, strip: &Found, mm: f32) -> Vec<Found> {
         }
         samples.push(line);
     }
-    let flat: Vec<u16> = samples.iter().flatten().flatten().copied().collect();
-    let Some(base) = base_auto(&flat) else {
-        return Vec::new();
-    };
-    let base_log = base.map(f32::log10);
-    // How much of each line is bare base.
-    let bare: Vec<f32> = samples
+    // How much each line looks like a gap: bare base is even across the
+    // strip, and among the least dense film nearby. Judged against the
+    // lines within 20 mm, not against one colour of the base: the
+    // adapter's light is not even along the strip (on the HP 3770 the
+    // middle of the holder gets about 1.3 times the light of its top), and
+    // light leaking past the film's edges is less dense than any base.
+    let median_log: Vec<Option<[f32; 3]>> = samples
         .iter()
         .map(|line| {
+            if line.is_empty() {
+                return None;
+            }
+            Some(std::array::from_fn(|c| {
+                let mut v: Vec<u16> = line.iter().map(|p| p[c]).collect();
+                let mid = v.len() / 2;
+                transmission(*v.select_nth_unstable(mid).1).log10()
+            }))
+        })
+        .collect();
+    let even: Vec<f32> = samples
+        .iter()
+        .zip(&median_log)
+        .map(|(line, m)| {
+            let Some(m) = m else { return 0.0 };
             let on = line
                 .iter()
-                .filter(|p| (0..3).all(|c| (transmission(p[c]).log10() - base_log[c]).abs() < 0.06))
+                .filter(|p| (0..3).all(|c| (transmission(p[c]).log10() - m[c]).abs() < 0.05))
                 .count();
             on as f32 / line.len().max(1) as f32
+        })
+        .collect();
+    let light: Vec<f32> = median_log
+        .iter()
+        .map(|m| m.map_or(f32::MIN, |m| m.iter().sum::<f32>()))
+        .collect();
+    // The least dense film of each line: the light of its brightest tenth
+    // of pixels (a few leaking pixels do not reach it).
+    let line_top: Vec<f32> = samples
+        .iter()
+        .map(|line| {
+            let mut v: Vec<f32> = line
+                .iter()
+                .map(|p| (0..3).map(|c| transmission(p[c]).log10()).sum::<f32>())
+                .collect();
+            if v.is_empty() {
+                return f32::MIN;
+            }
+            let k = (v.len() * 9 / 10).min(v.len() - 1);
+            *v.select_nth_unstable_by(k, f32::total_cmp).1
+        })
+        .collect();
+    let near = (20.0 * mm / step) as usize;
+    let bare: Vec<f32> = (0..lines)
+        .map(|j| {
+            let around = &line_top[j.saturating_sub(near)..(j + near + 1).min(lines)];
+            let brightest = around.iter().copied().fold(f32::MIN, f32::max);
+            // Within 0.1 of density per channel of the least dense film.
+            if light[j] >= brightest - 0.3 {
+                even[j]
+            } else {
+                0.0
+            }
         })
         .collect();
     let bare_at = |t: f32| -> f32 {
@@ -684,6 +793,57 @@ mod tests {
         for c in 0..3 {
             assert!((base[c] - MASK[c]).abs() < 0.005, "{base:?}");
         }
+    }
+
+    #[test]
+    fn the_base_between_frames() {
+        // 40 x 10 pixels: two frames of picture, the base between them, and
+        // a bright leak inside the first frame that must not count.
+        let (w, h) = (40, 10);
+        let base = [30000u16, 10000, 8000];
+        let mut samples = vec![0u16; w * h * 3];
+        for y in 0..h {
+            for x in 0..w {
+                let i = (y * w + x) * 3;
+                let p = if (17..23).contains(&x) {
+                    base
+                } else if x == 3 {
+                    [60000, 60000, 60000]
+                } else {
+                    [5000, 3000, 2000]
+                };
+                samples[i..i + 3].copy_from_slice(&p);
+            }
+        }
+        let frame = |cx: f32| Found {
+            cx,
+            cy: 5.0,
+            width: 16.0,
+            height: 10.0,
+            angle: 0.0,
+        };
+        let got = base_between(&samples, w, &[frame(8.0), frame(32.0)]).unwrap();
+        assert_eq!(got.map(|t| (t * FULL).round() as u16), base);
+        assert_eq!(base_between(&samples, w, &[frame(8.0)]), None);
+        // Strips standing up: the same along y.
+        let frame_v = |cy: f32| Found {
+            cx: 5.0,
+            cy,
+            width: 10.0,
+            height: 16.0,
+            angle: 0.0,
+        };
+        let turned: Vec<u16> = (0..w)
+            .flat_map(|x| (0..h).flat_map(move |y| [y, x]))
+            .collect::<Vec<usize>>()
+            .chunks(2)
+            .flat_map(|yx| {
+                let i = (yx[0] * w + yx[1]) * 3;
+                [samples[i], samples[i + 1], samples[i + 2]]
+            })
+            .collect();
+        let got = base_between(&turned, h, &[frame_v(8.0), frame_v(32.0)]).unwrap();
+        assert_eq!(got.map(|t| (t * FULL).round() as u16), base);
     }
 
     #[test]

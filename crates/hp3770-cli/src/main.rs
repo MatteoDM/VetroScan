@@ -69,20 +69,25 @@ enum Command {
         #[arg(value_parser = clap::value_parser!(u16).range(1..=600))]
         steps: u16,
     },
-    /// Experimental: scan the whole glass with the transparency adapter's
-    /// lamp, to see where its light falls.
+    /// Experimental: scan slides or negatives with the transparency adapter.
     ///
-    /// Calibrates on the white strip with the flatbed lamp as usual, then
-    /// switches to the adapter's lamp, waits 30 s for it to warm up and
-    /// scans in colour (linear samples, no tone curve). The colours are
-    /// those of the flatbed calibration: only the place of the light
-    /// counts. Remove the lid's white backing first.
-    TmaPreview {
+    /// Switches the adapter's lamp on and lets it warm up for 30 s,
+    /// calibrates on the slot without film at the top of the adapter, and
+    /// scans the adapter's whole area in colour at 16 bits. Saves the
+    /// picture (NAME.png) and the chip's samples (NAME-16bit.png). With
+    /// --film the picture is the positive (`scan_imaging::film`), measured
+    /// on the frames found in the holder (`film::frames`); without, the
+    /// light as it came through.
+    /// Remove the lid's white backing first.
+    TmaScan {
         /// Output file (PNG, or PPM if the name ends in .ppm).
         output: PathBuf,
-        /// Resolution: 200 or 300 dpi.
+        /// Resolution: 200, 300, 600, 1200 or 2400 dpi.
         #[arg(long, default_value_t = 200)]
         dpi: u16,
+        /// What is in the holder.
+        #[arg(long, value_enum)]
+        film: Option<FilmArg>,
     },
     /// Switch the flatbed lamp, or the transparency adapter's, on or off.
     ///
@@ -227,8 +232,8 @@ fn main() -> ExitCode {
                 depth,
             )
         }
-        Command::TmaPreview { output, dpi } => {
-            open(cli.backend).and_then(|s| tma_preview(s, &output, dpi))
+        Command::TmaScan { output, dpi, film } => {
+            open(cli.backend).and_then(|s| tma_scan(s, &output, dpi, film))
         }
         Command::Detect { input, crop } => detect(&input, crop.as_deref()),
         Command::Buttons { count, method, raw } => {
@@ -546,42 +551,62 @@ fn save_image(
     Ok(())
 }
 
-fn tma_preview(scanner: Scanner, output: &std::path::Path, dpi: u16) -> CliResult {
-    use hp3770_core::geometry::{Area, GLASS_INCHES};
+/// What is in the adapter's holder (`tma-scan --film`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum FilmArg {
+    /// Slides: positives.
+    Slide,
+    /// Negatives, colour or black and white.
+    Negative,
+}
+
+fn tma_scan(
+    scanner: Scanner,
+    output: &std::path::Path,
+    dpi: u16,
+    film: Option<FilmArg>,
+) -> CliResult {
+    use hp3770_core::geometry::Area;
     use hp3770_core::session::{self, Request, Stage, TMA_WARMUP};
-    if dpi != 200 && dpi != 300 {
-        return Err("tma-preview takes 200 or 300 dpi".into());
-    }
+    use scan_imaging::adjust::{render_samples, Adjustments, Samples};
+    use scan_imaging::film::{self, Film, Negative, Slide};
+    let profile = &hp3770_core::profile::HP3770;
+    let adapter = profile
+        .transparency
+        .as_ref()
+        .ok_or("this scanner has no transparency adapter")?;
     let mut chip = Chip::new(scanner);
     if !chip.status()?.tma_attached {
         return Err("the transparency adapter is not plugged in".into());
     }
-    let profile = &hp3770_core::profile::HP3770;
-    let area = Area::from_mm(dpi, 0.0, 0.0, GLASS_INCHES.0 * 25.4, GLASS_INCHES.1 * 25.4);
+    let mm = |tenths: u16| f64::from(tenths) / 10.0;
+    let [left, top, width, height] = adapter.area.map(mm);
+    let area = Area::from_mm(dpi, left, top, width, height);
     let request = Request {
         linear: true,
         transparency: true,
-        adjust: scan_imaging::adjust::Adjustments {
+        depth: 16,
+        adjust: Adjustments {
             sharpen: 0.0,
             ..Default::default()
         },
         ..Request::new(dpi, area, scan_imaging::Mode::Colour)
     };
     let start = Instant::now();
-    let mut calibrated = false;
+    let mut calibrating = false;
     let mut last_percent = None;
     let (image, report) = session::scan(&mut chip, profile, &request, &mut |stage| {
         match stage {
             Stage::Starting => eprintln!("starting"),
-            Stage::WarmingUp if calibrated => eprintln!(
+            Stage::WarmingUp => eprintln!(
                 "TMA lamp         on, warming up for {} s",
                 TMA_WARMUP.as_secs()
             ),
-            Stage::WarmingUp => eprintln!("lamp             was off, warming up"),
-            Stage::Calibrating => {
-                calibrated = true;
-                eprintln!("calibrating      (flatbed lamp, white strip)");
+            Stage::Calibrating if !calibrating => {
+                calibrating = true;
+                eprintln!("calibrating      (adapter's lamp, slot without film)");
             }
+            Stage::Calibrating => {}
             Stage::Scanning { done, total } => {
                 let percent = done * 100 / total.max(1) / 10 * 10;
                 if last_percent != Some(percent) {
@@ -589,16 +614,118 @@ fn tma_preview(scanner: Scanner, output: &std::path::Path, dpi: u16) -> CliResul
                     eprintln!("scanning         {percent} %");
                 }
             }
-            Stage::Finishing => eprintln!("finishing        (flatbed lamp on again)"),
+            Stage::Finishing => eprintln!("finishing        (adapter's lamp off)"),
         }
         true
     })?;
-    eprintln!("gains            {:?}", report.gains);
-    save_image(output, image.width, image.height, &image.data, image.format)?;
-    println!(
-        "scanned          {} x {} pixels in {:.1} s",
+    eprintln!(
+        "calibration      offsets {:?}, gains {:?}",
+        report.offsets, report.gains
+    );
+    let samples = report.samples16.ok_or("no 16-bit samples")?;
+    save_png16(output, image.width, image.height, &samples)?;
+    // How much light the calibration made of the slot without film (its
+    // middle third, 65535 = the lamp at full scale).
+    let px = |tenths: u16| (f64::from(tenths) / 254.0 * f64::from(dpi)) as usize;
+    let rows = px(adapter.slot[1].saturating_sub(adapter.area[1]))
+        ..px((adapter.slot[1] + adapter.slot[3]).saturating_sub(adapter.area[1]));
+    let cols = image.width / 3..image.width * 2 / 3;
+    let mut slot = [0u64; 3];
+    let mut n = 0u64;
+    for y in rows.start + (rows.end - rows.start) / 3..rows.end - (rows.end - rows.start) / 3 {
+        for x in cols.clone() {
+            let i = (y.min(image.height - 1) * image.width + x) * 3;
+            for (c, s) in slot.iter_mut().enumerate() {
+                *s += u64::from(samples[i + c]);
+            }
+            n += 1;
+        }
+    }
+    eprintln!("slot             {:?} of 65535", slot.map(|s| s / n.max(1)));
+    // The film: the frames found in the holder, else everything below the
+    // slot.
+    let kind = match film {
+        Some(FilmArg::Slide) => Film::Slide,
+        _ => Film::Negative,
+    };
+    let frames = film::frames(&image, kind);
+    eprintln!("frames found     {}", frames.len());
+    for f in &frames {
+        let mm = |px: f32| px * 25.4 / f32::from(dpi);
+        eprintln!(
+            "  frame          centre {:.1} x {:.1} mm, {:.1} x {:.1} mm, {:.1} degrees",
+            mm(f.cx),
+            mm(f.cy),
+            mm(f.width),
+            mm(f.height),
+            f.angle
+        );
+    }
+    // The base in the gaps between frames; the levels inside the frames,
+    // a twentieth in from each side (away from the holder's edges).
+    let base = film::base_between(&samples, image.width, &frames);
+    let inner: Vec<_> = frames
+        .iter()
+        .map(|f| scan_imaging::detect::Found {
+            width: f.width * 0.9,
+            height: f.height * 0.9,
+            ..*f
+        })
+        .collect();
+    let film_part: Vec<u16> = if frames.is_empty() {
+        let skip = (rows.end.min(image.height) * image.width * 3).min(samples.len());
+        samples[skip..].to_vec()
+    } else {
+        let mut v = Vec::new();
+        for y in 0..image.height {
+            for x in 0..image.width {
+                let (cx, cy) = (x as f32 + 0.5, y as f32 + 0.5);
+                if inner.iter().any(|f| f.contains(cx, cy)) {
+                    let i = (y * image.width + x) * 3;
+                    v.extend_from_slice(&samples[i..i + 3]);
+                }
+            }
+        }
+        v
+    };
+    let film_part = &film_part[..];
+    let picture = match film {
+        None => samples,
+        Some(FilmArg::Negative) => {
+            let n = Negative::measure(film_part, base).ok_or("too little film in the scan")?;
+            eprintln!(
+                "negative         base {:.3?}, highlights {:.2?}, black {:.2}, range {:.1}",
+                n.base,
+                n.high,
+                n.black,
+                n.scene_range()
+            );
+            n.positive(&samples)
+        }
+        Some(FilmArg::Slide) => {
+            let s = Slide::measure(film_part).ok_or("too little film in the scan")?;
+            eprintln!("slide            black {}, white {}", s.black, s.white);
+            s.positive(&samples)
+        }
+    };
+    let shown = render_samples(
+        Samples::Sixteen(&picture),
         image.width,
         image.height,
+        dpi,
+        scan_imaging::Mode::Colour,
+        &Adjustments {
+            sharpen: 0.0,
+            ..Default::default()
+        },
+        false,
+        &film::TONE,
+    );
+    save_image(output, shown.width, shown.height, &shown.data, shown.format)?;
+    println!(
+        "scanned          {} x {} pixels in {:.1} s",
+        shown.width,
+        shown.height,
         start.elapsed().as_secs_f32()
     );
     println!("saved            {}", output.display());

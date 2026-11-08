@@ -34,7 +34,7 @@
 
 use crate::error::{Error, Result};
 use crate::init::Registers;
-use crate::motor::park_registers;
+use crate::motor::{park_registers, Direction, MotorPosition};
 use crate::profile::Profile;
 use crate::read::Tables;
 use crate::setup::{
@@ -90,6 +90,19 @@ pub const PROBE_LINES: u32 = 1;
 pub const CHECK_LINES: u32 = 10;
 /// Most offset checks before giving up. The captures need 1 to 3.
 pub const MAX_OFFSET_CHECKS: usize = 20;
+
+/// Wait after the transparency adapter's lamp is switched on again for the
+/// white shading (not captured: the HP driver never got that far).
+const TMA_RELIGHT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// The lamp a calibration works with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Light {
+    /// The flatbed lamp, on the white strip under the lid.
+    Flatbed,
+    /// The transparency adapter's lamp, on its slot without film.
+    Transparency,
+}
 
 impl CalibrationConfig {
     /// First pixel of the offset probes and checks
@@ -491,7 +504,53 @@ impl<T: Transport> Chip<T> {
         profile: &Profile,
         scan: &ScanParams,
     ) -> Result<Calibration> {
-        let cfg = &profile.calibration;
+        self.calibrate_with(init, profile, scan, Light::Flatbed)
+    }
+
+    /// Calibrates for a scan with the transparency adapter: the same steps
+    /// as [`Chip::calibrate`], with the adapter's parameters
+    /// ([`crate::profile::Transparency`]), on the slot without film at the
+    /// top of the adapter. The carriage first goes there from home (hp3900
+    /// moves it to `WStripYPos` before calibrating), the adapter's lamp is
+    /// switched off for the black shading and on again for the white, and
+    /// the carriage goes home at the end. The adapter's lamp must already
+    /// be on and warm ([`Chip::lamp_transparency`]). Not captured: the HP
+    /// driver on Windows 11 never gets this far.
+    pub fn calibrate_transparency(
+        &mut self,
+        init: &mut Registers,
+        profile: &Profile,
+        scan: &ScanParams,
+    ) -> Result<Calibration> {
+        self.calibrate_with(init, profile, scan, Light::Transparency)
+    }
+
+    fn calibrate_with(
+        &mut self,
+        init: &mut Registers,
+        profile: &Profile,
+        scan: &ScanParams,
+        light: Light,
+    ) -> Result<Calibration> {
+        let cfg = match light {
+            Light::Flatbed => &profile.calibration,
+            Light::Transparency => {
+                let adapter = profile.transparency.as_ref().ok_or_else(|| {
+                    Error::InvalidArgument("this scanner has no transparency adapter".into())
+                })?;
+                // To the slot, at the speed of the park.
+                self.motor_move(
+                    &park_registers(init),
+                    &profile.park,
+                    &MotorPosition {
+                        direction: Direction::Forward,
+                        e801_bit2: false,
+                        steps: adapter.strip_steps,
+                    },
+                )?;
+                &adapter.calibration
+            }
+        };
         let dpi = scan.resolution_x;
         // The calibration never reads at a lower vertical resolution than
         // the sensor's (2400 at 2400 dpi).
@@ -615,7 +674,11 @@ impl<T: Transport> Chip<T> {
         let img = Image::new(&data, image_width(&data, gain_read.height));
         if (0..3).all(|c| gain_max(&img, c) < cfg.offset_target + 5) {
             return Err(Error::Calibration(
-                "the lamp does not light the white strip".into(),
+                match light {
+                    Light::Flatbed => "the lamp does not light the white strip",
+                    Light::Transparency => "the adapter's lamp does not light its slot",
+                }
+                .into(),
             ));
         }
         let gains: [u8; 3] =
@@ -624,7 +687,10 @@ impl<T: Transport> Chip<T> {
 
         // 4. Black shading, lamp off. The HP driver writes E946 once more
         // after switching it off (captures 04 and 09).
-        self.lamp_flatbed(init, false)?;
+        match light {
+            Light::Flatbed => self.lamp_flatbed(init, false)?,
+            Light::Transparency => self.lamp_transparency(init, false)?,
+        }
         self.write_byte(0xe946, init.get(0x146))?;
         let black_read = read(scan.left, scan.width, u32::from(cfg.black_lines), y);
         let data = self.get_image(
@@ -635,7 +701,13 @@ impl<T: Transport> Chip<T> {
             &go,
             Some(&Tables::default()),
         )?;
-        self.lamp_flatbed(init, true)?;
+        match light {
+            Light::Flatbed => self.lamp_flatbed(init, true)?,
+            Light::Transparency => {
+                self.lamp_transparency(init, true)?;
+                std::thread::sleep(TMA_RELIGHT);
+            }
+        }
         let img = Image::new(&data, image_width(&data, black_read.height));
         let black: [Vec<u8>; 3] = std::array::from_fn(|c| {
             let levels = if cfg.even_odd(dpi) {
@@ -651,8 +723,8 @@ impl<T: Transport> Chip<T> {
             table_bytes(&words)
         });
 
-        // 5. White shading: the strip under the lid, read with the head
-        // moving and the black shading applied.
+        // 5. White shading: the strip under the lid (the adapter's slot),
+        // read with the head moving and the black shading applied.
         let white_read = read(
             scan.left,
             scan.width,

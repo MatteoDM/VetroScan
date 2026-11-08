@@ -128,8 +128,28 @@ pub struct Profile {
     pub base_speed: MotorMove,
     /// Calibration parameters (flatbed).
     pub calibration: CalibrationConfig,
+    /// The transparency adapter in the lid, if the model has one.
+    pub transparency: Option<Transparency>,
     /// Sensor and motor.
     pub platform: Platform,
+}
+
+/// A transparency adapter: a lamp in the lid that shines through slides and
+/// negatives in their holder on the glass.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Transparency {
+    /// Motor steps from the home position to the slot without film at the
+    /// top of the adapter, where it is calibrated (`WStripYPos` of
+    /// `[CalibTransparent]`, hp3900's `Head_Relocate` before the
+    /// calibration).
+    pub strip_steps: u16,
+    /// Where the adapter's light falls on the glass, in tenths of a
+    /// millimetre from its top left corner: left, top, width, height.
+    pub area: [u16; 4],
+    /// The slot without film, in the same units: left, top, width, height.
+    pub slot: [u16; 4],
+    /// Calibration parameters with the adapter's lamp.
+    pub calibration: CalibrationConfig,
 }
 
 impl Profile {
@@ -144,6 +164,43 @@ impl Profile {
         }
     }
 }
+
+/// `[CalibReflective]` of the configuration file (lines ~140-260 of the
+/// extracted INI). Checked against captures 01, 02, 04-11.
+const REFLECTIVE: CalibrationConfig = CalibrationConfig {
+    // Not in the file: every capture probes at 300 then 350 (E81A-E825),
+    // which are AdcOffPredictStart=300 and 300 + 50.
+    offset_probes: (300, 350),
+    // OffsetAvgTargetR/G/B=10 20.
+    offset_target: 10,
+    // OffsetTuneStep1=5. Captures 01, 02, 05, 07, 08, 10, 11: +5.
+    offset_step: 5,
+    // Not in the file: captures 06 and 06b (1200 dpi) raise odd pixels
+    // by 3.
+    offset_step_even_odd: 3,
+    // GainHeight=10 30.
+    gain_lines: 10,
+    // WRefR=245 233, WRefG=245 238 230, WRefB=245 233 222.
+    white_ref: [245, 245, 245],
+    // GainTargetFactor=80 90.
+    gain_target_percent: 80,
+    // BShadingHeight=10 20 30.
+    black_lines: 10,
+    // U2_S_8B_24D_Cut_R/G/B=-6 (USB 2, 8 bits per sample, 24-bit
+    // colour).
+    black_cut_hundredths: [-6, -6, -6],
+    // WShadingHeight=24.
+    white_lines: 24,
+    // Every capture reads the white strip at 200 dpi (E8C0 and the
+    // motor step of the block).
+    white_resolution: 200,
+    // hp3900 starts from vgag1 = vgag2 = 4; every block of the HP
+    // driver before the gain is set has E814-E819 low bits 4.
+    start_gain: 4,
+    gain2: 4,
+    // Every block of the HP driver: E813 low bits 3F.
+    pga: 3,
+};
 
 /// Every model the driver knows.
 pub const PROFILES: [&Profile; 1] = [&HP3770];
@@ -233,42 +290,33 @@ pub const HP3770: Profile = Profile {
         step_type: StepType::Half,
         setting: None,
     },
-    // [CalibReflective] of the configuration file (lines ~140-260 of the
-    // extracted INI). Checked against captures 01, 02, 04-11.
-    calibration: CalibrationConfig {
-        // Not in the file: every capture probes at 300 then 350 (E81A-E825),
-        // which are AdcOffPredictStart=300 and 300 + 50.
-        offset_probes: (300, 350),
-        // OffsetAvgTargetR/G/B=10 20.
-        offset_target: 10,
-        // OffsetTuneStep1=5. Captures 01, 02, 05, 07, 08, 10, 11: +5.
-        offset_step: 5,
-        // Not in the file: captures 06 and 06b (1200 dpi) raise odd pixels
-        // by 3.
-        offset_step_even_odd: 3,
-        // GainHeight=10 30.
-        gain_lines: 10,
-        // WRefR=245 233, WRefG=245 238 230, WRefB=245 233 222.
-        white_ref: [245, 245, 245],
-        // GainTargetFactor=80 90.
-        gain_target_percent: 80,
-        // BShadingHeight=10 20 30.
-        black_lines: 10,
-        // U2_S_8B_24D_Cut_R/G/B=-6 (USB 2, 8 bits per sample, 24-bit
-        // colour).
-        black_cut_hundredths: [-6, -6, -6],
-        // WShadingHeight=24.
-        white_lines: 24,
-        // Every capture reads the white strip at 200 dpi (E8C0 and the
-        // motor step of the block).
-        white_resolution: 200,
-        // hp3900 starts from vgag1 = vgag2 = 4; every block of the HP
-        // driver before the gain is set has E814-E819 low bits 4.
-        start_gain: 4,
-        gain2: 4,
-        // Every block of the HP driver: E813 low bits 3F.
-        pga: 3,
-    },
+    calibration: REFLECTIVE,
+    // Measured on Matteo's scanner on 8 November 2026 (`hp3770 lamp on
+    // --tma`, a scan of the whole glass with the adapter's lamp).
+    transparency: Some(Transparency {
+        // [CalibTransparent] WStripYPos=4130 (and [CalibNegativeFilm]): 87.4
+        // mm from home at 1200 steps per inch, inside the slot (84.8-92.8 mm
+        // from home: the glass starts 8.8 mm from home, line 69 at 200 dpi).
+        strip_steps: 4130,
+        // The adapter's light at 200 dpi: 87.6-131.6 mm across, 76.2-171.6
+        // mm down (HP's driver: 42.3 x 93.1 mm, 333 x 733 pixels).
+        area: [876, 762, 440, 954],
+        // The slot without film at its top: about 88-132 x 76-84 mm.
+        slot: [876, 756, 440, 83],
+        // [CalibTransparent]: the offsets as on the glass (the optical black
+        // pixels do not see the lamp), GainHeight=30, GainTargetFactor=90,
+        // BShadingHeight=30, Cut 0, WShadingHeight=24. White: 245 as on
+        // the glass, not the WRef of the section (about 80, for HP's own
+        // host processing): the slot then reads as the lamp through no film,
+        // and the 16-bit samples keep their whole range.
+        calibration: CalibrationConfig {
+            gain_lines: 30,
+            gain_target_percent: 90,
+            black_lines: 30,
+            black_cut_hundredths: [0, 0, 0],
+            ..REFLECTIVE
+        },
+    }),
     // [PlatForm] of the configuration (line 14684 of the extracted file);
     // multi-value keys take the first value.
     platform: Platform {
