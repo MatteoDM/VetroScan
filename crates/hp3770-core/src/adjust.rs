@@ -25,6 +25,18 @@ pub struct Adjustments {
     pub temperature: f32,
     /// Tint, −100 (greener) to 100 (more magenta).
     pub tint: f32,
+    /// Exposure in stops, −3 to 3, on the linear light.
+    pub exposure: f32,
+    /// Highlights, −100 (recover) to 100: the upper tones only.
+    pub highlights: f32,
+    /// Shadows, −100 to 100 (open up): the lower tones only.
+    pub shadows: f32,
+    /// Whites, −100 to 100: the brightest tones and the white point.
+    pub whites: f32,
+    /// Blacks, −100 (deeper) to 100: the darkest tones and the black point.
+    pub blacks: f32,
+    /// Vibrance, −100 to 100: saturation that spares colours already vivid.
+    pub vibrance: f32,
     /// Black point of the output, 0-254: levels at or below become black.
     pub black: f32,
     /// White point of the output, 1-255: levels at or above become white.
@@ -47,6 +59,12 @@ impl Default for Adjustments {
         Self {
             temperature: 0.0,
             tint: 0.0,
+            exposure: 0.0,
+            highlights: 0.0,
+            shadows: 0.0,
+            whites: 0.0,
+            blacks: 0.0,
+            vibrance: 0.0,
             black: 0.0,
             white: 255.0,
             gamma: 1.0,
@@ -96,20 +114,62 @@ impl Adjustments {
         let gamma = self.gamma.clamp(0.2, 5.0);
         let contrast = (100.0 + self.contrast.clamp(-100.0, 100.0)) / 100.0;
         let brightness = self.brightness.clamp(-100.0, 100.0) * 1.28;
+        let exposure = 2f32.powf(self.exposure.clamp(-3.0, 3.0));
+        let highlights = self.highlights.clamp(-100.0, 100.0) / 100.0;
+        let shadows = self.shadows.clamp(-100.0, 100.0) / 100.0;
+        let whites = self.whites.clamp(-100.0, 100.0) / 100.0;
+        let blacks = self.blacks.clamp(-100.0, 100.0) / 100.0;
         std::array::from_fn(|c| {
             std::array::from_fn(|i| {
-                let x = (i as f32 * gains[c]).min(255.0);
+                let x = (i as f32 * gains[c] * exposure).min(255.0);
                 let v = if linear {
                     x
                 } else {
                     255.0 * (f64::from(x) / white[c]).min(1.0).powf(1.0 / 2.2) as f32
                 };
                 let v = ((v - black) / (white_point - black)).clamp(0.0, 1.0);
+                let v = tone_regions(v, highlights, shadows, whites, blacks);
                 let v = 255.0 * v.powf(1.0 / gamma);
                 let v = (v - 128.0) * contrast + 128.0 + brightness;
                 v.round().clamp(0.0, 255.0) as u8
             })
         })
+    }
+}
+
+/// Highlights, shadows, whites and blacks on a level `t` (0-1): each moves
+/// its own band of tones with a smooth weight, so the ends stay put
+/// unless whites or blacks move them (amounts −1 to 1).
+fn tone_regions(t: f32, highlights: f32, shadows: f32, whites: f32, blacks: f32) -> f32 {
+    // Weights peaking at 1/3 (shadows) and 2/3 (highlights).
+    let low = 6.75 * t * (1.0 - t) * (1.0 - t);
+    let high = 6.75 * t * t * (1.0 - t);
+    let mut v = t + 0.25 * shadows * low + 0.25 * highlights * high;
+    // Whites and blacks act on the ends and move the end points.
+    v += 0.2 * whites * t.powi(3);
+    v += 0.2 * blacks * (1.0 - t).powi(3);
+    v.clamp(0.0, 1.0)
+}
+
+/// Vibrance of 8-bit RGB pixels, −100 to 100: like saturation, weighted by
+/// how grey a pixel is, so that vivid colours (and skin) are not overdone.
+pub fn vibrance(rgb: &mut [u8], amount: f32) {
+    if amount == 0.0 {
+        return;
+    }
+    let k = amount.clamp(-100.0, 100.0) / 100.0;
+    for p in rgb.chunks_exact_mut(3) {
+        let (r, g, b) = (f32::from(p[0]), f32::from(p[1]), f32::from(p[2]));
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
+        let sat = if max > 0.0 { (max - min) / max } else { 0.0 };
+        let factor = 1.0 + k * (1.0 - sat);
+        let luma = 0.299 * r + 0.587 * g + 0.114 * b;
+        for v in p.iter_mut() {
+            *v = (luma + (f32::from(*v) - luma) * factor)
+                .round()
+                .clamp(0.0, 255.0) as u8;
+        }
     }
 }
 
@@ -226,6 +286,7 @@ pub fn render(
                 .map(|(i, &v)| tables[i % 3][usize::from(v)])
                 .collect();
             saturate(&mut out, adjustments.saturation);
+            vibrance(&mut out, adjustments.vibrance);
             convert::sharpen(&mut out, width, 3, adjustments.sharpen);
             (Format::Rgb, out)
         }
@@ -327,6 +388,34 @@ mod tests {
             data: grey,
         };
         assert_eq!(auto_levels(&img), (40.0, 210.0));
+    }
+
+    #[test]
+    fn tone_regions_keep_the_ends_and_move_their_band() {
+        assert_eq!(tone_regions(0.0, 1.0, 1.0, 0.0, 0.0), 0.0);
+        assert_eq!(tone_regions(1.0, 1.0, 1.0, 0.0, 0.0), 1.0);
+        // Shadows lift a dark tone more than a light one.
+        let dark = tone_regions(0.3, 0.0, 1.0, 0.0, 0.0) - 0.3;
+        let light = tone_regions(0.8, 0.0, 1.0, 0.0, 0.0) - 0.8;
+        assert!(dark > 0.2 && light < dark / 2.0, "{dark} {light}");
+        // Negative highlights darken the light tones.
+        assert!(tone_regions(0.7, -1.0, 0.0, 0.0, 0.0) < 0.7);
+        // Exposure doubles the linear light.
+        let a = Adjustments {
+            exposure: 1.0,
+            ..Adjustments::default()
+        };
+        assert_eq!(a.tables([255.0; 3], true)[0][60], 120);
+    }
+
+    #[test]
+    fn vibrance_spares_vivid_colours() {
+        let mut dull = [140, 120, 120];
+        let mut vivid = [250, 40, 40];
+        vibrance(&mut dull, 100.0);
+        vibrance(&mut vivid, 100.0);
+        assert!(dull[0] - dull[1] > 20 + 10);
+        assert!(i32::from(vivid[0]) - i32::from(vivid[1]) < 210 + 60);
     }
 
     #[test]

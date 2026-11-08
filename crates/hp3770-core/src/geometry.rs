@@ -77,6 +77,23 @@ fn origin(dpi: u16) -> Option<(u32, u32)> {
     }
 }
 
+/// Correction of each resolution's window so that it covers the same
+/// part of the glass as the 200 dpi preview, in pixels and lines of the
+/// scan (`(across, down)`): the HP driver's origins are not consistent
+/// between resolutions. Measured on Matteo's scanner (2026-11-08) by
+/// scanning the same 30 × 20 mm at every resolution and matching each
+/// image to the 200 dpi one: at 1200 dpi the window started 0.6 mm early
+/// and 0.5 mm to the right, at 3, 12.5 and 25 cm from the top alike.
+fn alignment(dpi: u16) -> (i32, i32) {
+    match dpi {
+        300 => (-4, 0),
+        600 => (-9, 3),
+        1200 => (-23, 31),
+        2400 => (-23, 63),
+        _ => (0, 0),
+    }
+}
+
 /// Nearest multiple of 4, halves up (1654 -> 1656, 945 -> 944).
 fn round4(v: u32) -> u32 {
     (v + 2) / 4 * 4
@@ -84,8 +101,19 @@ fn round4(v: u32) -> u32 {
 
 /// The window the chip reads for `area` at `dpi`, and how the scan uses the
 /// chip (as the HP driver: shading and gamma on, lines arranged by the
-/// chip, even and odd pixels apart at 1200 dpi).
+/// chip, even and odd pixels apart at 1200 dpi), lined up with the 200 dpi
+/// preview (see [`alignment`]).
 pub fn scan_window(dpi: u16, area: Area) -> Result<(ScanParams, Hardware)> {
+    let (mut params, hw) = hp_window(dpi, area)?;
+    let (dx, dy) = alignment(dpi);
+    params.left = params.left.saturating_add_signed(dx);
+    params.top = params.top.saturating_add_signed(dy);
+    Ok((params, hw))
+}
+
+/// The window the HP driver would read for `area` at `dpi` (the values of
+/// its register blocks in the captures).
+pub fn hp_window(dpi: u16, area: Area) -> Result<(ScanParams, Hardware)> {
     let (left, top) = origin(dpi).ok_or_else(|| {
         Error::InvalidArgument(format!(
             "{dpi} dpi: the supported resolutions are {RESOLUTIONS:?}"
@@ -179,7 +207,7 @@ mod tests {
             width: w,
             height: h,
         };
-        let (p, hw) = scan_window(dpi, area).unwrap();
+        let (p, hw) = hp_window(dpi, area).unwrap();
         assert_eq!(hw.high_resolution, dpi >= 1200);
         (p.left, p.width, p.top)
     }
@@ -199,7 +227,21 @@ mod tests {
             width: 591,
             height: 591,
         };
-        assert_eq!(scan_window(300, a).unwrap().0.height, 591);
+        assert_eq!(hp_window(300, a).unwrap().0.height, 591);
+    }
+
+    #[test]
+    fn windows_are_lined_up_with_the_preview() {
+        let a = Area {
+            x: 400,
+            y: 400,
+            width: 100,
+            height: 100,
+        };
+        let hp = hp_window(1200, a).unwrap().0;
+        let ours = scan_window(1200, a).unwrap().0;
+        assert_eq!((ours.left, ours.top), (hp.left - 23, hp.top + 31));
+        assert_eq!(scan_window(200, a).unwrap().0, hp_window(200, a).unwrap().0);
     }
 
     #[test]

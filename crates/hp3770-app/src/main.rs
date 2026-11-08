@@ -269,6 +269,12 @@ impl Settings {
             adjust: prefs::StoredAdjust {
                 temperature: a.temperature,
                 tint: a.tint,
+                exposure: a.exposure,
+                highlights: a.highlights,
+                shadows: a.shadows,
+                whites: a.whites,
+                blacks: a.blacks,
+                vibrance: a.vibrance,
                 black: a.black,
                 white: a.white,
                 gamma: a.gamma,
@@ -323,6 +329,12 @@ impl Settings {
             adjust: Adjustments {
                 temperature: a.temperature,
                 tint: a.tint,
+                exposure: a.exposure,
+                highlights: a.highlights,
+                shadows: a.shadows,
+                whites: a.whites,
+                blacks: a.blacks,
+                vibrance: a.vibrance,
                 black: a.black,
                 white: a.white,
                 gamma: a.gamma,
@@ -516,6 +528,12 @@ enum Group {
 enum Field {
     Temperature,
     Tint,
+    Exposure,
+    Highlights,
+    Shadows,
+    Whites,
+    Blacks,
+    Vibrance,
     Black,
     White,
     Gamma,
@@ -529,8 +547,14 @@ enum Field {
 impl Field {
     fn label(self) -> &'static str {
         match self {
-            Self::Temperature => "Temperatura",
-            Self::Tint => "Tinta",
+            Self::Temperature => "Temperatura (freddo ↔ caldo)",
+            Self::Tint => "Tinta (verde ↔ magenta)",
+            Self::Exposure => "Esposizione (stop)",
+            Self::Highlights => "Luci",
+            Self::Shadows => "Ombre",
+            Self::Whites => "Bianchi",
+            Self::Blacks => "Neri",
+            Self::Vibrance => "Vividezza",
             Self::Black => "Punto del nero",
             Self::White => "Punto del bianco",
             Self::Gamma => "Gamma (mezzitoni)",
@@ -549,13 +573,14 @@ impl Field {
             Self::Gamma => 0.2..=5.0,
             Self::Sharpen => 0.0..=4.0,
             Self::Threshold => 0.0..=255.0,
+            Self::Exposure => -3.0..=3.0,
             _ => -100.0..=100.0,
         }
     }
 
     fn step(self) -> f32 {
         match self {
-            Self::Gamma => 0.05,
+            Self::Gamma | Self::Exposure => 0.05,
             Self::Sharpen => 0.1,
             _ => 1.0,
         }
@@ -566,6 +591,12 @@ impl Field {
         match self {
             Self::Temperature => a.temperature,
             Self::Tint => a.tint,
+            Self::Exposure => a.exposure,
+            Self::Highlights => a.highlights,
+            Self::Shadows => a.shadows,
+            Self::Whites => a.whites,
+            Self::Blacks => a.blacks,
+            Self::Vibrance => a.vibrance,
             Self::Black => a.black,
             Self::White => a.white,
             Self::Gamma => a.gamma,
@@ -589,6 +620,12 @@ impl Field {
         match self {
             Self::Temperature => a.temperature = v,
             Self::Tint => a.tint = v,
+            Self::Exposure => a.exposure = v,
+            Self::Highlights => a.highlights = v,
+            Self::Shadows => a.shadows = v,
+            Self::Whites => a.whites = v,
+            Self::Blacks => a.blacks = v,
+            Self::Vibrance => a.vibrance = v,
             Self::Black => a.black = v.min(a.white - 1.0),
             Self::White => a.white = v.max(a.black + 1.0),
             Self::Gamma => a.gamma = v,
@@ -652,6 +689,9 @@ enum Message {
     Kind(Kind),
     Tab(Tab),
     Pane(Pane),
+    Undo,
+    Redo,
+    Key(iced::keyboard::Event),
     StartMode(StartMode),
     ChooseFolder,
     Folder(Option<PathBuf>),
@@ -732,6 +772,11 @@ struct App {
     redo_auto: bool,
     redone: Option<(usize, Page)>,
     note: String,
+    /// Earlier settings of what the panel edits, for Ctrl+Z.
+    undo: Vec<(Target, Settings)>,
+    redo_stack: Vec<(Target, Settings)>,
+    /// The field last changed and when: a slider dragged is one step.
+    last_edit: Option<(Field, std::time::Instant)>,
     /// A number being typed, not applied yet.
     draft: Option<(Field, String)>,
     /// A render is running off the interface thread.
@@ -790,6 +835,9 @@ impl App {
                 redone: None,
                 note: "Pronto: fai un'anteprima, scegli l'area e scansiona".into(),
                 draft: None,
+                undo: Vec::new(),
+                redo_stack: Vec::new(),
+                last_edit: None,
                 rendering: false,
                 dirty: None,
             },
@@ -814,6 +862,7 @@ impl App {
         Subscription::batch([
             Subscription::run(worker::events).map(Message::Worker),
             iced::system::theme_changes().map(Message::SystemTheme),
+            iced::keyboard::listen().map(Message::Key),
         ])
     }
 
@@ -865,6 +914,63 @@ impl App {
     /// Applies a change to the active settings and redraws what shows it.
     /// New scans start from the last settings used.
     fn change(&mut self, f: impl Fn(&mut Settings)) {
+        self.remember(None);
+        self.apply(f);
+    }
+
+    /// Changes one field: moving the same slider again within a second is
+    /// the same step of Ctrl+Z.
+    fn change_field(&mut self, field: Field, f: impl Fn(&mut Settings)) {
+        self.remember(Some(field));
+        self.apply(f);
+    }
+
+    /// Saves the settings the panel edits for Ctrl+Z.
+    fn remember(&mut self, field: Option<Field>) {
+        let now = std::time::Instant::now();
+        let same = matches!(
+            (field, self.last_edit),
+            (Some(f), Some((g, at))) if f == g && now - at < std::time::Duration::from_secs(1)
+        );
+        self.last_edit = field.map(|f| (f, now));
+        if same {
+            return;
+        }
+        let target = if self.editing_page() {
+            Target::Page
+        } else {
+            Target::Preview
+        };
+        self.undo.push((target, self.active()));
+        if self.undo.len() > 100 {
+            self.undo.remove(0);
+        }
+        self.redo_stack.clear();
+    }
+
+    /// Puts back settings saved for Ctrl+Z / Ctrl+Y; returns the ones they
+    /// replace.
+    fn restore(&mut self, target: Target, settings: Settings) -> Option<(Target, Settings)> {
+        self.last_edit = None;
+        match target {
+            Target::Page if self.editing_page() => {
+                let page = self.shown_mut()?;
+                let current = page.settings;
+                page.settings = settings;
+                self.dirty = Some(Target::Page);
+                Some((Target::Page, current))
+            }
+            Target::Page => None,
+            Target::Preview => {
+                let current = *self.settings();
+                *self.settings_mut() = settings;
+                self.dirty = Some(Target::Preview);
+                Some((Target::Preview, current))
+            }
+        }
+    }
+
+    fn apply(&mut self, f: impl Fn(&mut Settings)) {
         if self.editing_page() {
             if let Some(page) = self.shown_mut() {
                 f(&mut page.settings);
@@ -1232,8 +1338,28 @@ impl App {
             }
             Message::Adjust(field, v) => {
                 self.draft = None;
-                self.change(|s| field.set(s, v));
+                self.change_field(field, |s| field.set(s, v));
             }
+            Message::Undo => {
+                if let Some((target, settings)) = self.undo.pop() {
+                    match self.restore(target, settings) {
+                        Some(current) => {
+                            self.redo_stack.push(current);
+                            self.note = "Annullato".into();
+                        }
+                        None => self.note = "Niente da annullare qui".into(),
+                    }
+                }
+            }
+            Message::Redo => {
+                if let Some((target, settings)) = self.redo_stack.pop() {
+                    if let Some(current) = self.restore(target, settings) {
+                        self.undo.push(current);
+                        self.note = "Ripristinato".into();
+                    }
+                }
+            }
+            Message::Key(event) => return self.on_key(event),
             Message::Draft(field, text) => self.draft = Some((field, text)),
             Message::Commit(field) => {
                 if let Some((f, text)) = self.draft.take() {
@@ -1294,13 +1420,21 @@ impl App {
                     Group::Tone => {
                         j.temperature = d.temperature;
                         j.tint = d.tint;
+                        j.exposure = d.exposure;
+                        j.highlights = d.highlights;
+                        j.shadows = d.shadows;
+                        j.whites = d.whites;
+                        j.blacks = d.blacks;
                         j.black = d.black;
                         j.white = d.white;
                         j.gamma = d.gamma;
                         j.brightness = d.brightness;
                         j.contrast = d.contrast;
                     }
-                    Group::Colour => j.saturation = d.saturation,
+                    Group::Colour => {
+                        j.saturation = d.saturation;
+                        j.vibrance = d.vibrance;
+                    }
                     Group::Detail => j.sharpen = d.sharpen,
                     Group::Lineart => s.threshold = convert::DEFAULT_THRESHOLD,
                 }
@@ -1418,6 +1552,41 @@ impl App {
             }
         }
         Task::none()
+    }
+
+    /// Keyboard shortcuts (only when no text field has the key).
+    fn on_key(&mut self, event: iced::keyboard::Event) -> Task<Message> {
+        use iced::keyboard::{key::Named, Event as K, Key};
+        let K::KeyPressed { key, modifiers, .. } = event else {
+            return Task::none();
+        };
+        let message = match (key.as_ref(), modifiers.command(), modifiers.shift()) {
+            (Key::Character("z"), true, false) => Some(Message::Undo),
+            (Key::Character("z"), true, true) | (Key::Character("y"), true, _) => {
+                Some(Message::Redo)
+            }
+            (Key::Character("p"), true, _) => Some(Message::Preview),
+            (Key::Named(Named::Enter), true, _) => Some(Message::Scan),
+            (Key::Character("s"), true, _) => Some(Message::Save),
+            (Key::Character("f"), false, _) => Some(Message::Fit),
+            (Key::Character("1"), false, _) => Some(Message::ActualSize),
+            (Key::Character("\\"), false, _) => Some(Message::Before(!self.before)),
+            (Key::Character("i"), false, _) => Some(Message::Eyedropper),
+            (Key::Named(Named::Escape), _, _) => {
+                if self.eyedropper {
+                    Some(Message::Eyedropper)
+                } else {
+                    Some(Message::Select(None))
+                }
+            }
+            _ => None,
+        };
+        match message {
+            // Actions that need the scanner or a page check it themselves.
+            Some(Message::Preview | Message::Scan) if !self.idle() => Task::none(),
+            Some(m) => self.handle(m),
+            None => Task::none(),
+        }
     }
 
     /// The raw scan the panel acts on.
@@ -2200,11 +2369,17 @@ impl App {
                 .spacing(6),
                 self.adjuster(Field::Temperature, &s),
                 self.adjuster(Field::Tint, &s),
-                self.adjuster(Field::Brightness, &s),
+                self.adjuster(Field::Exposure, &s),
                 self.adjuster(Field::Contrast, &s),
+                self.adjuster(Field::Highlights, &s),
+                self.adjuster(Field::Shadows, &s),
+                self.adjuster(Field::Whites, &s),
+                self.adjuster(Field::Blacks, &s),
+                text("Livelli").size(12),
                 self.adjuster(Field::Black, &s),
                 self.adjuster(Field::White, &s),
                 self.adjuster(Field::Gamma, &s),
+                self.adjuster(Field::Brightness, &s),
             ]
             .spacing(8)
             .into(),
@@ -2214,7 +2389,12 @@ impl App {
             "Colore",
             s.colour == Colour::Rgb,
             "Solo per le scansioni a colori",
-            self.adjuster(Field::Saturation, &s),
+            column![
+                self.adjuster(Field::Vibrance, &s),
+                self.adjuster(Field::Saturation, &s),
+            ]
+            .spacing(8)
+            .into(),
         );
         let detail = self.group(
             Group::Detail,
