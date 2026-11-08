@@ -10,6 +10,7 @@
 //! JPEG XL is not offered: the Rust JPEG XL encoders are not mature yet.
 
 mod pdf;
+mod raw;
 
 use hp3770_core::session::{Format, Image};
 use std::fmt;
@@ -17,6 +18,7 @@ use std::io::{Seek, Write};
 use std::path::{Path, PathBuf};
 
 pub use pdf::PageSize;
+pub use raw::{save_dng, save_tiff16, Linear16};
 
 /// Error of an export.
 pub type Error = Box<dyn std::error::Error + Send + Sync>;

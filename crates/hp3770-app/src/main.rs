@@ -26,7 +26,7 @@ use histogram::Histogram;
 use hp3770_core::adjust::{self, Adjustments};
 use hp3770_core::convert;
 use hp3770_core::detect::{self, Found};
-use hp3770_core::geometry::{Area, GLASS_INCHES, RESOLUTIONS};
+use hp3770_core::geometry::{Area, GLASS_INCHES, HP_WHITE, RESOLUTIONS};
 use hp3770_core::profile::HP3770;
 use hp3770_core::session::{self, Format, Image, Request, Stage};
 use hp3770_core::status::Status;
@@ -94,6 +94,17 @@ enum Output {
     Pdf,
     TiffPages,
     Image(ImageFormat),
+    /// The scanner's linear samples, without adjustments.
+    Raw(RawFormat),
+}
+
+/// Files of the scanner's own samples, for raw editors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RawFormat {
+    /// 16-bit linear TIFF with a linear sRGB profile.
+    Tiff16,
+    /// Adobe DNG, linear raw.
+    Dng,
 }
 
 impl std::fmt::Display for Output {
@@ -102,6 +113,8 @@ impl std::fmt::Display for Output {
             Self::Pdf => f.write_str("PDF"),
             Self::TiffPages => f.write_str("TIFF multipagina"),
             Self::Image(format) => write!(f, "{format}"),
+            Self::Raw(RawFormat::Tiff16) => f.write_str("RAW · TIFF 16 bit lineare"),
+            Self::Raw(RawFormat::Dng) => f.write_str("RAW · DNG (Lightroom, Camera Raw)"),
         }
     }
 }
@@ -112,6 +125,8 @@ impl Output {
             Self::Pdf => "pdf",
             Self::TiffPages => "tif",
             Self::Image(format) => format.extension(),
+            Self::Raw(RawFormat::Tiff16) => "tif",
+            Self::Raw(RawFormat::Dng) => "dng",
         }
     }
 
@@ -141,10 +156,13 @@ fn outputs(kind: Kind, colour: Colour) -> Vec<Output> {
             Output::Image(ImageFormat::Tiff),
             Output::Image(ImageFormat::WebP),
             Output::Image(ImageFormat::Avif { quality: 80 }),
+            Output::Raw(RawFormat::Tiff16),
+            Output::Raw(RawFormat::Dng),
         ],
     };
     all.into_iter()
         .filter(|o| colour != Colour::Lineart || !o.lossy())
+        .filter(|o| colour == Colour::Rgb || !matches!(o, Output::Raw(_)))
         .collect()
 }
 
@@ -264,6 +282,8 @@ impl Settings {
                 Output::Image(ImageFormat::Tiff) => "tiff",
                 Output::Image(ImageFormat::WebP) => "webp",
                 Output::Image(ImageFormat::Avif { .. }) => "avif",
+                Output::Raw(RawFormat::Tiff16) => "raw-tiff16",
+                Output::Raw(RawFormat::Dng) => "raw-dng",
                 Output::Image(ImageFormat::Bmp) => "bmp",
             }
             .into(),
@@ -319,6 +339,8 @@ impl Settings {
             "tiff" => Output::Image(ImageFormat::Tiff),
             "webp" => Output::Image(ImageFormat::WebP),
             "avif" => Output::Image(ImageFormat::Avif { quality: 80 }),
+            "raw-tiff16" => Output::Raw(RawFormat::Tiff16),
+            "raw-dng" => Output::Raw(RawFormat::Dng),
             _ => base.output,
         };
         let allowed = outputs(kind, colour);
@@ -1772,6 +1794,9 @@ impl App {
     /// Writes the document (all pages) or the shown photo to `path`.
     fn write(&self, path: &std::path::Path) -> Result<String, String> {
         let settings = self.settings();
+        if let Output::Raw(format) = settings.output {
+            return self.write_raw(path, format);
+        }
         let pages: Vec<Image> = self.pages.iter().map(|p| p.finished(settings)).collect();
         if pages.is_empty() {
             return Err("niente da salvare".into());
@@ -1801,6 +1826,44 @@ impl App {
         result
             .map(|()| format!("{} pagine in {}", pages.len(), path.display()))
             .map_err(|e| e.to_string())
+    }
+
+    /// Writes the linear samples of every page (one file each), without
+    /// adjustments: the white the calibration aims at is full scale.
+    fn write_raw(&self, path: &std::path::Path, format: RawFormat) -> Result<String, String> {
+        if self.pages.is_empty() {
+            return Err("niente da salvare".into());
+        }
+        let n = self.pages.len();
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("foto")
+            .to_string();
+        let ext = Output::Raw(format).extension();
+        let mut written = Vec::new();
+        for (i, page) in self.pages.iter().enumerate() {
+            let target = if n == 1 {
+                path.to_path_buf()
+            } else {
+                path.with_file_name(format!("{stem}-{:03}.{ext}", i + 1))
+            };
+            let raw = hp3770_export::Linear16::from_linear8(&page.raw.full, HP_WHITE)
+                .map_err(|e| e.to_string())?;
+            match format {
+                RawFormat::Tiff16 => hp3770_export::save_tiff16(&target, &raw),
+                RawFormat::Dng => hp3770_export::save_dng(&target, &raw),
+            }
+            .map_err(|e| e.to_string())?;
+            written.push(target);
+        }
+        Ok(match written.as_slice() {
+            [one] => one.display().to_string(),
+            _ => format!(
+                "{n} file RAW in {}",
+                path.parent().unwrap_or(path).display()
+            ),
+        })
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -3674,6 +3737,19 @@ impl App {
         if s.colour == Colour::Lineart {
             pane =
                 pane.push(text("Bianco e nero: niente JPEG/AVIF, rovinerebbero i bordi.").size(11));
+        }
+        if let Output::Raw(_) = self.settings().output {
+            pane = pane.push(
+                text(
+                    "I campioni dello scanner, lineari e senza regolazioni (ritaglio e                      raddrizzatura sì): si sviluppano in Lightroom, Camera Raw o Photoshop.                      Le regolazioni a destra valgono solo per l'anteprima.",
+                )
+                .size(11),
+            );
+        } else if self.kind == Kind::Photo && s.colour == Colour::Rgb {
+            pane = pane.push(
+                text("Per Lightroom o Photoshop scegli un formato RAW (DNG o TIFF 16 bit).")
+                    .size(11),
+            );
         }
         if self.settings().output == Output::Pdf {
             pane = pane.push(labelled(
