@@ -358,7 +358,12 @@ impl App {
             return;
         }
         let section = match &self.editor {
-            Some(e) if e.index == i => return,
+            Some(e) if e.index == i => {
+                // Open already, maybe while another page was shown.
+                self.current = Some(i);
+                self.tab = Tab::Result;
+                return;
+            }
             Some(e) => e.section,
             None => self.edit_section,
         };
@@ -408,11 +413,17 @@ impl App {
 
     /// "Pagina 2" or "Foto".
     pub fn page_name(&self, i: usize) -> String {
-        match self.kind {
-            crate::Kind::Document => format!("pagina {}", i + 1),
-            crate::Kind::Photo if self.pages.len() > 1 => format!("foto {}", i + 1),
-            crate::Kind::Photo => "foto".into(),
-        }
+        crate::item_name(self.kind, i, self.pages.len())
+    }
+
+    /// "Pagina 2" or "Foto", at the start of a sentence.
+    pub fn page_title(&self, i: usize) -> String {
+        let name = self.page_name(i);
+        let mut chars = name.chars();
+        chars
+            .next()
+            .map(|c| c.to_uppercase().chain(chars).collect())
+            .unwrap_or_default()
     }
 
     /// Keeps the page as it is for the editor's Ctrl+Z.

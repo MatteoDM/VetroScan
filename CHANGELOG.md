@@ -58,4 +58,36 @@ manca.
   per macOS, `.deb`, `.rpm`, pacchetto Arch e AppImage per Linux (x86_64 e aarch64). I
   pacchetti `.deb`, `.rpm` e Arch installano anche la regola udev.
 
+### Fixed
+- «Rifai»: il riquadro di avanzamento diceva «Scansione pagina N+1» (la prossima pagina nuova)
+  invece della pagina rifatta; ora dice «Nuova scansione della pagina N» e, finita la
+  scansione, mostra quella pagina anche nel pannello «Regola».
+- In Foto i messaggi di «Rifai», «Tieni la nuova», «Lascia la vecchia» ed «Elimina» parlano di
+  foto e non di pagine; il salvataggio non dice più «1 pagine».
+- «Annulla» durante una scansione o un'anteprima non è più un errore: niente avviso
+  «Scansione non riuscita», la barra dice «Scansione annullata».
+- Un originale riconosciuto vicino al bordo destro o in fondo al vetro non fa più fallire la
+  scansione o il «Rifai» con «area … outside the glass»: l'area chiesta resta sul vetro.
+- Il formato «TIFF» con più pagine o più foto salva un file per pagina, come PNG e JPEG; il
+  TIFF unico resta di «TIFF multipagina». JPEG e AVIF tengono la qualità del modo.
+- Ctrl+Z dopo il cambio fra Documento e Foto non mette più le impostazioni di un modo
+  nell'altro; Ctrl+Z sulle regolazioni proprie di una pagina torna su quella pagina, non su
+  quella mostrata in quel momento.
+- Cambiando modo, le pagine che seguono le regolazioni comuni si ridisegnano con quelle del
+  nuovo modo (prima restavano con le vecchie fino alla modifica successiva); lo stesso dopo
+  «Ripristina impostazioni di fabbrica».
+- Spostare o eliminare pagine mentre si ridisegnano in background non mette più la miniatura
+  di una pagina su un'altra; con una nuova scansione in attesa di scelta, spostare le pagine
+  non fa più sostituire quella sbagliata con «Tieni la nuova».
+- Durante una scansione non si cambiano più modo né ordine delle pagine (la scansione finiva
+  nel posto sbagliato).
+- Con l'editor aperto, ruotare un'altra pagina e poi cliccare la miniatura di quella in
+  modifica la mostra di nuovo (prima non succedeva niente).
+- La nota sotto le pagine nomina il tasto dello scanner che aggiunge davvero una pagina (o
+  scansiona una foto), come scelto nelle Preferenze, e sparisce se nessuno lo fa.
+- Un preset salvato con il nome di un preset di fabbrica non si poteva più applicare: ora il
+  nome viene rifiutato.
+- Testi con una fila di spazi in mezzo (nota sul RAW, sui 16 bit e sui tasti in Windows); il
+  pulsante della cartella predefinita usa il separatore del sistema.
+
 [Unreleased]: https://github.com/MatteoDM/scanner/commits/main

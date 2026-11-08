@@ -94,6 +94,18 @@ pub fn events() -> impl Stream<Item = Event> {
     })
 }
 
+/// What a scan stopped with "Annulla" ends with, instead of an error.
+pub const CANCELLED: &str = "annullata";
+
+/// The text of a failed scan for the interface: [`CANCELLED`] when it was
+/// the user who stopped it.
+fn error_text(e: hp3770_core::Error) -> String {
+    match e {
+        hp3770_core::Error::Cancelled(_) => CANCELLED.into(),
+        e => e.to_string(),
+    }
+}
+
 /// How often the idle thread reads the buttons.
 const BUTTON_POLL: Duration = Duration::from_millis(150);
 
@@ -185,12 +197,12 @@ impl Worker {
             }
             !cancel.load(Ordering::SeqCst)
         })
-        .map_err(|e| e.to_string())
+        .map_err(error_text)
     }
 
     /// Reads the buttons. If the scanner went away (unplugged, switched
     /// off, taken for a moment by another program) it is opened again,
-    /// every 2 seconds at most, so the buttons never stop working.
+    /// at most every 300 ms, so the buttons never stop working.
     fn poll_buttons(&mut self) {
         if self.chip.is_none() {
             if self
@@ -265,5 +277,19 @@ fn log(line: &str) {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0.0, |d| d.as_secs_f64());
         let _ = writeln!(f, "{now:.3} {line}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_scan_stopped_by_the_user_is_not_an_error() {
+        assert_eq!(error_text(hp3770_core::Error::Cancelled("scan")), CANCELLED);
+        assert_ne!(
+            error_text(hp3770_core::Error::Transport("gone".into())),
+            CANCELLED
+        );
     }
 }

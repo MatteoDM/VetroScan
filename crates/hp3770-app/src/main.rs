@@ -215,6 +215,52 @@ fn outputs(kind: Kind, colour: Colour, depth: u8) -> Vec<Output> {
         .collect()
 }
 
+/// How the finished pages (or photos) go to a file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Writer {
+    Pdf,
+    /// One multi-page TIFF.
+    Tiff,
+    Zip,
+    /// One image per page, next to the chosen name.
+    Folder,
+    /// The only page, as one image.
+    One,
+}
+
+/// How `n` pages are written to `path` with `output` chosen: the name's
+/// extension decides PDF and ZIP; several pages make a multi-page TIFF
+/// only when that is the format chosen, else one image each ("TIFF" is
+/// one image per page, as PNG and JPEG are).
+fn writer(output: Output, path: &std::path::Path, n: usize) -> Writer {
+    let extension = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    match extension.as_str() {
+        "pdf" => Writer::Pdf,
+        "zip" => Writer::Zip,
+        "tif" | "tiff" if n > 1 && output == Output::TiffPages => Writer::Tiff,
+        _ if n > 1 => Writer::Folder,
+        _ => Writer::One,
+    }
+}
+
+/// The image format of `path`: the one chosen (with its quality) when the
+/// name has its extension, else the extension's, else PNG.
+fn image_format(path: &std::path::Path, output: Output) -> ImageFormat {
+    match (ImageFormat::from_path(path), output) {
+        (Some(by_name), Output::Image(chosen))
+            if std::mem::discriminant(&by_name) == std::mem::discriminant(&chosen) =>
+        {
+            chosen
+        }
+        (Some(by_name), _) => by_name,
+        (None, _) => ImageFormat::Png,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PdfSize {
     Fit,
@@ -591,6 +637,9 @@ fn factory_presets(kind: Kind) -> Vec<(&'static str, Settings)> {
     }
 }
 
+/// The front-panel buttons, in the order of the actions set for them.
+const BUTTON_NAMES: [&str; 3] = ["Scan", "Copy", "Instant Share"];
+
 /// What a front-panel button does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ButtonAction {
@@ -694,6 +743,16 @@ impl std::fmt::Display for StartMode {
 }
 
 // ------------------------------------------------------------------ pages
+
+/// How the interface names item `i` of `count`: "pagina 2", "foto 3", or
+/// just "foto" when it is the only one.
+fn item_name(kind: Kind, i: usize, count: usize) -> String {
+    match kind {
+        Kind::Document => format!("pagina {}", i + 1),
+        Kind::Photo if count > 1 => format!("foto {}", i + 1),
+        Kind::Photo => "foto".into(),
+    }
+}
 
 /// The scanner's linear colour samples of a scan, and a smaller copy for
 /// live adjustments.
@@ -1227,6 +1286,8 @@ struct Rendered {
     target: Target,
     /// For [`Target::Page`]: which page was shown (see `App::shown_key`).
     page: Option<usize>,
+    /// `App::epoch` when it started.
+    epoch: u64,
     shown: Image,
     picture: Picture,
     thumb: Option<Picture>,
@@ -1332,6 +1393,22 @@ enum Message {
     Edit(EditMsg),
 }
 
+/// `area` (pixels at `dpi`) cut to the glass: the margin around an
+/// original near the edge, or the rounding of position and size apart,
+/// would ask the scanner for a pixel beyond it, and it refuses the scan.
+fn within_glass(area: Area, dpi: u16) -> Area {
+    let max_w = (GLASS_INCHES.0 * f64::from(dpi)).round() as u32;
+    let max_h = (GLASS_INCHES.1 * f64::from(dpi)).round() as u32;
+    let x = area.x.min(max_w.saturating_sub(1));
+    let y = area.y.min(max_h.saturating_sub(1));
+    Area {
+        x,
+        y,
+        width: area.width.min(max_w - x),
+        height: area.height.min(max_h - y),
+    }
+}
+
 /// One pass of the scanner: an area of the glass (pixels of the
 /// preview) and the originals in it, each cut out of the scan.
 #[derive(Debug, Clone)]
@@ -1423,6 +1500,9 @@ struct App {
     dirty_page: bool,
     /// Pages following the shared look whose picture is out of date.
     stale: Vec<usize>,
+    /// Changes each time pages move, go or are replaced: a render
+    /// started before is of a page that may not be at its place any more.
+    epoch: u64,
     /// The editor of a scan, when open.
     editor: Option<Editor>,
     /// The part of the editor last used.
@@ -1499,6 +1579,7 @@ impl App {
                 dirty_preview: false,
                 dirty_page: false,
                 stale: Vec::new(),
+                epoch: 0,
                 editor: None,
                 edit_section: Section::Colour,
             },
@@ -1592,10 +1673,16 @@ impl App {
     /// follows it, and (in the background) the other pages that do.
     fn shared_changed(&mut self) {
         self.dirty_preview = true;
-        let shown = self.current;
         if self.shown().is_some_and(|p| p.own.is_none()) {
             self.dirty_page = true;
         }
+        self.restale();
+    }
+
+    /// Every page following the shared look, but the one shown, is to be
+    /// drawn again in the background.
+    fn restale(&mut self) {
+        let shown = self.current;
         self.stale = self
             .pages
             .iter()
@@ -1603,6 +1690,24 @@ impl App {
             .filter(|(i, p)| p.own.is_none() && Some(*i) != shown)
             .map(|(i, _)| i)
             .collect();
+    }
+
+    /// Pages moved, went or were replaced: what knew them by their place
+    /// (renders running, pages waiting to be drawn, Ctrl+Z of a page's
+    /// own look) no longer holds.
+    fn pages_changed(&mut self) {
+        self.epoch = self.epoch.wrapping_add(1);
+        if !self.stale.is_empty() {
+            self.restale();
+        }
+        self.dirty_page = true;
+        self.forget_page_undo();
+    }
+
+    /// Drops the Ctrl+Z steps of pages' own looks.
+    fn forget_page_undo(&mut self) {
+        self.undo.retain(|(t, _)| *t == Target::Preview);
+        self.redo_stack.retain(|(t, _)| *t == Target::Preview);
     }
 
     /// Applies a change to the active settings and redraws what shows it.
@@ -1635,8 +1740,14 @@ impl App {
         if same {
             return;
         }
+        // A page's own look is kept with the page it belongs to:
+        // `Index(i)` for page i, `Page` for a new scan waiting for a choice.
         let entry = if self.editing_own() {
-            (Target::Page, self.active())
+            let page = match self.shown_key() {
+                Some(i) => Target::Index(i),
+                None => Target::Page,
+            };
+            (page, self.active())
         } else {
             (Target::Preview, *self.settings())
         };
@@ -1652,14 +1763,28 @@ impl App {
     fn restore(&mut self, target: Target, settings: Settings) -> Option<(Target, Settings)> {
         self.last_edit = None;
         match target {
-            Target::Page if self.editing_own() => {
+            Target::Page | Target::Index(_) => {
                 let shared = *self.settings();
-                let page = self.shown_mut()?;
+                // Whether the result tab shows that page now.
+                let shown = self.tab == Tab::Result
+                    && match target {
+                        Target::Index(i) => self.shown_key() == Some(i),
+                        _ => self.redone.is_some(),
+                    };
+                let page = match target {
+                    Target::Index(i) => self.pages.get_mut(i),
+                    _ => self.redone.as_mut().map(|(_, p)| p),
+                }?;
                 let current = page.effective(&shared);
                 page.own = Some(Look::of(&settings));
                 page.settings.colour = settings.colour;
-                self.dirty_page = true;
-                Some((Target::Page, current))
+                if shown {
+                    self.dirty_page = true;
+                } else {
+                    // Out of sight: its thumbnail now.
+                    page.redraw(false, &shared);
+                }
+                Some((target, current))
             }
             Target::Preview => {
                 let current = *self.settings();
@@ -1667,7 +1792,6 @@ impl App {
                 self.shared_changed();
                 Some((Target::Preview, current))
             }
-            _ => None,
         }
     }
 
@@ -1753,6 +1877,7 @@ impl App {
             return Task::none();
         };
         let page = self.shown_key();
+        let epoch = self.epoch;
         self.rendering = true;
         Task::perform(
             async move {
@@ -1770,6 +1895,7 @@ impl App {
                 Arc::new(Rendered {
                     target,
                     page,
+                    epoch,
                     shown,
                     picture,
                     thumb,
@@ -1870,6 +1996,7 @@ impl App {
         } else {
             8
         };
+        let area = within_glass(Area::from_mm(dpi, x, y, w, h), dpi);
         Request {
             linear: true,
             adjust: Adjustments {
@@ -1877,7 +2004,7 @@ impl App {
                 ..Adjustments::default()
             },
             depth,
-            ..Request::new(dpi, Area::from_mm(dpi, x, y, w, h), session::Mode::Colour)
+            ..Request::new(dpi, area, session::Mode::Colour)
         }
     }
 
@@ -1958,6 +2085,13 @@ impl App {
     }
 
     fn start(&mut self, purpose: Purpose) {
+        if !self.idle() {
+            // Nothing is sent: a "Rifai" asked for does not wait for the
+            // next scan.
+            self.redo = None;
+            self.redo_auto = false;
+            return;
+        }
         let request = if purpose == Purpose::Preview {
             let glass = Self::glass();
             Request {
@@ -2134,31 +2268,33 @@ impl App {
         if pages.is_empty() {
             return Err("niente da salvare".into());
         }
-        let extension = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(str::to_ascii_lowercase)
-            .unwrap_or_default();
         let name = path
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("pagina")
             .to_string();
-        let result = match extension.as_str() {
-            "pdf" => hp3770_export::save_pdf(path, &pages, settings.pdf_size.into(), 88),
-            "tif" | "tiff" if pages.len() > 1 => hp3770_export::save_tiff(path, &pages),
-            "zip" => hp3770_export::save_zip(path, &name, &pages, ImageFormat::Png),
-            _ if pages.len() > 1 => {
-                // One image per page, next to the chosen name.
-                let folder = path.parent().unwrap_or(std::path::Path::new("."));
-                let format = ImageFormat::from_path(path).unwrap_or(ImageFormat::Png);
-                hp3770_export::save_folder(folder, &name, &pages, format).map(|_| ())
-            }
-            _ => hp3770_export::save(path, &pages[0]),
+        let n = pages.len();
+        let folder = path.parent().unwrap_or(std::path::Path::new("."));
+        let format = image_format(path, settings.output);
+        match writer(settings.output, path, n) {
+            Writer::Pdf => hp3770_export::save_pdf(path, &pages, settings.pdf_size.into(), 88),
+            Writer::Tiff => hp3770_export::save_tiff(path, &pages),
+            Writer::Zip => hp3770_export::save_zip(path, &name, &pages, ImageFormat::Png),
+            // One image per page, next to the chosen name.
+            Writer::Folder => hp3770_export::save_folder(folder, &name, &pages, format).map(|_| ()),
+            Writer::One => hp3770_export::save_as(path, &pages[0], format),
+        }
+        .map_err(|e| e.to_string())?;
+        let noun = match self.kind {
+            Kind::Document => "pagine",
+            Kind::Photo => "foto",
         };
-        result
-            .map(|()| format!("{} pagine in {}", pages.len(), path.display()))
-            .map_err(|e| e.to_string())
+        Ok(match writer(settings.output, path, n) {
+            Writer::One => path.display().to_string(),
+            _ if n == 1 => path.display().to_string(),
+            Writer::Folder => format!("{n} file in {}", folder.display()),
+            _ => format!("{n} {noun} in {}", path.display()),
+        })
     }
 
     /// Writes every page (one file each) finished at 16 bits per channel:
@@ -2318,6 +2454,7 @@ impl App {
                 let Ok(Rendered {
                     target,
                     page: rendered_page,
+                    epoch,
                     shown,
                     picture,
                     thumb,
@@ -2326,6 +2463,10 @@ impl App {
                     return Task::none();
                 };
                 match target {
+                    // Pages moved, went or were replaced meanwhile: the
+                    // picture may be of another page. Draw again.
+                    Target::Page if epoch != self.epoch => self.dirty_page = true,
+                    Target::Index(_) if epoch != self.epoch => self.restale(),
                     Target::Preview => {
                         if let Some((_, old_shown, old)) = &mut self.preview {
                             *old = picture.replacing(old);
@@ -2354,7 +2495,8 @@ impl App {
             Message::SystemTheme(mode) => self.system_dark = mode == iced::theme::Mode::Dark,
             Message::Theme(choice) => self.theme = choice,
             Message::Kind(kind) => {
-                if self.kind != kind {
+                // Not during a scan: its pages go where the mode says.
+                if self.kind != kind && self.busy.is_none() {
                     self.kind = kind;
                     self.redone = None;
                     if kind == Kind::Photo {
@@ -2364,7 +2506,14 @@ impl App {
                         self.pages.extend(last);
                         self.current = (!self.pages.is_empty()).then_some(0);
                     }
-                    self.redraw_preview();
+                    self.pages_changed();
+                    // Ctrl+Z restores the settings of the mode it was in.
+                    self.undo.clear();
+                    self.redo_stack.clear();
+                    self.last_edit = None;
+                    // The pages that follow the shared look take this
+                    // mode's one.
+                    self.shared_changed();
                 }
             }
             Message::Tab(tab) => self.tab = tab,
@@ -2430,7 +2579,9 @@ impl App {
                 self.document_buttons = ButtonAction::from_keys(Kind::Document, &[]);
                 self.photo_buttons = ButtonAction::from_keys(Kind::Photo, &[]);
                 self.theme = ThemeChoice::System;
-                self.redraw_preview();
+                self.undo.clear();
+                self.redo_stack.clear();
+                self.shared_changed();
                 self.note = "Impostazioni di fabbrica ripristinate".into();
             }
             Message::View(view) => *self.current_view() = view,
@@ -2489,6 +2640,16 @@ impl App {
                 let name = self.preset_name.trim().to_string();
                 if name.is_empty() {
                     self.note = "Dai un nome al preset".into();
+                    return Task::none();
+                }
+                // "Applica" looks among the factory presets first: one of
+                // the user's with the same name could never be applied.
+                if [Kind::Document, Kind::Photo]
+                    .into_iter()
+                    .flat_map(factory_presets)
+                    .any(|(n, _)| n == name)
+                {
+                    self.note = format!("«{name}» è un preset di fabbrica: scegli un altro nome");
                     return Task::none();
                 }
                 let setup = self.active().to_stored();
@@ -2762,17 +2923,30 @@ impl App {
             }
             Message::PageMove(i, forward) => {
                 let j = if forward { i + 1 } else { i.wrapping_sub(1) };
-                if j < self.pages.len() {
+                // Not while a page is scanned again: "Rifai" knows it by
+                // its place.
+                if self.busy.is_none() && i < self.pages.len() && j < self.pages.len() {
                     self.pages.swap(i, j);
                     self.current = Some(j);
+                    // A new scan waiting for a choice follows its page.
+                    if let Some((index, _)) = &mut self.redone {
+                        if *index == i {
+                            *index = j;
+                        } else if *index == j {
+                            *index = i;
+                        }
+                    }
+                    self.pages_changed();
                 }
             }
             Message::PageDelete(i) => {
-                if i < self.pages.len() {
+                if self.busy.is_none() && i < self.pages.len() {
+                    let title = self.page_title(i);
                     self.pages.remove(i);
                     self.redone = None;
                     self.current = (!self.pages.is_empty()).then(|| i.min(self.pages.len() - 1));
-                    self.note = format!("Pagina {} eliminata", i + 1);
+                    self.pages_changed();
+                    self.note = format!("{title} eliminata");
                 }
             }
             Message::PageRedo(i) => {
@@ -2786,20 +2960,23 @@ impl App {
                     if index < self.pages.len() {
                         self.pages[index] = page;
                         self.current = Some(index);
-                        self.note = format!("Pagina {} sostituita", index + 1);
+                        self.pages_changed();
+                        self.note = format!("{} sostituita", self.page_title(index));
                     }
                 }
             }
             Message::RejectRedo => {
                 if let Some((index, _)) = self.redone.take() {
                     self.current = Some(index);
-                    self.note = format!("Pagina {} lasciata com'era", index + 1);
+                    self.forget_page_undo();
+                    self.note = format!("{} lasciata com'era", self.page_title(index));
                 }
             }
             Message::NewDocument => {
                 self.pages.clear();
                 self.current = None;
                 self.redone = None;
+                self.pages_changed();
                 self.note = "Nuovo documento".into();
             }
         }
@@ -2902,9 +3079,17 @@ impl App {
                         self.print_next = false;
                         self.job = None;
                         self.jobs.clear();
-                        self.note = format!("Errore: {e}");
-                        if purpose == Purpose::Page {
-                            notify("Scansione non riuscita", &e, true);
+                        if e == worker::CANCELLED {
+                            // Stopped with "Annulla": nothing went wrong.
+                            self.note = match purpose {
+                                Purpose::Preview => "Anteprima annullata".into(),
+                                Purpose::Page => "Scansione annullata".into(),
+                            };
+                        } else {
+                            self.note = format!("Errore: {e}");
+                            if purpose == Purpose::Page {
+                                notify("Scansione non riuscita", &e, true);
+                            }
                         }
                     }
                 }
@@ -2985,16 +3170,19 @@ impl App {
                 if index < self.pages.len() {
                     self.pages[index] = page;
                     self.current = Some(index);
+                    self.pages_changed();
                 }
-                self.note = format!("Pagina {} rifatta", index + 1);
+                self.note = format!("{} rifatta", self.page_title(index));
                 notify(&self.note, "", false);
             }
             (Some(index), _) => {
                 self.redo = None;
                 self.redone = Some((index, page));
+                // The panel and the strip show the page done again.
+                self.current = Some(index);
                 self.note = format!(
-                    "Nuova scansione della pagina {}: tienila o lascia la vecchia",
-                    index + 1
+                    "Nuova scansione della {}: tienila o lascia la vecchia",
+                    self.page_name(index)
                 );
             }
             (None, Kind::Document) => {
@@ -3009,6 +3197,7 @@ impl App {
             (None, Kind::Photo) => {
                 if first {
                     self.pages.clear();
+                    self.pages_changed();
                 }
                 self.pages.push(page);
                 self.current = Some(if first { 0 } else { self.current.unwrap_or(0) });
@@ -3191,7 +3380,7 @@ impl App {
                     }
                     style
                 })
-                .on_press_maybe(kind.map(Message::Kind))
+                .on_press_maybe(kind.filter(|_| self.busy.is_none()).map(Message::Kind))
         };
         let modes = container(
             row![
@@ -3348,8 +3537,8 @@ impl App {
                     thumb,
                     row![
                         text(label).size(12).width(Length::Fill),
-                        tool("↑", Message::PageMove(i, false), i > 0),
-                        tool("↓", Message::PageMove(i, true), i + 1 < n),
+                        tool("↑", Message::PageMove(i, false), idle && i > 0),
+                        tool("↓", Message::PageMove(i, true), idle && i + 1 < n),
                         tool("↻", Message::PageRotate(i, true), idle),
                     ]
                     .align_y(Alignment::Center),
@@ -3367,9 +3556,34 @@ impl App {
                 .spacing(2),
             );
         }
+        // Which front-panel button adds a page (or scans a photo), as set
+        // in the preferences.
+        let (buttons, adds, what) = match self.kind {
+            Kind::Document => (
+                self.document_buttons,
+                ButtonAction::AddPage,
+                "aggiunge una pagina",
+            ),
+            Kind::Photo => (
+                self.photo_buttons,
+                ButtonAction::ScanPhoto,
+                "scansiona una foto",
+            ),
+        };
+        let Some(button) = buttons
+            .iter()
+            .position(|a| *a == adds)
+            .map(|i| BUTTON_NAMES[i])
+        else {
+            return container(scrollable(list.padding([12, 10])).height(Length::Fill))
+                .width(156)
+                .height(Length::Fill)
+                .style(surface)
+                .into();
+        };
         list = list.push(
             container(
-                text("Il tasto Scan dello scanner aggiunge una pagina")
+                text(format!("Il tasto {button} dello scanner {what}"))
                     .size(11)
                     .center(),
             )
@@ -3559,7 +3773,8 @@ impl App {
                 layers = layers.push(
                     container(card(
                         row![
-                            text(format!("Nuova scansione della pagina {}", index + 1)).size(13),
+                            text(format!("Nuova scansione della {}", self.page_name(*index)))
+                                .size(13),
                             button(text("Tieni la nuova").size(13)).on_press(Message::AcceptRedo),
                             button(text("Lascia la vecchia").size(13))
                                 .style(button::secondary)
@@ -3600,6 +3815,11 @@ impl App {
         let what = match purpose {
             Purpose::Preview => "Anteprima".to_string(),
             Purpose::Page => match self.kind {
+                // "Rifai": the page done again, not the next one.
+                _ if self.redo.is_some() => format!(
+                    "Nuova scansione della {}",
+                    self.page_name(self.redo.unwrap_or_default())
+                ),
                 _ if self.job.as_ref().is_some_and(|j| j.crops.len() > 1) => format!(
                     "Scansione di {} originali in una passata",
                     self.job.as_ref().map_or(0, |j| j.crops.len())
@@ -3742,13 +3962,9 @@ impl App {
             ),
             labelled(
                 "Colore",
-                pick_list(
-                    ALL_COLOURS,
-                    Some(s.colour),
-                    Message::Colour
-                )
-                .width(Length::Fill)
-                .into()
+                pick_list(ALL_COLOURS, Some(s.colour), Message::Colour)
+                    .width(Length::Fill)
+                    .into()
             ),
             labelled(
                 "Profondità",
@@ -3761,7 +3977,8 @@ impl App {
                 .into()
             ),
             text(if self.settings().depth == 16 {
-                "16 bit: ombre e sfumature senza scalini anche dopo curve forti;                  più memoria."
+                "16 bit: ombre e sfumature senza scalini anche dopo curve forti; \
+                 più memoria."
             } else {
                 "8 bit: come il driver HP. Per foto e RAW meglio 16 bit."
             })
@@ -3890,9 +4107,10 @@ impl App {
 
     fn adjust_pane(&self) -> Element<'_, Message> {
         let editing = if self.editing_page() {
-            match self.kind {
-                Kind::Document => format!("Pagina {}", self.current.map_or(0, |i| i + 1)),
-                Kind::Photo => "Foto".to_string(),
+            match (&self.redone, self.current) {
+                (Some((i, _)), _) => format!("Nuova scansione della {}", self.page_name(*i)),
+                (None, Some(i)) => self.page_title(i),
+                (None, None) => String::new(),
             }
         } else {
             "Prossima scansione".to_string()
@@ -4230,7 +4448,8 @@ impl App {
                 text(if quiet {
                     "Windows lascia i tasti a questa app."
                 } else {
-                    "Windows apre anche la sua app di scansione a ogni tasto,                      e toglie lo scanner a questa."
+                    "Windows apre anche la sua app di scansione a ogni tasto, \
+                     e toglie lo scanner a questa."
                 })
                 .size(11),
                 button(
@@ -4242,7 +4461,11 @@ impl App {
                     .size(12)
                 )
                 .padding([4, 10])
-                .style(if quiet { button::secondary } else { button::primary })
+                .style(if quiet {
+                    button::secondary
+                } else {
+                    button::primary
+                })
                 .on_press(Message::WiaQuiet(!quiet)),
                 text("Chiede una volta la conferma di amministratore.").size(11),
             ]
@@ -4295,7 +4518,7 @@ impl App {
                 button(text("Scegli…").size(13))
                     .style(button::secondary)
                     .on_press(Message::ChooseFolder),
-                button(text("Immagini\\Scansioni").size(13))
+                button(text(format!("Immagini{}Scansioni", std::path::MAIN_SEPARATOR)).size(13))
                     .style(button::text)
                     .on_press_maybe(
                         self.custom_folder
@@ -4359,7 +4582,9 @@ impl App {
         if let Output::Raw(_) = self.settings().output {
             pane = pane.push(
                 text(
-                    "I campioni dello scanner, lineari e senza regolazioni (ritaglio e                      raddrizzatura sì): si sviluppano in Lightroom, Camera Raw o Photoshop.                      Le regolazioni a destra valgono solo per l'anteprima.",
+                    "I campioni dello scanner, lineari e senza regolazioni (ritaglio e \
+                     raddrizzatura sì): si sviluppano in Lightroom, Camera Raw o Photoshop. \
+                     Le regolazioni a destra valgono solo per l'anteprima.",
                 )
                 .size(11),
             );
@@ -4617,4 +4842,67 @@ fn print_file(path: &std::path::Path) -> Result<(), String> {
         c
     };
     command.spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn pages_and_photos_are_named_for_what_they_are() {
+        assert_eq!(item_name(Kind::Document, 2, 5), "pagina 3");
+        assert_eq!(item_name(Kind::Photo, 1, 3), "foto 2");
+        assert_eq!(item_name(Kind::Photo, 0, 1), "foto");
+    }
+
+    #[test]
+    fn several_tiff_pages_are_one_file_only_as_multipage_tiff() {
+        let tif = Path::new("scansione.tif");
+        assert_eq!(writer(Output::TiffPages, tif, 3), Writer::Tiff);
+        // "TIFF" is one image per page, like PNG.
+        assert_eq!(
+            writer(Output::Image(ImageFormat::Tiff), tif, 3),
+            Writer::Folder
+        );
+        assert_eq!(
+            writer(Output::Image(ImageFormat::Tiff), tif, 1),
+            Writer::One
+        );
+        assert_eq!(writer(Output::TiffPages, tif, 1), Writer::One);
+        assert_eq!(writer(Output::Pdf, Path::new("d.pdf"), 1), Writer::Pdf);
+        assert_eq!(
+            writer(Output::Image(ImageFormat::Png), Path::new("d.png"), 2),
+            Writer::Folder
+        );
+    }
+
+    #[test]
+    fn the_quality_chosen_is_kept() {
+        let jpeg = Output::Image(ImageFormat::Jpeg { quality: 92 });
+        assert_eq!(
+            image_format(Path::new("f.jpg"), jpeg),
+            ImageFormat::Jpeg { quality: 92 }
+        );
+        // Another extension typed: its format.
+        assert_eq!(image_format(Path::new("f.png"), jpeg), ImageFormat::Png);
+        assert_eq!(image_format(Path::new("f"), jpeg), ImageFormat::Png);
+    }
+
+    #[test]
+    fn areas_stay_on_the_glass() {
+        for dpi in RESOLUTIONS {
+            let max_w = (GLASS_INCHES.0 * f64::from(dpi)).round() as u32;
+            let max_h = (GLASS_INCHES.1 * f64::from(dpi)).round() as u32;
+            // An original at the bottom right corner, with the margin of
+            // "Rifai" around it (1 mm past both edges).
+            let area = within_glass(Area::from_mm(dpi, 150.0, 240.0, 66.9, 58.2), dpi);
+            assert!(area.x + area.width <= max_w, "{dpi} dpi: {area:?}");
+            assert!(area.y + area.height <= max_h, "{dpi} dpi: {area:?}");
+            assert!(area.width > 0 && area.height > 0);
+            // An area inside is left alone.
+            let inside = Area::from_mm(dpi, 10.0, 10.0, 100.0, 100.0);
+            assert_eq!(within_glass(inside, dpi), inside);
+        }
+    }
 }
