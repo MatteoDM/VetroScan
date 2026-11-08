@@ -15,6 +15,7 @@
 
 #![windows_subsystem = "windows"]
 
+mod access;
 mod curve;
 mod histogram;
 mod prefs;
@@ -1141,6 +1142,9 @@ enum Message {
     /// Make Windows leave the scanner buttons alone (or not).
     WiaQuiet(bool),
     WiaDone(Result<(), String>),
+    /// Install the udev rule (Linux, scanner there but not openable).
+    GrantAccess,
+    GrantDone(Result<(), String>),
     ChooseFolder,
     Folder(Option<PathBuf>),
     DefaultFolder,
@@ -1213,6 +1217,9 @@ const INSET_MM: f32 = 0.4;
 struct App {
     worker: Option<Handle>,
     status: Option<Result<Status, String>>,
+    /// The scanner is plugged in but this user may not open it (Linux,
+    /// udev rule missing).
+    access_denied: bool,
     system_dark: bool,
     theme: ThemeChoice,
     kind: Kind,
@@ -1303,6 +1310,7 @@ impl App {
             Self {
                 worker: None,
                 status: None,
+                access_denied: false,
                 system_dark: false,
                 theme,
                 kind,
@@ -2131,6 +2139,19 @@ impl App {
                     Err(e) => format!("Non cambiato: {e}"),
                 };
             }
+            Message::GrantAccess => {
+                self.note = "Conferma con la password per dare lo scanner a questo utente…".into();
+                return Task::perform(async { access::grant() }, Message::GrantDone);
+            }
+            Message::GrantDone(result) => {
+                self.note = match result {
+                    Ok(()) => "Accesso allo scanner concesso".into(),
+                    Err(e) => format!("Accesso non concesso: {e}"),
+                };
+                if let Some(w) = &self.worker {
+                    w.send(Command::Status);
+                }
+            }
             Message::ButtonAction(i, action) => match self.kind {
                 Kind::Document => self.document_buttons[i] = action,
                 Kind::Photo => self.photo_buttons[i] = action,
@@ -2586,7 +2607,10 @@ impl App {
                 handle.send(Command::Status);
                 self.worker = Some(handle);
             }
-            Event::Status(status) => self.status = Some(status),
+            Event::Status(status) => {
+                self.access_denied = status.is_err() && access::denied();
+                self.status = Some(status);
+            }
             Event::Progress(stage) => {
                 if let Some((_, s)) = &mut self.busy {
                     *s = Some(stage);
@@ -3368,6 +3392,7 @@ impl App {
         let (x, y, wmm, hmm) = self.area_mm();
         let memory = self.memory();
         let mut pane = column![
+            self.access_card(),
             heading("Originale"),
             labelled(
                 "Risoluzione",
@@ -3809,6 +3834,44 @@ impl App {
             bw
         ]
         .spacing(10)
+        .into()
+    }
+
+    /// When the scanner is plugged in but may not be opened (Linux, udev
+    /// rule missing): what is wrong and the button that fixes it.
+    fn access_card(&self) -> Element<'_, Message> {
+        if !self.access_denied {
+            return Space::new().into();
+        }
+        container(
+            column![
+                text("Lo scanner è collegato, ma Linux non lo lascia usare a questo utente.")
+                    .size(13),
+                text(format!(
+                    "Basta una volta: installa la regola {} (chiede la password).",
+                    access::RULE_PATH_SHOWN
+                ))
+                .size(11),
+                button(text("Permetti l'accesso allo scanner").size(13))
+                    .padding([6, 12])
+                    .on_press_maybe(self.idle().then_some(Message::GrantAccess)),
+            ]
+            .spacing(6),
+        )
+        .padding(10)
+        .width(Length::Fill)
+        .style(|theme: &Theme| {
+            let palette = theme.extended_palette();
+            container::Style {
+                background: Some(palette.warning.weak.color.into()),
+                text_color: Some(palette.warning.weak.text),
+                border: iced::Border {
+                    radius: 8.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        })
         .into()
     }
 
