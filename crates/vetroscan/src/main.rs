@@ -1783,6 +1783,8 @@ enum Message {
     GrantAccess,
     GrantDone(Result<(), String>),
     ChooseFolder,
+    /// Open the folder of the scans in the file manager (made if missing).
+    ShowFolder,
     Folder(Option<PathBuf>),
     DefaultFolder,
     DocumentName(String),
@@ -3588,6 +3590,14 @@ impl App {
                     w.send(Command::Choose(device));
                 }
             }
+            Message::ShowFolder => {
+                let folder = self.folder();
+                if let Err(e) = std::fs::create_dir_all(&folder) {
+                    self.note = trf("Cartella non creata: {e}", &[("e", &e)]);
+                } else {
+                    open_folder(&folder);
+                }
+            }
             Message::ChooseFolder => {
                 let start = self.folder();
                 return Task::perform(
@@ -4292,6 +4302,7 @@ impl App {
             (Key::Character("p"), true, _) => Some(Message::Preview),
             (Key::Named(Named::Enter), true, _) => Some(Message::Scan),
             (Key::Character("s"), true, _) => Some(Message::Save),
+            (Key::Character("o"), true, _) => Some(Message::ShowFolder),
             (Key::Character("d"), true, _) if !editing && self.tab == Tab::Result => {
                 self.current.map(Message::PageDuplicate)
             }
@@ -6306,6 +6317,9 @@ impl App {
                 button(text(tr("Scegli…")).size(13))
                     .style(button::secondary)
                     .on_press(Message::ChooseFolder),
+                button(text(tr("Apri")).size(13))
+                    .style(button::secondary)
+                    .on_press(Message::ShowFolder),
                 button(
                     text(trf(
                         "Immagini{sep}Scansioni",
@@ -6517,11 +6531,19 @@ impl App {
                 self.shown().is_some() && self.busy.is_none(),
             ),
         };
-        button(text(label).size(14).center().width(Length::Fill))
-            .width(Length::Fill)
-            .padding([9, 12])
-            .on_press_maybe(enabled.then_some(Message::Save))
-            .into()
+        // Saving, and next to it the folder the files go to.
+        row![
+            button(text(label).size(14).center().width(Length::Fill))
+                .width(Length::Fill)
+                .padding([9, 12])
+                .on_press_maybe(enabled.then_some(Message::Save)),
+            button(text(tr("Apri la cartella")).size(13).center())
+                .style(button::secondary)
+                .padding([10, 10])
+                .on_press(Message::ShowFolder),
+        ]
+        .spacing(8)
+        .into()
     }
 
     /// Facts at the bottom: scanner, area, resolution, last note.

@@ -56,7 +56,7 @@ The rest of this guide is about doing these same things better.
 | **At the top** | the app's name and version, the **Document** and **Photo** modes, the scanner's state, the **Preview** and **Scan…** buttons, the choice of theme (**System**, **Light**, **Dark**) |
 | **On the left** | the column of the **pages** (always in Document, in Photo when there are several photos) |
 | **In the middle** | the **viewer**: the preview of the glass or the scan made |
-| **On the right** | four tabs: **Scan**, **Adjust**, **Output**, **Preferences**; below them, the **Save …** button |
+| **On the right** | four tabs: **Scan**, **Adjust**, **Output**, **Preferences**; below them, the **Save …** and **Open the folder** buttons |
 | **At the bottom** | the status bar: the scanner in use and its connection, resolution and colour, size of the image in pixels, the app's last message |
 
 The **scanner's state**, at the top right:
@@ -620,7 +620,9 @@ The fourth tab on the right. Every change is saved by itself.
 - **At start-up · Mode**: which mode the app opens with: *The last one used*, *Document* or
   *Photo*. Resolution, colour, format and PDF page of each mode are found again as you left
   them anyway; the adjustments start from zero (to find them again, save them in a preset).
-- **Folder of the files**: where the scans are saved. **Choose…** points to another one; the
+- **Folder of the files**: where the scans are saved. **Open** shows it in the file manager
+  (also **Open the folder**, next to **Save …**, and **Ctrl+O**). **Choose…** points to
+  another one; the
   button next to it goes back to the default, **Scansioni** inside the **Pictures** folder
   (the folder keeps its Italian name in every language, so the scans stay together):
 
@@ -667,6 +669,7 @@ text field (a name, a number).
 | **Ctrl+P** | Preview |
 | **Ctrl+Enter** | Scan |
 | **Ctrl+S** | Save |
+| **Ctrl+O** | open the folder of the scans |
 | **Ctrl+Z** | undo (in the editor: undo in the editor) |
 | **Ctrl+Y** or **Ctrl+Shift+Z** | redo |
 | **Ctrl+D** | duplicate the page shown |

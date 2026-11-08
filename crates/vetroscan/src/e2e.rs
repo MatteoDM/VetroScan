@@ -1576,3 +1576,39 @@ fn tour() {
         shot(&mut ui, "photo-prefs");
     }
 }
+
+// ---------------------------------------------------------- the folder
+
+#[test]
+fn the_folder_of_the_scans_opens_from_the_window_and_with_ctrl_o() {
+    let mut ui = Ui::new();
+    let folder = ui.app.folder();
+    let opened = format!("cartella aperta: {}", folder.display());
+    crate::testing::take_effects();
+    // Next to "Save", even before the first scan: the folder is made.
+    ui.click("Apri la cartella");
+    assert!(folder.is_dir());
+    assert_eq!(
+        crate::testing::take_effects(),
+        std::slice::from_ref(&opened)
+    );
+    // In the Preferences, next to the folder's path.
+    ui.send(Message::Pane(crate::Pane::Prefs));
+    ui.click("Apri");
+    assert_eq!(
+        crate::testing::take_effects(),
+        std::slice::from_ref(&opened)
+    );
+    // Ctrl+O.
+    let ctrl_o = iced::keyboard::Event::KeyPressed {
+        key: iced::keyboard::Key::Character("o".into()),
+        modified_key: iced::keyboard::Key::Character("o".into()),
+        physical_key: iced::keyboard::key::Physical::Code(iced::keyboard::key::Code::KeyO),
+        location: iced::keyboard::Location::Standard,
+        modifiers: iced::keyboard::Modifiers::COMMAND,
+        text: None,
+        repeat: false,
+    };
+    ui.send(Message::Key(ctrl_o));
+    assert_eq!(crate::testing::take_effects(), [opened]);
+}

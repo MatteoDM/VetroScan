@@ -17,6 +17,11 @@ GitHub; here they are in English.
 
 ## [Unreleased]
 
+### Added
+- **Open the folder** of the scans from the window: a button next to «Save …», one next to
+  the folder's path in the Preferences, and the **Ctrl+O** shortcut (⌘O on macOS). The folder
+  is made if it does not exist yet.
+
 ## [0.3.0] - 2026-11-08
 
 ### Added

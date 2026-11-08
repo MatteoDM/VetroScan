@@ -51,7 +51,7 @@ pub fn dir() -> PathBuf {
         d.borrow_mut()
             .get_or_insert_with(|| {
                 let dir = std::env::temp_dir().join(format!(
-                    "hp3770-test-{}-{}",
+                    "vetroscan-test-{}-{}",
                     std::process::id(),
                     NEXT.fetch_add(1, Ordering::SeqCst)
                 ));
