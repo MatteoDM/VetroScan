@@ -17,6 +17,8 @@ GitHub; here they are in English.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-08
+
 ### Added
 - **The app in English**: in the Preferences, «Language» chooses between *Automatic*
   (English if the system is in English, Italian otherwise), *Italiano* and *English*. The
@@ -31,6 +33,8 @@ GitHub; here they are in English.
   `hp3770` package, and the settings and presets are copied from the old `hp3770` folder at
   the first start. The `hp3770` command and the HP 3770 driver keep their names.
 - The status bar names the scanner in use next to its connection.
+- The RAW files (DNG and linear 16-bit TIFF) name in their metadata the scanner that made
+  the scan and VetroScan as the program.
 - The «Film» mode (disabled) only appears with a scanner that has the adapter for slides and
   negatives: the HP 3770 does not.
 - The project's documentation is in English (README, guides, changelog); a short Italian
@@ -193,7 +197,8 @@ First version.
 - Texts with a run of spaces in the middle (note on RAW, on 16 bits and on the buttons in
   Windows); the button of the default folder uses the system's separator.
 
-[Unreleased]: https://github.com/MatteoDM/scanner/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/MatteoDM/scanner/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/MatteoDM/scanner/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/MatteoDM/scanner/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/MatteoDM/scanner/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/MatteoDM/scanner/compare/v0.1.0...v0.1.1
