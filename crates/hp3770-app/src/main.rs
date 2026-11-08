@@ -500,6 +500,14 @@ struct Rendered {
     thumb: Option<Picture>,
 }
 
+/// The pages of the inspector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pane {
+    Scan,
+    Adjust,
+    Output,
+}
+
 /// Which image the viewer shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -515,6 +523,7 @@ enum Message {
     Theme(ThemeChoice),
     Kind(Kind),
     Tab(Tab),
+    Pane(Pane),
     View(View),
     Fit,
     ActualSize,
@@ -563,6 +572,7 @@ struct App {
     document: Settings,
     photo: Settings,
     tab: Tab,
+    pane: Pane,
     /// The raw preview of the glass, its adjusted image and picture.
     preview: Option<(Raw, Image, Picture)>,
     preview_view: View,
@@ -600,6 +610,7 @@ impl App {
                 document: Settings::document(),
                 photo: Settings::photo(),
                 tab: Tab::Preview,
+                pane: Pane::Scan,
                 preview: None,
                 preview_view: View::default(),
                 result_view: View::default(),
@@ -937,6 +948,7 @@ impl App {
                 }
             }
             Message::Tab(tab) => self.tab = tab,
+            Message::Pane(pane) => self.pane = pane,
             Message::View(view) => *self.current_view() = view,
             Message::Fit => *self.current_view() = View::default(),
             Message::ActualSize => {
@@ -1331,217 +1343,491 @@ impl App {
     // ------------------------------------------------------------- views
 
     fn view(&self) -> Element<'_, Message> {
-        let header = row![
-            mode_button("📄  Documento", Kind::Document, self.kind),
-            mode_button("🖼  Foto", Kind::Photo, self.kind),
-            Space::new().width(Length::Fill),
-            text(self.status_line()).size(13),
-            button(text("Aggiorna").size(13))
-                .style(button::text)
-                .on_press_maybe(self.idle().then_some(Message::RefreshStatus)),
-            pick_list(
-                [ThemeChoice::System, ThemeChoice::Light, ThemeChoice::Dark],
-                Some(self.theme),
-                Message::Theme
-            )
-            .text_size(13),
-        ]
-        .spacing(10)
-        .align_y(Alignment::Center);
-
-        let body = row![
-            self.left(),
-            scrollable(self.panel().padding(iced::Padding::ZERO.right(14))).width(360),
-        ]
-        .spacing(18)
-        .height(Length::Fill);
-
-        container(column![header, body, self.bottom()].spacing(12))
-            .padding(16)
-            .into()
+        let mut body = row![].height(Length::Fill);
+        if self.kind == Kind::Document {
+            body = body.push(self.strip());
+        }
+        body = body.push(self.stage()).push(self.inspector());
+        column![self.top_bar(), body, self.status_bar()].into()
     }
 
     fn idle(&self) -> bool {
         self.busy.is_none() && self.worker.is_some()
     }
 
-    fn status_line(&self) -> String {
-        match &self.status {
-            None => "Scanner: …".into(),
-            Some(Err(e)) => format!("Scanner non trovato: {e}"),
-            Some(Ok(s)) => format!(
-                "Lampada {} · carrello {}",
-                match s.lamp {
-                    hp3770_core::status::Lamp::Off => "spenta",
-                    _ => "accesa",
-                },
-                if s.head_at_home {
-                    "a casa"
-                } else {
-                    "fuori casa"
-                }
-            ),
-        }
-    }
-
-    fn left(&self) -> Element<'_, Message> {
-        let tab_button = |label, tab| {
-            button(text(label))
-                .style(if self.tab == tab {
-                    button::primary
-                } else {
-                    button::secondary
+    /// Mode switch, scanner state, preview and the main action.
+    fn top_bar(&self) -> Element<'_, Message> {
+        let segment = |label: &'static str, kind: Option<Kind>| {
+            let on = kind == Some(self.kind);
+            button(text(label).size(13))
+                .padding([6, 14])
+                .style(move |theme: &Theme, status| {
+                    let palette = theme.extended_palette();
+                    let mut style = button::text(theme, status);
+                    if on {
+                        style.background = Some(palette.background.base.color.into());
+                        style.text_color = palette.background.base.text;
+                        style.border.radius = 6.0.into();
+                        style.shadow = iced::Shadow {
+                            color: iced::Color::from_rgba(0.0, 0.0, 0.0, 0.18),
+                            offset: iced::Vector::new(0.0, 1.0),
+                            blur_radius: 3.0,
+                        };
+                    } else if kind.is_none() {
+                        style.text_color = palette.background.strong.color;
+                    }
+                    style
                 })
-                .on_press(Message::Tab(tab))
+                .on_press_maybe(kind.map(Message::Kind))
         };
-        let result_label = match self.kind {
-            Kind::Document => "Pagine",
-            Kind::Photo => "Foto",
-        };
-        let tools = row![
-            tab_button("Anteprima", Tab::Preview),
-            tab_button(result_label, Tab::Result),
-            Space::new().width(Length::Fill),
-            button(text("Adatta"))
-                .style(button::secondary)
-                .on_press(Message::Fit),
-            button(text("100%"))
-                .style(button::secondary)
-                .on_press(Message::ActualSize),
-            button(text("Togli selezione"))
-                .style(button::secondary)
-                .on_press_maybe(
-                    (self.tab == Tab::Preview && self.selection.is_some())
-                        .then_some(Message::Select(None))
-                ),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center);
-
-        let pick = self
-            .eyedropper
-            .then_some(Message::Picked as fn(Point) -> Message);
-        let view = match self.tab {
-            Tab::Preview => viewer::viewer(
-                self.preview.as_ref().map(|(_, _, p)| p),
-                Self::glass(),
-                "Fai un'anteprima per vedere il vetro",
-                self.preview_view,
-                self.selection,
-                Message::View,
-                Some(Message::Select),
-                pick,
-            ),
-            Tab::Result => viewer::viewer(
-                self.shown().map(|p| &p.picture),
-                Self::glass(),
-                "Nessuna scansione",
-                self.result_view,
-                None,
-                Message::View,
-                None,
-                pick,
-            ),
-        };
-
-        let redo_bar: Element<'_, Message> = match &self.redone {
-            Some((index, _)) if self.tab == Tab::Result => row![
-                text(format!("Nuova scansione della pagina {}", index + 1)).width(Length::Fill),
-                button(text("Tieni la nuova")).on_press(Message::AcceptRedo),
-                button(text("Lascia la vecchia"))
-                    .style(button::secondary)
-                    .on_press(Message::RejectRedo),
+        let modes = container(
+            row![
+                segment("Documento", Some(Kind::Document)),
+                segment("Foto", Some(Kind::Photo)),
+                segment("Pellicola", None),
             ]
-            .spacing(8)
-            .align_y(Alignment::Center)
-            .into(),
-            _ => Space::new().into(),
+            .spacing(2),
+        )
+        .padding(3)
+        .style(|theme: &Theme| container::Style {
+            background: Some(theme.extended_palette().background.weak.color.into()),
+            border: iced::Border {
+                radius: 8.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let (dot, state) = match (&self.status, &self.busy) {
+            (_, Some(_)) => (
+                iced::Color::from_rgb(0.95, 0.65, 0.2),
+                "Al lavoro".to_string(),
+            ),
+            (Some(Ok(s)), None) => (
+                iced::Color::from_rgb(0.24, 0.77, 0.48),
+                match s.lamp {
+                    hp3770_core::status::Lamp::Off => "Pronto · lampada spenta".to_string(),
+                    _ => "Pronto · lampada accesa".to_string(),
+                },
+            ),
+            (Some(Err(_)), None) => (
+                iced::Color::from_rgb(0.94, 0.36, 0.33),
+                "Scanner non trovato".to_string(),
+            ),
+            (None, None) => (
+                iced::Color::from_rgb(0.6, 0.6, 0.6),
+                "Collegamento…".to_string(),
+            ),
         };
-        let hint = if self.eyedropper {
-            "Contagocce: clicca su qualcosa che deve essere bianco o grigio"
-        } else {
-            "Rotella: zoom · tasto destro: sposta · sinistro: seleziona l'area"
+        let chip = container(
+            row![
+                container(Space::new().width(8).height(8)).style(move |_: &Theme| {
+                    container::Style {
+                        background: Some(dot.into()),
+                        border: iced::Border {
+                            radius: 4.0.into(),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    }
+                }),
+                text(state).size(12),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center),
+        )
+        .padding([5, 10])
+        .style(|theme: &Theme| container::Style {
+            background: Some(theme.extended_palette().background.weak.color.into()),
+            border: iced::Border {
+                radius: 12.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let next = match self.kind {
+            Kind::Document => format!("Scansiona pagina {}", self.pages.len() + 1),
+            Kind::Photo => "Scansiona foto".into(),
         };
-        let mut left = column![
-            tools,
-            redo_bar,
-            container(view).height(Length::Fill).width(Length::Fill),
-            text(hint).size(12),
+        let bar = row![
+            text("Scanjet 3770").size(15),
+            modes,
+            Space::new().width(Length::Fill),
+            button(chip)
+                .padding(0)
+                .style(button::text)
+                .on_press_maybe(self.idle().then_some(Message::RefreshStatus)),
+            button(text("Anteprima").size(13))
+                .style(button::secondary)
+                .padding([7, 12])
+                .on_press_maybe(self.idle().then_some(Message::Preview)),
+            button(text(next).size(13))
+                .padding([7, 16])
+                .on_press_maybe(self.idle().then_some(Message::Scan)),
+            pick_list(
+                [ThemeChoice::System, ThemeChoice::Light, ThemeChoice::Dark],
+                Some(self.theme),
+                Message::Theme
+            )
+            .text_size(12),
         ]
-        .spacing(8)
-        .width(Length::Fill);
-        if self.kind == Kind::Document {
-            left = left.push(self.strip());
-        }
-        left.into()
+        .spacing(12)
+        .align_y(Alignment::Center);
+        container(bar)
+            .padding([10, 16])
+            .width(Length::Fill)
+            .style(surface)
+            .into()
     }
 
-    /// The pages of the document as thumbnails, each with its tools.
+    /// The pages of the document, top to bottom, each with its tools.
     fn strip(&self) -> Element<'_, Message> {
-        if self.pages.is_empty() {
-            return text("Documento vuoto: ogni scansione aggiunge una pagina qui.")
-                .size(13)
-                .into();
-        }
         let idle = self.busy.is_none();
         let tool = |label: &'static str, message: Message, enabled: bool| {
-            button(text(label).size(13))
-                .padding([2, 6])
+            button(text(label).size(12))
+                .padding([1, 5])
                 .style(button::text)
                 .on_press_maybe(enabled.then_some(message))
         };
         let n = self.pages.len();
-        let cards = self.pages.iter().enumerate().map(|(i, page)| {
+        let mut list = column![text(format!("PAGINE · {n}")).size(11)].spacing(10);
+        for (i, page) in self.pages.iter().enumerate() {
             let selected = self.current == Some(i) && self.tab == Tab::Result;
-            let thumb = button(iced::widget::image(page.thumb.handle.clone()).height(100))
-                .padding(3)
-                .style(if selected {
-                    button::primary
-                } else {
-                    button::secondary
-                })
-                .on_press(Message::PageShow(i));
-            column![
-                thumb,
-                text(format!("Pagina {}", i + 1)).size(12),
-                row![
-                    tool("◀", Message::PageMove(i, false), i > 0),
-                    tool("↺", Message::PageRotate(i, false), idle),
-                    tool("↻", Message::PageRotate(i, true), idle),
-                    tool("▶", Message::PageMove(i, true), i + 1 < n),
-                ],
-                row![
-                    tool("Rifai", Message::PageRedo(i), idle),
-                    tool("Elimina", Message::PageDelete(i), idle),
-                ],
-            ]
-            .spacing(2)
-            .align_x(Alignment::Center)
-            .into()
-        });
-        scrollable(row(cards).spacing(12).padding([4, 0]))
-            .direction(scrollable::Direction::Horizontal(
-                scrollable::Scrollbar::default(),
-            ))
+            let thumb = button(
+                iced::widget::image(page.thumb.handle.clone())
+                    .width(Length::Fill)
+                    .height(140),
+            )
+            .padding(2)
+            .style(move |theme: &Theme, status| {
+                let mut style = button::text(theme, status);
+                style.border = iced::Border {
+                    radius: 6.0.into(),
+                    width: 2.0,
+                    color: if selected {
+                        theme.palette().primary
+                    } else {
+                        iced::Color::TRANSPARENT
+                    },
+                };
+                style
+            })
+            .on_press(Message::PageShow(i));
+            list = list.push(
+                column![
+                    thumb,
+                    row![
+                        text(format!("{}", i + 1)).size(12).width(Length::Fill),
+                        tool("↑", Message::PageMove(i, false), i > 0),
+                        tool("↓", Message::PageMove(i, true), i + 1 < n),
+                        tool("↻", Message::PageRotate(i, true), idle),
+                    ]
+                    .align_y(Alignment::Center),
+                    row![
+                        tool("Rifai", Message::PageRedo(i), idle),
+                        Space::new().width(Length::Fill),
+                        tool("Elimina", Message::PageDelete(i), idle),
+                    ],
+                ]
+                .spacing(2),
+            );
+        }
+        list = list.push(
+            container(
+                text("Il tasto Scan dello scanner aggiunge una pagina")
+                    .size(11)
+                    .center(),
+            )
+            .padding(10)
             .width(Length::Fill)
+            .style(|theme: &Theme| container::Style {
+                border: iced::Border {
+                    radius: 6.0.into(),
+                    width: 1.0,
+                    color: theme.extended_palette().background.strong.color,
+                },
+                text_color: Some(theme.extended_palette().background.strong.color),
+                ..Default::default()
+            }),
+        );
+        container(scrollable(list.padding([12, 10])).height(Length::Fill))
+            .width(156)
+            .height(Length::Fill)
+            .style(surface)
             .into()
     }
 
-    fn panel(&self) -> iced::widget::Column<'_, Message> {
-        let s = self.active();
-        let editing = if self.editing_page() {
-            "Regolazioni della pagina mostrata"
-        } else {
-            "Regolazioni (sull'anteprima)"
+    /// The canvas with its floating controls.
+    fn stage(&self) -> Element<'_, Message> {
+        let pick = self
+            .eyedropper
+            .then_some(Message::Picked as fn(Point) -> Message);
+        let (view, zoom) = match self.tab {
+            Tab::Preview => (
+                viewer::viewer(
+                    self.preview.as_ref().map(|(_, _, p)| p),
+                    Self::glass(),
+                    "Premi «Anteprima» per vedere il vetro",
+                    self.preview_view,
+                    self.selection,
+                    Message::View,
+                    Some(Message::Select),
+                    pick,
+                ),
+                self.preview_view.scale,
+            ),
+            Tab::Result => (
+                viewer::viewer(
+                    self.shown().map(|p| &p.picture),
+                    Self::glass(),
+                    "Nessuna scansione: premi «Scansiona»",
+                    self.result_view,
+                    None,
+                    Message::View,
+                    None,
+                    pick,
+                ),
+                self.result_view.scale,
+            ),
         };
+        let small = |label: &'static str, message: Option<Message>, on: bool| {
+            button(text(label).size(12))
+                .padding([5, 9])
+                .style(move |theme: &Theme, status| {
+                    let mut style = button::text(theme, status);
+                    if on {
+                        style.background = Some(theme.extended_palette().primary.weak.color.into());
+                        style.text_color = theme.extended_palette().primary.weak.text;
+                        style.border.radius = 5.0.into();
+                    }
+                    style
+                })
+                .on_press_maybe(message)
+        };
+        let result_label = match self.kind {
+            Kind::Document => "Pagina",
+            Kind::Photo => "Foto",
+        };
+        let views = card(
+            row![
+                small(
+                    "Anteprima",
+                    Some(Message::Tab(Tab::Preview)),
+                    self.tab == Tab::Preview
+                ),
+                small(
+                    result_label,
+                    Some(Message::Tab(Tab::Result)),
+                    self.tab == Tab::Result
+                ),
+            ]
+            .spacing(2),
+        );
+        let tools = card(
+            column![
+                small("Contagocce", Some(Message::Eyedropper), self.eyedropper),
+                small(
+                    "Togli selezione",
+                    (self.tab == Tab::Preview && self.selection.is_some())
+                        .then_some(Message::Select(None)),
+                    false
+                ),
+            ]
+            .spacing(2),
+        );
+        let compare = card(
+            row![
+                small("Prima", Some(Message::Before(true)), self.before),
+                small("Dopo", Some(Message::Before(false)), !self.before),
+            ]
+            .spacing(2),
+        );
+        let zoom_label = match zoom {
+            None => "Vista intera".to_string(),
+            Some(s) => format!("{:.0}%", s * 100.0),
+        };
+        let zoom = card(
+            row![
+                text(zoom_label).size(12),
+                small("Adatta", Some(Message::Fit), false),
+                small("1:1", Some(Message::ActualSize), false),
+            ]
+            .spacing(4)
+            .align_y(Alignment::Center),
+        );
+        let mut layers = iced::widget::Stack::new()
+            .push(view)
+            .push(
+                container(column![views, tools].spacing(8))
+                    .padding(14)
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            )
+            .push(
+                container(compare)
+                    .padding(14)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .align_x(iced::alignment::Horizontal::Right),
+            )
+            .push(
+                container(zoom)
+                    .padding(14)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .align_x(iced::alignment::Horizontal::Right)
+                    .align_y(iced::alignment::Vertical::Bottom),
+            );
+        if let Some(progress) = self.progress_card() {
+            layers = layers.push(
+                container(progress)
+                    .padding(18)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .align_x(iced::alignment::Horizontal::Center)
+                    .align_y(iced::alignment::Vertical::Bottom),
+            );
+        }
+        if let Some((index, _)) = &self.redone {
+            if self.tab == Tab::Result {
+                layers = layers.push(
+                    container(card(
+                        row![
+                            text(format!("Nuova scansione della pagina {}", index + 1)).size(13),
+                            button(text("Tieni la nuova").size(13)).on_press(Message::AcceptRedo),
+                            button(text("Lascia la vecchia").size(13))
+                                .style(button::secondary)
+                                .on_press(Message::RejectRedo),
+                        ]
+                        .spacing(10)
+                        .align_y(Alignment::Center),
+                    ))
+                    .padding(14)
+                    .width(Length::Fill)
+                    .align_x(iced::alignment::Horizontal::Center),
+                );
+            }
+        }
+        container(layers)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(|theme: &Theme| {
+                let palette = theme.extended_palette();
+                container::Style {
+                    background: Some(
+                        if palette.is_dark {
+                            iced::Color::from_rgb8(16, 18, 22)
+                        } else {
+                            iced::Color::from_rgb8(227, 229, 234)
+                        }
+                        .into(),
+                    ),
+                    ..Default::default()
+                }
+            })
+            .into()
+    }
 
-        // Scan settings.
+    /// The progress of the running scan, shown on the canvas.
+    fn progress_card(&self) -> Option<Element<'_, Message>> {
+        let (purpose, stage) = self.busy.as_ref()?;
+        let what = match purpose {
+            Purpose::Preview => "Anteprima".to_string(),
+            Purpose::Page => match self.kind {
+                Kind::Document => format!("Scansione pagina {}", self.pages.len() + 1),
+                Kind::Photo => "Scansione foto".to_string(),
+            },
+        };
+        let (fraction, detail) = match stage {
+            None | Some(Stage::Starting) => (0.02, "Avvio dello scanner"),
+            Some(Stage::WarmingUp) => (0.05, "La lampada era spenta: riscaldamento"),
+            Some(Stage::Calibrating) => (0.1, "Calibrazione su striscia bianca"),
+            Some(Stage::Scanning { .. }) => (0.0, "Lettura"),
+            Some(Stage::Finishing) => (0.97, "Ritorno del carrello ed elaborazione"),
+        };
+        let fraction = match stage {
+            Some(Stage::Scanning { done, total }) => {
+                0.1 + 0.85 * *done as f32 / (*total).max(1) as f32
+            }
+            _ => fraction,
+        };
+        Some(card(
+            column![
+                row![
+                    text(format!("{what} · {:.0}%", fraction * 100.0))
+                        .size(13)
+                        .width(Length::Fill),
+                    button(text("Annulla").size(12))
+                        .style(button::danger)
+                        .padding([3, 10])
+                        .on_press(Message::Cancel),
+                ]
+                .align_y(Alignment::Center),
+                progress_bar(0.0..=1.0, fraction).girth(6),
+                text(detail).size(11),
+            ]
+            .spacing(8)
+            .width(420),
+        ))
+    }
+
+    /// The inspector: scan settings, adjustments, output.
+    fn inspector(&self) -> Element<'_, Message> {
+        let tab = |label: &'static str, pane: Pane| {
+            let on = self.pane == pane;
+            button(text(label).size(13))
+                .padding([8, 12])
+                .style(move |theme: &Theme, status| {
+                    let mut style = button::text(theme, status);
+                    if on {
+                        style.text_color = theme.extended_palette().background.base.text;
+                        style.border = iced::Border {
+                            color: theme.palette().primary,
+                            width: 0.0,
+                            radius: 0.0.into(),
+                        };
+                        style.background =
+                            Some(theme.extended_palette().background.weak.color.into());
+                    }
+                    style
+                })
+                .on_press(Message::Pane(pane))
+        };
+        let tabs = row![
+            tab("Scansione", Pane::Scan),
+            tab("Regola", Pane::Adjust),
+            tab("Uscita", Pane::Output),
+        ]
+        .spacing(2);
+        let content = match self.pane {
+            Pane::Scan => self.scan_pane(),
+            Pane::Adjust => self.adjust_pane(),
+            Pane::Output => self.output_pane(),
+        };
+        let footer = self.footer();
+        container(
+            column![
+                container(tabs).padding([8, 12]),
+                rule::horizontal(1),
+                scrollable(container(content).padding([12, 16])).height(Length::Fill),
+                rule::horizontal(1),
+                container(footer).padding(12),
+            ]
+            .height(Length::Fill),
+        )
+        .width(352)
+        .height(Length::Fill)
+        .style(surface)
+        .into()
+    }
+
+    fn scan_pane(&self) -> Element<'_, Message> {
+        let s = self.active();
         let request = self.request();
         let (w, h) = (request.area.width, request.area.height);
         let (x, y, wmm, hmm) = self.area_mm();
         let memory = self.memory();
-        let mut scan = column![
-            heading("Scansione"),
+        let mut pane = column![
+            heading("Originale"),
             labelled(
                 "Risoluzione",
                 pick_list(RESOLUTIONS, Some(self.settings().dpi), Message::Dpi)
@@ -1558,19 +1844,22 @@ impl App {
                 .width(Length::Fill)
                 .into()
             ),
+            heading("Area"),
+            text(if self.selection.is_none() {
+                "Tutto il formato A4. Trascina sull'anteprima per scegliere un'area.".to_string()
+            } else {
+                format!("Da {x:.0}, {y:.0} mm · {wmm:.0} × {hmm:.0} mm")
+            })
+            .size(12),
             text(format!(
-                "Area {x:.0}, {y:.0} mm · {wmm:.0} × {hmm:.0} mm{} · {w} × {h} pixel",
-                if self.selection.is_none() {
-                    " (A4)"
-                } else {
-                    ""
-                }
+                "{w} × {h} pixel · in memoria {:.0} MB",
+                memory / 1e6
             ))
             .size(12),
         ]
-        .spacing(8);
+        .spacing(10);
         if memory > LARGE_SCAN {
-            scan = scan.push(
+            pane = pane.push(
                 text(format!(
                     "Scansione molto grande: circa {:.1} GB e alcuni minuti. \
                      Seleziona un'area o abbassa la risoluzione se non serve tutta.",
@@ -1581,33 +1870,35 @@ impl App {
             );
         }
         if self.settings().dpi > 1200 && self.selection.is_none() {
-            scan = scan.push(
+            pane = pane.push(
                 text("2400 dpi servono per piccoli originali: seleziona l'area sull'anteprima.")
                     .size(12)
                     .style(text::warning),
             );
         }
-        let actions = row![
-            button(text("Anteprima").center().width(Length::Fill))
-                .width(Length::Fill)
-                .style(button::secondary)
-                .on_press_maybe(self.idle().then_some(Message::Preview)),
-            button(
-                text(match self.kind {
-                    Kind::Document => "Scansiona pagina",
-                    Kind::Photo => "Scansiona",
-                })
-                .center()
-                .width(Length::Fill)
-            )
-            .width(Length::Fill)
-            .on_press_maybe(self.idle().then_some(Message::Scan)),
-        ]
-        .spacing(8);
+        pane = pane.push(heading("Tasti dello scanner")).push(
+            text(match self.kind {
+                Kind::Document => {
+                    "Scan aggiunge una pagina · Copy rifà l'ultima · Instant Share salva il documento"
+                }
+                Kind::Photo => "Scan scansiona la foto · Instant Share apre la cartella",
+            })
+            .size(12),
+        );
+        pane.into()
+    }
 
-        // Adjustments.
-        let colour_mode = s.colour == Colour::Rgb;
+    fn adjust_pane(&self) -> Element<'_, Message> {
+        let s = self.active();
         let lineart = s.colour == Colour::Lineart;
+        let editing = if self.editing_page() {
+            match self.kind {
+                Kind::Document => format!("Pagina {}", self.current.map_or(0, |i| i + 1)),
+                Kind::Photo => "Foto".to_string(),
+            }
+        } else {
+            "Prossima scansione".to_string()
+        };
         let histogram: Element<'_, Message> = {
             let shown = if self.editing_page() {
                 self.shown().map(|p| &p.shown)
@@ -1618,64 +1909,58 @@ impl App {
                 Some(hist) if !hist.is_empty() => {
                     let (black, white) = hist.clipped();
                     column![
-                        canvas(hist).width(Length::Fill).height(90),
-                        text(format!(
-                            "Neri tagliati {black:.1} % · bianchi tagliati {white:.1} %"
-                        ))
-                        .size(11),
+                        canvas(hist).width(Length::Fill).height(84),
+                        row![
+                            text(format!("Neri tagliati {black:.1}%"))
+                                .size(11)
+                                .width(Length::Fill),
+                            text(format!("Bianchi tagliati {white:.1}%")).size(11),
+                        ],
                     ]
                     .spacing(4)
                     .into()
                 }
-                _ => Space::new().into(),
+                _ => text("L'istogramma compare dopo l'anteprima")
+                    .size(11)
+                    .into(),
             }
         };
-        let tone = self.group(
+        let base = self.group(
             Group::Tone,
-            "Tono",
+            "Base",
             !lineart,
-            "Non serve in bianco e nero: usa la soglia",
+            "In bianco e nero conta la soglia, qui sotto",
             column![
-                button(text("Livelli automatici").size(13))
-                    .style(button::secondary)
-                    .on_press(Message::AutoLevels),
+                row![
+                    button(text("Contagocce neutro").size(12))
+                        .style(if self.eyedropper {
+                            button::primary
+                        } else {
+                            button::secondary
+                        })
+                        .on_press(Message::Eyedropper),
+                    button(text("Livelli auto").size(12))
+                        .style(button::secondary)
+                        .on_press(Message::AutoLevels),
+                ]
+                .spacing(6),
+                self.adjuster(Field::Temperature, &s),
+                self.adjuster(Field::Tint, &s),
+                self.adjuster(Field::Brightness, &s),
+                self.adjuster(Field::Contrast, &s),
                 self.adjuster(Field::Black, &s),
                 self.adjuster(Field::White, &s),
                 self.adjuster(Field::Gamma, &s),
-                self.adjuster(Field::Brightness, &s),
-                self.adjuster(Field::Contrast, &s),
             ]
-            .spacing(6)
+            .spacing(8)
             .into(),
         );
-        let mut colour_body = column![
-            button(
-                text(if self.eyedropper {
-                    "Annulla contagocce"
-                } else {
-                    "Contagocce: scegli il neutro"
-                })
-                .size(13)
-            )
-            .style(if self.eyedropper {
-                button::primary
-            } else {
-                button::secondary
-            })
-            .on_press(Message::Eyedropper),
-            self.adjuster(Field::Temperature, &s),
-            self.adjuster(Field::Tint, &s),
-        ]
-        .spacing(6);
-        if colour_mode {
-            colour_body = colour_body.push(self.adjuster(Field::Saturation, &s));
-        }
         let colour = self.group(
             Group::Colour,
             "Colore",
-            !lineart,
-            "Non serve in bianco e nero",
-            colour_body.into(),
+            s.colour == Colour::Rgb,
+            "Solo per le scansioni a colori",
+            self.adjuster(Field::Saturation, &s),
         );
         let detail = self.group(
             Group::Detail,
@@ -1690,49 +1975,40 @@ impl App {
             lineart,
             "Solo con il colore «Bianco e nero»",
             column![
-                button(text("Soglia automatica").size(13))
+                button(text("Soglia automatica").size(12))
                     .style(button::secondary)
                     .on_press(Message::AutoThreshold),
                 self.adjuster(Field::Threshold, &s),
             ]
-            .spacing(6)
+            .spacing(8)
             .into(),
         );
-        let adjustments = column![
-            row![
-                heading(editing).width(Length::Fill),
-                checkbox(self.before)
-                    .label("Prima")
-                    .on_toggle(Message::Before)
-                    .text_size(13),
-            ]
-            .align_y(Alignment::Center),
+        column![
+            text(editing.to_uppercase()).size(11),
             histogram,
-            tone,
+            base,
             colour,
             detail,
-            bw,
+            bw
         ]
-        .spacing(8);
+        .spacing(10)
+        .into()
+    }
 
-        // Output.
+    fn output_pane(&self) -> Element<'_, Message> {
+        let s = self.active();
         let options = outputs(self.kind, s.colour);
-        let mut out = column![
-            heading("Uscita"),
-            labelled(
-                "Formato",
-                pick_list(options, Some(self.settings().output), Message::Output)
-                    .width(Length::Fill)
-                    .into()
-            ),
+        let mut pane = column![
+            heading("Formato"),
+            pick_list(options, Some(self.settings().output), Message::Output).width(Length::Fill),
         ]
-        .spacing(8);
-        if lineart {
-            out =
-                out.push(text("Bianco e nero: niente JPEG/AVIF, rovinerebbero i bordi.").size(11));
+        .spacing(10);
+        if s.colour == Colour::Lineart {
+            pane =
+                pane.push(text("Bianco e nero: niente JPEG/AVIF, rovinerebbero i bordi.").size(11));
         }
         if self.settings().output == Output::Pdf {
-            out = out.push(labelled(
+            pane = pane.push(labelled(
                 "Pagina PDF",
                 pick_list(
                     [PdfSize::Fit, PdfSize::A4, PdfSize::Letter],
@@ -1743,65 +2019,81 @@ impl App {
                 .into(),
             ));
         }
-        out = out.push(text(format!("Cartella: {}", Self::folder().display())).size(11));
-        match self.kind {
-            Kind::Document => {
-                out = out.push(
-                    row![
-                        button(text("Salva documento…").center().width(Length::Fill))
-                            .width(Length::Fill)
-                            .on_press_maybe(
-                                (!self.pages.is_empty() && self.busy.is_none())
-                                    .then_some(Message::Save)
-                            ),
-                        button(text("Nuovo").center())
-                            .style(button::secondary)
-                            .on_press_maybe(
-                                (!self.pages.is_empty() && self.busy.is_none())
-                                    .then_some(Message::NewDocument)
-                            ),
-                    ]
-                    .spacing(8),
-                );
-                out = out.push(
-                    text(
-                        "Tasti dello scanner: Scan aggiunge una pagina, Copy rifà l'ultima, \
-                         Instant Share salva il documento.",
-                    )
-                    .size(11),
-                );
-            }
-            Kind::Photo => {
-                out = out.push(
-                    checkbox(self.settings().auto_save)
-                        .label("Salva da sola ogni scansione nella cartella")
-                        .on_toggle(Message::AutoSave)
-                        .text_size(13),
-                );
-                out = out.push(
-                    button(text("Salva foto…").center().width(Length::Fill))
-                        .width(Length::Fill)
-                        .on_press_maybe(
-                            (self.shown().is_some() && self.busy.is_none())
-                                .then_some(Message::Save),
-                        ),
-                );
-                out = out.push(
-                    text("Tasti dello scanner: Scan scansiona, Instant Share apre la cartella.")
-                        .size(11),
-                );
-            }
+        pane = pane
+            .push(heading("Cartella"))
+            .push(text(Self::folder().display().to_string()).size(12));
+        if self.kind == Kind::Photo {
+            pane = pane.push(
+                checkbox(self.settings().auto_save)
+                    .label("Salva da sola ogni foto nella cartella")
+                    .on_toggle(Message::AutoSave)
+                    .text_size(13),
+            );
         }
+        if self.kind == Kind::Document {
+            pane = pane.push(
+                button(text("Nuovo documento").size(13))
+                    .style(button::secondary)
+                    .on_press_maybe(
+                        (!self.pages.is_empty() && self.busy.is_none())
+                            .then_some(Message::NewDocument),
+                    ),
+            );
+        }
+        pane.into()
+    }
 
-        column![
-            scan,
-            actions,
-            rule::horizontal(1),
-            adjustments,
-            rule::horizontal(1),
-            out
-        ]
-        .spacing(12)
+    /// The main action of the inspector: saving.
+    fn footer(&self) -> Element<'_, Message> {
+        let output = self.settings().output;
+        let (label, enabled) = match self.kind {
+            Kind::Document => (
+                format!("Salva {output}…"),
+                !self.pages.is_empty() && self.busy.is_none(),
+            ),
+            Kind::Photo => (
+                format!("Salva {output}…"),
+                self.shown().is_some() && self.busy.is_none(),
+            ),
+        };
+        button(text(label).size(14).center().width(Length::Fill))
+            .width(Length::Fill)
+            .padding([9, 12])
+            .on_press_maybe(enabled.then_some(Message::Save))
+            .into()
+    }
+
+    /// Facts at the bottom: scanner, area, resolution, last note.
+    fn status_bar(&self) -> Element<'_, Message> {
+        let s = self.settings();
+        let request = self.request();
+        let link = match &self.status {
+            Some(Ok(st)) => format!("USB {}", if st.usb2 { "2.0" } else { "1.1" }),
+            Some(Err(_)) => "non collegato".to_string(),
+            None => "…".to_string(),
+        };
+        let fact = |label: &'static str, value: String| {
+            row![text(label).size(11), text(value).size(11)].spacing(4)
+        };
+        container(
+            row![
+                fact("Scanner", link),
+                fact("Risoluzione", format!("{} dpi · {}", s.dpi, s.colour)),
+                fact(
+                    "Immagine",
+                    format!("{} × {}", request.area.width, request.area.height)
+                ),
+                text(self.note.clone()).size(11).width(Length::Fill),
+                text("Rotella zoom · tasto destro sposta · doppio clic su un cursore lo azzera")
+                    .size(11),
+            ]
+            .spacing(18)
+            .align_y(Alignment::Center),
+        )
+        .padding([6, 16])
+        .width(Length::Fill)
+        .style(surface)
+        .into()
     }
 
     /// A labelled slider with an editable number: double click on the
@@ -1865,58 +2157,9 @@ impl App {
             .style(container::rounded_box)
             .into()
     }
-
-    fn bottom(&self) -> Element<'_, Message> {
-        let (fraction, stage) = match &self.busy {
-            None => (0.0, String::new()),
-            Some((purpose, stage)) => {
-                let what = match purpose {
-                    Purpose::Preview => "Anteprima",
-                    Purpose::Page => "Scansione",
-                };
-                match stage {
-                    None | Some(Stage::Starting) => (0.02, format!("{what}: avvio")),
-                    Some(Stage::WarmingUp) => (0.05, format!("{what}: riscaldamento lampada")),
-                    Some(Stage::Calibrating) => (0.1, format!("{what}: calibrazione")),
-                    Some(Stage::Scanning { done, total }) => (
-                        0.1 + 0.85 * *done as f32 / (*total).max(1) as f32,
-                        format!("{what}: {} %", done * 100 / (*total).max(1)),
-                    ),
-                    Some(Stage::Finishing) => (0.97, format!("{what}: chiusura")),
-                }
-            }
-        };
-        row![
-            text(if stage.is_empty() {
-                self.note.clone()
-            } else {
-                stage
-            })
-            .width(Length::Fill),
-            progress_bar(0.0..=1.0, fraction).length(260).girth(12),
-            button(text("Annulla"))
-                .style(button::danger)
-                .on_press_maybe(self.busy.is_some().then_some(Message::Cancel)),
-        ]
-        .spacing(12)
-        .align_y(Alignment::Center)
-        .into()
-    }
 }
 
 // ----------------------------------------------------------------- widgets
-
-fn mode_button(label: &str, kind: Kind, current: Kind) -> Element<'_, Message> {
-    button(text(label).size(16))
-        .padding([8, 18])
-        .style(if kind == current {
-            button::primary
-        } else {
-            button::secondary
-        })
-        .on_press(Message::Kind(kind))
-        .into()
-}
 
 fn heading(label: &str) -> iced::widget::Text<'_> {
     text(label).size(16)
@@ -1958,4 +2201,43 @@ fn open_folder(folder: &std::path::Path) {
         "xdg-open"
     };
     let _ = std::process::Command::new(program).arg(folder).spawn();
+}
+
+/// Panels: the base background with a hairline border.
+fn surface(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+    container::Style {
+        background: Some(palette.background.base.color.into()),
+        border: iced::Border {
+            width: 1.0,
+            color: palette.background.weak.color,
+            radius: 0.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
+/// A floating card on the canvas.
+fn card<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    container(content)
+        .padding(6)
+        .style(|theme: &Theme| {
+            let palette = theme.extended_palette();
+            container::Style {
+                background: Some(palette.background.base.color.into()),
+                text_color: Some(palette.background.base.text),
+                border: iced::Border {
+                    width: 1.0,
+                    color: palette.background.weak.color,
+                    radius: 8.0.into(),
+                },
+                shadow: iced::Shadow {
+                    color: iced::Color::from_rgba(0.0, 0.0, 0.0, 0.28),
+                    offset: iced::Vector::new(0.0, 4.0),
+                    blur_radius: 14.0,
+                },
+                ..Default::default()
+            }
+        })
+        .into()
 }

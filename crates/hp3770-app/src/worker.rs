@@ -122,6 +122,11 @@ impl Worker {
     /// The open scanner, opened if needed.
     fn chip(&mut self) -> Result<&mut Chip<Scanner>, String> {
         if self.chip.is_none() {
+            // For trying the interface without touching the scanner (for
+            // instance while another program uses it).
+            if std::env::var_os("HP3770_NO_SCANNER").is_some() {
+                return Err("scanner disattivato (HP3770_NO_SCANNER)".into());
+            }
             let scanner = hp3770_usb::open().map_err(|e| e.to_string())?;
             self.chip = Some(Chip::new(scanner));
         }
