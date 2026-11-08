@@ -7,6 +7,7 @@
 //! sharpening and the grey or black-and-white conversion. The command line
 //! tool and the desktop application both use it.
 
+use crate::adjust::{self, Adjustments};
 use crate::arrange;
 use crate::convert;
 use crate::error::{Error, Result};
@@ -41,9 +42,9 @@ pub struct Request {
     pub area: Area,
     /// Colour, grey or black and white.
     pub mode: Mode,
-    /// Sharpening amount ([`convert::HP_SHARPEN`] as the HP driver, 0 for
-    /// none).
-    pub sharpen: f32,
+    /// Adjustments applied on the host (white balance, levels, colour,
+    /// sharpening). The default gives the HP driver's result.
+    pub adjust: Adjustments,
     /// Keep the chip's linear samples (no tone curve).
     pub linear: bool,
 }
@@ -55,7 +56,7 @@ impl Request {
             dpi,
             area,
             mode,
-            sharpen: convert::HP_SHARPEN,
+            adjust: Adjustments::default(),
             linear: false,
         }
     }
@@ -298,54 +299,26 @@ pub fn scan<T: Transport>(
     Ok((process(raw, width, height, request, profile), report))
 }
 
-/// The host side of a scan: tone curve, sharpening and conversion of the
-/// chip's linear RGB samples (`width` × `height`).
+/// The host side of a scan: the adjustments and the conversion of the
+/// chip's linear RGB samples (`width` × `height`), see
+/// [`adjust::render`].
 pub fn process(
-    mut rgb: Vec<u8>,
+    rgb: Vec<u8>,
     width: usize,
     height: usize,
     request: &Request,
     profile: &Profile,
 ) -> Image {
-    let identity: [u8; 256] = std::array::from_fn(|i| i as u8);
-    let tone = |white: f64| {
-        if request.linear {
-            identity
-        } else {
-            geometry::host_tone(white, 2.2)
-        }
-    };
-    let grey_tone = tone(geometry::host_white(profile));
-    let (format, data) = match request.mode {
-        Mode::Colour => {
-            let tones = geometry::HP_WHITE.map(tone);
-            for (i, sample) in rgb.iter_mut().enumerate() {
-                *sample = tones[i % 3][usize::from(*sample)];
-            }
-            convert::sharpen(&mut rgb, width, 3, request.sharpen);
-            (Format::Rgb, rgb)
-        }
-        Mode::Grey => {
-            let mut grey = convert::to_grey(&rgb, &grey_tone);
-            convert::sharpen(&mut grey, width, 1, request.sharpen);
-            (Format::Grey, grey)
-        }
-        Mode::Lineart { threshold } => {
-            let mut grey = convert::to_grey(&rgb, &grey_tone);
-            convert::sharpen(&mut grey, width, 1, request.sharpen);
-            (
-                Format::Lineart,
-                convert::to_lineart(&grey, width, threshold),
-            )
-        }
-    };
-    Image {
+    adjust::render(
+        &rgb,
         width,
         height,
-        dpi: request.dpi,
-        format,
-        data,
-    }
+        request.dpi,
+        request.mode,
+        &request.adjust,
+        request.linear,
+        profile,
+    )
 }
 
 #[cfg(test)]
@@ -356,7 +329,10 @@ mod tests {
     fn request(mode: Mode) -> Request {
         Request {
             linear: true,
-            sharpen: 0.0,
+            adjust: Adjustments {
+                sharpen: 0.0,
+                ..Adjustments::default()
+            },
             ..Request::new(
                 300,
                 Area {

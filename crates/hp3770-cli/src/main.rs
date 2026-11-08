@@ -332,7 +332,10 @@ fn scan(
     use hp3770_core::session::{self, Request, Stage};
     let profile = &hp3770_core::profile::HP3770;
     let request = Request {
-        sharpen,
+        adjust: hp3770_core::adjust::Adjustments {
+            sharpen,
+            ..Default::default()
+        },
         linear,
         ..Request::new(
             dpi,

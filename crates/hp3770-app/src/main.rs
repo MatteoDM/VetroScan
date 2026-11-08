@@ -261,10 +261,13 @@ impl App {
             },
         };
         Request {
-            sharpen: if self.sharpen {
-                convert::HP_SHARPEN
-            } else {
-                0.0
+            adjust: hp3770_core::adjust::Adjustments {
+                sharpen: if self.sharpen {
+                    convert::HP_SHARPEN
+                } else {
+                    0.0
+                },
+                ..Default::default()
             },
             ..Request::new(self.dpi, Area::from_mm(self.dpi, x, y, w, h), mode)
         }
@@ -286,7 +289,10 @@ impl App {
         let request = if purpose == Purpose::Preview {
             let glass = Self::glass();
             Request {
-                sharpen: 0.0,
+                adjust: hp3770_core::adjust::Adjustments {
+                    sharpen: 0.0,
+                    ..Default::default()
+                },
                 ..Request::new(
                     PREVIEW_DPI,
                     Area {
