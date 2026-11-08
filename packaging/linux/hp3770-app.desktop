@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=HP Scanjet 3770
+GenericName=Scanner
+GenericName[it]=Scanner
+Comment=Scan documents and photos with the HP Scanjet 3770
+Comment[it]=Scansiona documenti e foto con lo HP Scanjet 3770
+Exec=hp3770-app
+Icon=scanner
+Terminal=false
+Categories=Graphics;Scanning;
+Keywords=scan;scanner;hp;3770;
+StartupWMClass=hp3770-app

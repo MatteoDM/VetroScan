@@ -1,0 +1,4 @@
+# HP Scanjet 3770 (USB 03f0:2505): lets the user logged in at the seat open
+# the scanner without root. Install in /etc/udev/rules.d, then reload the
+# rules (udevadm control --reload) and plug the scanner in again.
+SUBSYSTEM=="usb", ATTR{idVendor}=="03f0", ATTR{idProduct}=="2505", MODE="0660", TAG+="uaccess"

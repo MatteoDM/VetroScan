@@ -56,8 +56,23 @@ fn main() -> iced::Result {
         .title("HP Scanjet 3770")
         .subscription(App::subscription)
         .theme(App::theme)
-        .window_size(Size::new(1360.0, 900.0))
+        .window(window_settings())
         .run()
+}
+
+/// The main window. On Linux its application id is the name of the
+/// `.desktop` file in `packaging/linux`, which is how Wayland compositors
+/// give the window its name and icon.
+fn window_settings() -> iced::window::Settings {
+    iced::window::Settings {
+        size: Size::new(1360.0, 900.0),
+        #[cfg(target_os = "linux")]
+        platform_specific: iced::window::settings::PlatformSpecific {
+            application_id: "hp3770-app".into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
 }
 
 // ---------------------------------------------------------------- choices

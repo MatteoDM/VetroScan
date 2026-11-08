@@ -8,11 +8,11 @@ Lo scanner usa un ASIC **Realtek RTS8822**, lo stesso pilotato dal backend SANE
 3770, completata con i parametri estratti dal driver HP originale e verificata
 sulle catture USB del driver HP.
 
-> Stato: il comando `hp3770 scan` scansiona davvero, a colori, in grigio e in bianco e
-> nero, a 200, 300, 600, 1200 e 2400 dpi (provato sullo scanner, Windows con il driver
-> HP installato). Avvio, calibrazione e scansione sono verificati byte per byte sulle
-> catture del driver HP. Mancano ancora l'app desktop, il backend SANE e l'adattatore
-> per trasparenti.
+> Stato: scansioni uguali a quelle del driver HP a colori, in grigio e in bianco e nero,
+> da 200 a 2400 dpi, anche a 16 bit per canale. Avvio, calibrazione e scansione sono
+> verificati byte per byte sulle catture del driver HP. Provato sullo scanner su Windows
+> (con il driver HP installato) e su Linux (Arch, Wayland). Mancano ancora il backend
+> SANE e l'adattatore per trasparenti; su macOS non è mai stato compilato.
 
 ## Struttura
 
@@ -21,9 +21,11 @@ sulle catture USB del driver HP.
 | [`hp3770-core`](crates/hp3770-core) | Protocollo USB dell'RTS8822 (richieste vendor, registri, EEPROM, DMA), identità del dispositivo, pulsanti, trait `Transport` indipendente dalla libreria USB |
 | [`hp3770-capture`](crates/hp3770-capture) | Lettore di catture USBPcap e strumento `hp3770-decode`, che trasforma una cattura in una sequenza leggibile di operazioni sul chip |
 | [`hp3770-usb`](crates/hp3770-usb) | Accesso USB: `nusb` (Linux, macOS, Windows con WinUSB) e `usbscan.sys` (Windows con il driver HP installato, nessun cambio di driver) |
+| [`hp3770-export`](crates/hp3770-export) | Salvataggio in PNG, TIFF (anche a 16 bit), DNG e PDF a più pagine |
 | [`hp3770-cli`](crates/hp3770-cli) | Comando `hp3770` |
+| [`hp3770-app`](crates/hp3770-app) | App desktop `hp3770-app` (iced): documenti e foto, anteprima, regolazioni, tasti dello scanner |
 
-In arrivo: driver di scansione, app desktop (iced), backend SANE.
+In arrivo: backend SANE.
 
 ## Compilare e provare
 
@@ -81,11 +83,36 @@ e 11 (i test li confrontano byte per byte). Se il carrello è già a casa non lo
 immagini (WIA) resta in ascolto degli eventi USB dei pulsanti e se ne prende una parte,
 mentre il registro risponde a chiunque lo legga.
 
-Su Linux l'utente deve poter aprire il dispositivo, per esempio con una regola udev:
+## Linux
 
-```text
-SUBSYSTEM=="usb", ATTR{idVendor}=="03f0", ATTR{idProduct}=="2505", MODE="0660", TAG+="uaccess"
+Il driver parla allo scanner direttamente via USB (`nusb`), senza SANE né moduli del
+kernel. Serve solo che l'utente possa aprire il dispositivo: la regola udev in
+[`packaging/linux`](packaging/linux) lo concede a chi è collegato alla sessione.
+
+```sh
+sudo install -m 644 packaging/linux/70-hp3770.rules /etc/udev/rules.d/
+sudo udevadm control --reload
+# poi scollega e ricollega lo scanner
+cargo run --release --bin hp3770 -- status   # deve rispondere senza sudo
 ```
+
+Per avere l'app nel menu delle applicazioni:
+
+```sh
+cargo install --path crates/hp3770-app --locked     # in ~/.cargo/bin, che deve essere nel PATH
+install -Dm 644 packaging/linux/hp3770-app.desktop ~/.local/share/applications/hp3770-app.desktop
+```
+
+L'app su Linux:
+
+- gira su Wayland e su X11; la finestra si presenta come `hp3770-app`, lo stesso nome
+  del file `.desktop`;
+- per scegliere dove salvare usa il portale del desktop (`xdg-desktop-portal` con un
+  backend, per esempio `xdg-desktop-portal-gtk`);
+- apre le cartelle con `xdg-open` e stampa le fotocopie con `lp` (CUPS);
+- tiene le preferenze in `~/.config/hp3770`;
+- i tasti dello scanner funzionano anche con l'app in secondo piano: li legge dal chip,
+  nessun servizio di sistema se li prende come fa WIA su Windows.
 
 ## Decodificare una cattura
 
