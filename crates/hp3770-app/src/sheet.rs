@@ -252,9 +252,9 @@ impl<Message> canvas::Program<Message> for Sheet<'_, Message> {
         );
         // What it is, under the sheet.
         let hint = if self.draggable() {
-            format!(
-                "{} · trascina la pagina per scegliere cosa tenere",
-                self.caption
+            crate::i18n::trf(
+                "{caption} · trascina la pagina per scegliere cosa tenere",
+                &[("caption", &self.caption)],
             )
         } else {
             self.caption.clone()

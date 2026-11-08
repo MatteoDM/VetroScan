@@ -210,7 +210,13 @@ impl<Message> canvas::Program<Message> for Editor<Message> {
         // Input and output of the point being moved, as levels 0-255.
         if let Some(p) = state.dragging.and_then(|i| self.curve.points().get(i)) {
             frame.fill_text(canvas::Text {
-                content: format!("Ingresso {:.0} → Uscita {:.0}", p[0] * 255.0, p[1] * 255.0),
+                content: crate::i18n::trf(
+                    "Ingresso {input} → Uscita {output}",
+                    &[
+                        ("input", &format!("{:.0}", p[0] * 255.0)),
+                        ("output", &format!("{:.0}", p[1] * 255.0)),
+                    ],
+                ),
                 position: Point::new(6.0, 4.0),
                 color: palette.background.base.text,
                 size: 12.0.into(),

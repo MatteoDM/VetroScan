@@ -10,6 +10,7 @@
 //! it opens what the [`Registry`] finds, and does with the lamp and the
 //! buttons only what the scanner's capabilities say it has.
 
+use crate::i18n::tr;
 use iced::futures::channel::mpsc;
 use iced::futures::{SinkExt, Stream};
 use scanner_api::{
@@ -241,7 +242,7 @@ impl Worker {
             // For trying the interface without touching the scanner (for
             // instance while another program uses it).
             if std::env::var_os("HP3770_NO_SCANNER").is_some() {
-                return Err("scanner disattivato (HP3770_NO_SCANNER)".into());
+                return Err(tr("scanner disattivato (HP3770_NO_SCANNER)").into());
             }
             let devices = self.registry.list();
             let first = self
@@ -254,7 +255,7 @@ impl Worker {
                 // Nothing listed: open as the backends would anyway, for
                 // their own words on why not.
                 return Err(match self.registry.open_first() {
-                    Ok(_) => "scanner non elencato".into(),
+                    Ok(_) => tr("scanner non elencato").into(),
                     Err(e) => error_text(e),
                 });
             };

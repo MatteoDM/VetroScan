@@ -63,6 +63,7 @@ pub fn grant() -> Result<(), String> {
     // The rule travels as an argument, not through a file another user
     // could swap.
     let script = format!(
+        // not translated: a command
         "printf '%s' \"$1\" > {RULE_PATH} && chmod 644 {RULE_PATH} \
          && udevadm control --reload \
          && udevadm trigger --action=add --subsystem-match=usb \
@@ -72,20 +73,21 @@ pub fn grant() -> Result<(), String> {
     let status = std::process::Command::new("pkexec")
         .args(["sh", "-c", &script, "sh", RULE])
         .status()
-        .map_err(|e| format!("pkexec non si avvia ({e})"))?;
+        .map_err(|e| crate::i18n::trf("pkexec non si avvia ({e})", &[("e", &e)]))?;
     match status.code() {
         Some(0) => Ok(()),
         // pkexec: the dialog was dismissed, or the password refused.
-        Some(126 | 127) => Err("autorizzazione non concessa".into()),
-        _ => Err(format!(
-            "installazione della regola non riuscita ({status})"
+        Some(126 | 127) => Err(crate::i18n::tr("autorizzazione non concessa").into()),
+        _ => Err(crate::i18n::trf(
+            "installazione della regola non riuscita ({status})",
+            &[("status", &status)],
         )),
     }
 }
 
 #[cfg(not(target_os = "linux"))]
 pub fn grant() -> Result<(), String> {
-    Err("serve solo su Linux".into())
+    Err(crate::i18n::tr("serve solo su Linux").into())
 }
 
 #[cfg(all(test, target_os = "linux"))]

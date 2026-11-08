@@ -14,6 +14,15 @@ manca.
 
 ## [Unreleased]
 
+### Added
+- **L'app in inglese**: nelle Preferenze, «Lingua» sceglie fra *Automatica* (inglese se il
+  sistema è in inglese, italiano altrimenti), *Italiano* ed *English*. Il cambio vale subito,
+  senza riavviare; i numeri seguono la lingua (2,5 in italiano, 2.5 in inglese).
+
+### Changed
+- Il modo «Pellicola» (disabilitato) compare solo con uno scanner che ha l'adattatore per
+  diapositive e negativi: l'HP 3770 non ce l'ha.
+
 ## [0.2.0] - 2026-11-08
 
 ### Added

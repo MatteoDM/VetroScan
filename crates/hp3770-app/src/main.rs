@@ -21,6 +21,7 @@ mod curve;
 mod e2e;
 mod editor;
 mod histogram;
+mod i18n;
 mod prefs;
 mod sheet;
 mod testing;
@@ -31,6 +32,7 @@ mod worker;
 use editor::{Edit, EditMsg, Editor, Section};
 use histogram::Histogram;
 use hp3770_export::{ImageFormat, PageSize};
+use i18n::{tr, trf};
 use iced::widget::{
     button, canvas, center, checkbox, column, container, mouse_area, opaque, pick_list,
     progress_bar, row, rule, scrollable, slider, stack, text, Space,
@@ -63,6 +65,7 @@ const PROXY: usize = 2400;
 
 fn main() -> iced::Result {
     iced::application(App::new, App::update, App::view)
+        // not translated: the name of the app
         .title("HP Scanjet 3770")
         .subscription(App::subscription)
         .theme(App::theme)
@@ -117,9 +120,9 @@ const ALL_COLOURS: [Colour; 3] = [Colour::Rgb, Colour::Grey, Colour::Lineart];
 impl std::fmt::Display for Colour {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Self::Rgb => "Colore",
-            Self::Grey => "Grigio",
-            Self::Lineart => "Bianco e nero",
+            Self::Rgb => tr("Colore"),
+            Self::Grey => tr("Grigio"),
+            Self::Lineart => tr("Bianco e nero"),
         })
     }
 }
@@ -320,14 +323,14 @@ impl PdfSize {
 impl std::fmt::Display for PdfSize {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Self::Fit => "Come la scansione",
-            Self::A4 => "A4 (21 × 29,7 cm)",
-            Self::A3 => "A3 (29,7 × 42 cm)",
-            Self::A5 => "A5 (14,8 × 21 cm)",
-            Self::Letter => "Letter (8,5 × 11\")",
-            Self::Legal => "Legal (8,5 × 14\")",
-            Self::Photo10x15 => "Foto 10 × 15 cm",
-            Self::Photo13x18 => "Foto 13 × 18 cm",
+            Self::Fit => tr("Come la scansione"),
+            Self::A4 => tr("A4 (21 × 29,7 cm)"),
+            Self::A3 => tr("A3 (29,7 × 42 cm)"),
+            Self::A5 => tr("A5 (14,8 × 21 cm)"),
+            Self::Letter => tr("Letter (8,5 × 11\")"),
+            Self::Legal => tr("Legal (8,5 × 14\")"),
+            Self::Photo10x15 => tr("Foto 10 × 15 cm"),
+            Self::Photo13x18 => tr("Foto 13 × 18 cm"),
         })
     }
 }
@@ -370,9 +373,9 @@ impl PdfFit {
 impl std::fmt::Display for PdfFit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Self::Actual => "Dimensione reale",
-            Self::Page => "Adatta al foglio",
-            Self::Fill => "Riempi il foglio (taglia i bordi)",
+            Self::Actual => tr("Dimensione reale"),
+            Self::Page => tr("Adatta al foglio"),
+            Self::Fill => tr("Riempi il foglio (taglia i bordi)"),
         })
     }
 }
@@ -400,9 +403,9 @@ impl Sheet {
 impl std::fmt::Display for Sheet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Self::Auto => "Automatico (come la scansione)",
-            Self::Portrait => "Verticale",
-            Self::Landscape => "Orizzontale",
+            Self::Auto => tr("Automatico (come la scansione)"),
+            Self::Portrait => tr("Verticale"),
+            Self::Landscape => tr("Orizzontale"),
         })
     }
 }
@@ -449,8 +452,11 @@ impl std::fmt::Display for LampAfter {
         match self.0 {
             0 => f.write_str("Appena finita la scansione"),
             1 => f.write_str("Dopo 1 minuto"),
-            LAMP_SCANNER => write!(f, "Dopo {LAMP_SCANNER} minuti (come il driver HP)"),
-            m => write!(f, "Dopo {m} minuti"),
+            LAMP_SCANNER => f.write_str(&trf(
+                "Dopo {m} minuti (come il driver HP)",
+                &[("m", &LAMP_SCANNER)],
+            )),
+            m => f.write_str(&trf("Dopo {m} minuti", &[("m", &m)])),
         }
     }
 }
@@ -514,18 +520,30 @@ fn lightened(
     let n = changed.len();
     let of = if n == encodings.len() {
         if n == 1 {
-            "la pagina alleggerita".to_string()
+            tr("la pagina alleggerita").to_string()
         } else {
-            format!("tutte le {n} pagine alleggerite")
+            trf("tutte le {n} pagine alleggerite", &[("n", &n)])
         }
     } else if n == 1 {
-        format!("1 pagina su {} alleggerita", encodings.len())
+        trf(
+            "1 pagina su {total} alleggerita",
+            &[("total", &encodings.len())],
+        )
     } else {
-        format!("{n} pagine su {} alleggerite", encodings.len())
+        trf(
+            "{n} pagine su {total} alleggerite",
+            &[("n", &n), ("total", &encodings.len())],
+        )
     };
     Some(match dpi {
-        Some(dpi) => format!("{of}, fino a {dpi} dpi e JPEG {quality}"),
-        None => format!("{of}, fino a JPEG {quality}"),
+        Some(dpi) => trf(
+            "{of}, fino a {dpi} dpi e JPEG {quality}",
+            &[("of", &of), ("dpi", &dpi), ("quality", &quality)],
+        ),
+        None => trf(
+            "{of}, fino a JPEG {quality}",
+            &[("of", &of), ("quality", &quality)],
+        ),
     })
 }
 
@@ -566,9 +584,9 @@ enum ThemeChoice {
 impl std::fmt::Display for ThemeChoice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Self::System => "Sistema",
-            Self::Light => "Chiaro",
-            Self::Dark => "Scuro",
+            Self::System => tr("Sistema"),
+            Self::Light => tr("Chiaro"),
+            Self::Dark => tr("Scuro"),
         })
     }
 }
@@ -857,7 +875,7 @@ fn factory_presets(kind: Kind) -> Vec<(&'static str, Settings)> {
     match kind {
         Kind::Document => vec![
             (
-                "Testo per OCR (bianco e nero)",
+                tr("Testo per OCR (bianco e nero)"),
                 Settings {
                     colour: Colour::Lineart,
                     adjust: Adjustments {
@@ -869,7 +887,7 @@ fn factory_presets(kind: Kind) -> Vec<(&'static str, Settings)> {
                 },
             ),
             (
-                "Documento a colori",
+                tr("Documento a colori"),
                 Settings {
                     adjust: Adjustments {
                         whites: 25.0,
@@ -880,7 +898,7 @@ fn factory_presets(kind: Kind) -> Vec<(&'static str, Settings)> {
                 },
             ),
             (
-                "Ricevuta / scontrino",
+                tr("Ricevuta / scontrino"),
                 Settings {
                     colour: Colour::Grey,
                     adjust: Adjustments {
@@ -893,7 +911,7 @@ fn factory_presets(kind: Kind) -> Vec<(&'static str, Settings)> {
                 },
             ),
             (
-                "Rivista / giornale",
+                tr("Rivista / giornale"),
                 Settings {
                     adjust: Adjustments {
                         descreen: 133.0,
@@ -904,7 +922,7 @@ fn factory_presets(kind: Kind) -> Vec<(&'static str, Settings)> {
                 },
             ),
             (
-                "Archivio (600 dpi, senza perdita)",
+                tr("Archivio (600 dpi, senza perdita)"),
                 Settings {
                     dpi: 600,
                     adjust: Adjustments { sharpen: 0.0, ..a },
@@ -915,7 +933,7 @@ fn factory_presets(kind: Kind) -> Vec<(&'static str, Settings)> {
         ],
         Kind::Photo => vec![
             (
-                "Foto standard",
+                tr("Foto standard"),
                 Settings {
                     adjust: Adjustments {
                         vibrance: 10.0,
@@ -926,7 +944,7 @@ fn factory_presets(kind: Kind) -> Vec<(&'static str, Settings)> {
                 },
             ),
             (
-                "Archivio foto (1200 dpi, TIFF)",
+                tr("Archivio foto (1200 dpi, TIFF)"),
                 Settings {
                     dpi: 1200,
                     adjust: Adjustments { sharpen: 0.0, ..a },
@@ -935,7 +953,7 @@ fn factory_presets(kind: Kind) -> Vec<(&'static str, Settings)> {
                 },
             ),
             (
-                "Foto sbiadita (recupero colori)",
+                tr("Foto sbiadita (recupero colori)"),
                 Settings {
                     adjust: Adjustments {
                         contrast: 15.0,
@@ -948,7 +966,7 @@ fn factory_presets(kind: Kind) -> Vec<(&'static str, Settings)> {
                 },
             ),
             (
-                "Foto in bianco e nero",
+                tr("Foto in bianco e nero"),
                 Settings {
                     colour: Colour::Grey,
                     adjust: Adjustments {
@@ -959,7 +977,7 @@ fn factory_presets(kind: Kind) -> Vec<(&'static str, Settings)> {
                 },
             ),
             (
-                "Foto stampata su rivista",
+                tr("Foto stampata su rivista"),
                 Settings {
                     adjust: Adjustments {
                         descreen: 150.0,
@@ -1044,13 +1062,13 @@ impl ButtonAction {
 impl std::fmt::Display for ButtonAction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Self::AddPage => "Aggiungi una pagina",
-            Self::RedoLast => "Rifai l'ultima pagina",
-            Self::SaveDocument => "Salva il documento e apri la cartella",
-            Self::ScanPhoto => "Scansiona la foto",
-            Self::Photocopy => "Fotocopia (scansiona e stampa)",
-            Self::OpenFolder => "Apri la cartella",
-            Self::Nothing => "Niente",
+            Self::AddPage => tr("Aggiungi una pagina"),
+            Self::RedoLast => tr("Rifai l'ultima pagina"),
+            Self::SaveDocument => tr("Salva il documento e apri la cartella"),
+            Self::ScanPhoto => tr("Scansiona la foto"),
+            Self::Photocopy => tr("Fotocopia (scansiona e stampa)"),
+            Self::OpenFolder => tr("Apri la cartella"),
+            Self::Nothing => tr("Niente"),
         })
     }
 }
@@ -1061,7 +1079,7 @@ struct Depth(u8);
 
 impl std::fmt::Display for Depth {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} bit per canale", self.0)
+        f.write_str(&trf("{bits} bit per canale", &[("bits", &self.0)]))
     }
 }
 
@@ -1076,9 +1094,9 @@ enum StartMode {
 impl std::fmt::Display for StartMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Self::Last => "L'ultimo usato",
-            Self::Document => "Documento",
-            Self::Photo => "Foto",
+            Self::Last => tr("L'ultimo usato"),
+            Self::Document => tr("Documento"),
+            Self::Photo => tr("Foto"),
         })
     }
 }
@@ -1089,9 +1107,9 @@ impl std::fmt::Display for StartMode {
 /// just "foto" when it is the only one.
 fn item_name(kind: Kind, i: usize, count: usize) -> String {
     match kind {
-        Kind::Document => format!("pagina {}", i + 1),
-        Kind::Photo if count > 1 => format!("foto {}", i + 1),
-        Kind::Photo => "foto".into(),
+        Kind::Document => trf("pagina {n}", &[("n", &(i + 1))]),
+        Kind::Photo if count > 1 => trf("foto {n}", &[("n", &(i + 1))]),
+        Kind::Photo => tr("foto").into(),
     }
 }
 
@@ -1568,23 +1586,23 @@ enum Field {
 impl Field {
     fn label(self) -> &'static str {
         match self {
-            Self::Temperature => "Temperatura (freddo ↔ caldo)",
-            Self::Noise => "Riduzione rumore",
-            Self::Tint => "Tinta (verde ↔ magenta)",
-            Self::Exposure => "Esposizione (stop)",
-            Self::Highlights => "Luci",
-            Self::Shadows => "Ombre",
-            Self::Whites => "Bianchi",
-            Self::Blacks => "Neri",
-            Self::Vibrance => "Vividezza",
-            Self::Black => "Punto del nero",
-            Self::White => "Punto del bianco",
-            Self::Gamma => "Gamma (mezzitoni)",
-            Self::Brightness => "Luminosità",
-            Self::Contrast => "Contrasto",
-            Self::Saturation => "Saturazione",
-            Self::Sharpen => "Nitidezza (1,5 = come HP)",
-            Self::Threshold => "Soglia (più alta = più nero)",
+            Self::Temperature => tr("Temperatura (freddo ↔ caldo)"),
+            Self::Noise => tr("Riduzione rumore"),
+            Self::Tint => tr("Tinta (verde ↔ magenta)"),
+            Self::Exposure => tr("Esposizione (stop)"),
+            Self::Highlights => tr("Luci"),
+            Self::Shadows => tr("Ombre"),
+            Self::Whites => tr("Bianchi"),
+            Self::Blacks => tr("Neri"),
+            Self::Vibrance => tr("Vividezza"),
+            Self::Black => tr("Punto del nero"),
+            Self::White => tr("Punto del bianco"),
+            Self::Gamma => tr("Gamma (mezzitoni)"),
+            Self::Brightness => tr("Luminosità"),
+            Self::Contrast => tr("Contrasto"),
+            Self::Saturation => tr("Saturazione"),
+            Self::Sharpen => tr("Nitidezza (1,5 = come HP)"),
+            Self::Threshold => tr("Soglia (più alta = più nero)"),
         }
     }
 
@@ -1718,6 +1736,8 @@ enum Message {
     Rendered(Arc<Rendered>),
     SystemTheme(iced::theme::Mode),
     Theme(ThemeChoice),
+    /// The language of the interface.
+    Language(i18n::LangChoice),
     Kind(Kind),
     Tab(Tab),
     Pane(Pane),
@@ -2040,6 +2060,8 @@ struct App {
     /// Minutes without scanning before the lamp goes off (0: as soon as a
     /// scan is over).
     lamp_off: u8,
+    /// The language chosen (automatic: the system's).
+    language: i18n::LangChoice,
 }
 
 impl App {
@@ -2108,7 +2130,7 @@ impl App {
                 redo: None,
                 redo_auto: false,
                 redone: None,
-                note: "Pronto: fai un'anteprima, scegli l'area e scansiona".into(),
+                note: tr("Pronto: fai un'anteprima, scegli l'area e scansiona").into(),
                 draft: None,
                 curve_channel: CurveChannel::All,
                 curve_drag: None,
@@ -2134,6 +2156,11 @@ impl App {
                 estimating: false,
                 limit_draft: None,
                 lamp_off: stored.lamp_off_minutes.min(LAMP_SCANNER),
+                language: {
+                    let choice = i18n::LangChoice::from_key(&stored.language);
+                    i18n::set(choice.resolve());
+                    choice
+                },
             },
             iced::system::theme().map(Message::SystemTheme),
         )
@@ -2219,17 +2246,17 @@ impl App {
     /// What the question says is lost: "Le 3 pagine acquisite non sono
     /// salvate e andranno perse."
     fn lost_sentence(&self, n: usize) -> String {
-        let what = match self.kind {
-            Kind::Document => ("La pagina acquisita", "pagine"),
-            Kind::Photo => ("La foto acquisita", "foto"),
-        };
-        if n == 1 {
-            format!("{} non è salvata e andrà persa.", what.0)
-        } else {
-            format!(
-                "Le {n} {} acquisite non sono salvate e andranno perse.",
-                what.1
-            )
+        match (self.kind, n) {
+            (Kind::Document, 1) => tr("La pagina acquisita non è salvata e andrà persa.").into(),
+            (Kind::Photo, 1) => tr("La foto acquisita non è salvata e andrà persa.").into(),
+            (Kind::Document, n) => trf(
+                "Le {n} pagine acquisite non sono salvate e andranno perse.",
+                &[("n", &n)],
+            ),
+            (Kind::Photo, n) => trf(
+                "Le {n} foto acquisite non sono salvate e andranno perse.",
+                &[("n", &n)],
+            ),
         }
     }
 
@@ -2789,13 +2816,19 @@ impl App {
             && self.unsaved
             && self.ask(
                 Message::Scan,
-                "Fare una nuova scansione?".into(),
-                format!(
-                    "{} La nuova scansione {} sostituisce.",
-                    self.lost_sentence(n),
-                    if n == 1 { "la" } else { "le" }
-                ),
-                "Scansiona",
+                tr("Fare una nuova scansione?").into(),
+                if n == 1 {
+                    trf(
+                        "{lost} La nuova scansione la sostituisce.",
+                        &[("lost", &self.lost_sentence(n))],
+                    )
+                } else {
+                    trf(
+                        "{lost} La nuova scansione le sostituisce.",
+                        &[("lost", &self.lost_sentence(n))],
+                    )
+                },
+                tr("Scansiona"),
             )
         {
             return;
@@ -2893,11 +2926,12 @@ impl App {
     /// The usual folder of saved scans: Pictures\Scansioni.
     fn default_folder() -> PathBuf {
         #[cfg(test)]
-        return testing::dir().join("Scansioni");
+        return testing::dir().join("Scansioni"); // not translated: a folder
         #[cfg(not(test))]
         dirs::picture_dir()
             .or_else(dirs::document_dir)
             .unwrap_or_else(|| PathBuf::from("."))
+            // not translated: the folder stays the same in every language
             .join("Scansioni")
     }
 
@@ -2915,7 +2949,7 @@ impl App {
             Kind::Photo => &self.photo_name,
         };
         if name.trim().is_empty() {
-            "scansione"
+            "scansione" // not translated: a file name
         } else {
             name.trim()
         }
@@ -2955,6 +2989,7 @@ impl App {
             document: self.document.to_stored(),
             photo: self.photo.to_stored(),
             lamp_off_minutes: self.lamp_off,
+            language: self.language.key().into(),
         }
     }
 
@@ -3104,7 +3139,7 @@ impl App {
         }
         let pages: Vec<Image> = self.pages.iter().map(|p| p.finished(settings)).collect();
         if pages.is_empty() {
-            return Err("niente da salvare".into());
+            return Err(tr("niente da salvare").into());
         }
         let name = path
             .file_stem()
@@ -3126,15 +3161,23 @@ impl App {
             Writer::One => hp3770_export::save_as(path, &pages[0], format),
         }
         .map_err(|e| e.to_string())?;
-        let noun = match self.kind {
-            Kind::Document => "pagine",
-            Kind::Photo => "foto",
-        };
         Ok(match writer(settings.output, path, n) {
             Writer::One => path.display().to_string(),
             _ if n == 1 => path.display().to_string(),
-            Writer::Folder => format!("{n} file in {}", folder.display()),
-            _ => format!("{n} {noun} in {}", path.display()),
+            Writer::Folder => trf(
+                "{n} file in {dir}",
+                &[("n", &n), ("dir", &folder.display())],
+            ),
+            _ => match self.kind {
+                Kind::Document => trf(
+                    "{n} pagine in {file}",
+                    &[("n", &n), ("file", &path.display())],
+                ),
+                Kind::Photo => trf(
+                    "{n} foto in {file}",
+                    &[("n", &n), ("file", &path.display())],
+                ),
+            },
         })
     }
 
@@ -3199,14 +3242,14 @@ impl App {
         encodings: &[hp3770_export::Encoding],
         base: hp3770_export::Encoding,
     ) -> String {
-        let mut out = format!("PDF di {}", human_size(bytes));
+        let mut out = trf("PDF di {size}", &[("size", &human_size(bytes))]);
         if let Some(l) = limit {
             if bytes <= l {
-                out.push_str(&format!(" (limite {})", human_size(l)));
+                out.push_str(&trf(" (limite {size})", &[("size", &human_size(l))]));
             } else {
-                out.push_str(&format!(
-                    ", oltre il limite di {}: le pagine sono già alleggerite al massimo",
-                    human_size(l)
+                out.push_str(&trf(
+                    ", oltre il limite di {size}: le pagine sono già alleggerite al massimo",
+                    &[("size", &human_size(l))],
                 ));
             }
         }
@@ -3221,7 +3264,7 @@ impl App {
     /// scanned at 8 bits.
     fn write_deep(&self, path: &std::path::Path) -> Result<String, String> {
         if self.pages.is_empty() {
-            return Err("niente da salvare".into());
+            return Err(tr("niente da salvare").into());
         }
         let shared = self.settings();
         let n = self.pages.len();
@@ -3268,7 +3311,7 @@ impl App {
                     };
                     let data = match image.format {
                         Format::Lineart => {
-                            return Err("bianco e nero: niente 16 bit".into());
+                            return Err(tr("bianco e nero: niente 16 bit").into());
                         }
                         _ => image.data.iter().map(|&v| u16::from(v) * 257).collect(),
                     };
@@ -3281,9 +3324,9 @@ impl App {
         Ok(if n == 1 {
             path.display().to_string()
         } else {
-            format!(
-                "{n} file a 16 bit in {}",
-                path.parent().unwrap_or(path).display()
+            trf(
+                "{n} file a 16 bit in {dir}",
+                &[("n", &n), ("dir", &path.parent().unwrap_or(path).display())],
             )
         })
     }
@@ -3292,7 +3335,7 @@ impl App {
     /// adjustments: the white the calibration aims at is full scale.
     fn write_raw(&self, path: &std::path::Path, format: RawFormat) -> Result<String, String> {
         if self.pages.is_empty() {
-            return Err("niente da salvare".into());
+            return Err(tr("niente da salvare").into());
         }
         let n = self.pages.len();
         let stem = path
@@ -3329,9 +3372,9 @@ impl App {
         }
         Ok(match written.as_slice() {
             [one] => one.display().to_string(),
-            _ => format!(
-                "{n} file RAW in {}",
-                path.parent().unwrap_or(path).display()
+            _ => trf(
+                "{n} file RAW in {dir}",
+                &[("n", &n), ("dir", &path.parent().unwrap_or(path).display())],
             ),
         })
     }
@@ -3350,7 +3393,7 @@ impl App {
         let now = self.prefs();
         if now != self.saved {
             if let Err(e) = now.save() {
-                self.note = format!("Impostazioni non salvate: {e}");
+                self.note = trf("Impostazioni non salvate: {e}", &[("e", &e)]);
             }
             self.saved = now;
         }
@@ -3423,6 +3466,10 @@ impl App {
             }
             Message::SystemTheme(mode) => self.system_dark = mode == iced::theme::Mode::Dark,
             Message::Theme(choice) => self.theme = choice,
+            Message::Language(choice) => {
+                self.language = choice;
+                i18n::set(choice.resolve());
+            }
             Message::Kind(kind) => {
                 // Not during a scan: its pages go where the mode says.
                 if self.kind != kind && self.busy.is_none() {
@@ -3434,20 +3481,24 @@ impl App {
                         && self.unsaved
                         && self.ask(
                             Message::Kind(kind),
-                            "Passare a Foto?".into(),
-                            format!(
-                                "In Foto resta solo l'ultima scansione. {}",
-                                if dropped == 1 {
-                                    "L'altra pagina del documento non è salvata e andrà persa."
+                            tr("Passare a Foto?").into(),
+                            trf(
+                                "In Foto resta solo l'ultima scansione. {lost}",
+                                &[(
+                                    "lost",
+                                    &if dropped == 1 {
+                                    tr("L'altra pagina del documento non è salvata e andrà persa.")
                                         .to_string()
                                 } else {
-                                    format!(
+                                    trf(
                                         "Le altre {dropped} pagine del documento non sono \
-                                         salvate e andranno perse."
+                                         salvate e andranno perse.",
+                                        &[("dropped", &dropped)],
                                     )
                                 },
+                                )],
                             ),
-                            "Passa a Foto",
+                            tr("Passa a Foto"),
                         )
                     {
                         return Task::none();
@@ -3481,27 +3532,30 @@ impl App {
             }
             Message::StartMode(mode) => self.start_mode = mode,
             Message::WiaQuiet(on) => {
-                self.note = "Conferma la richiesta di Windows (amministratore)…".into();
+                self.note = tr("Conferma la richiesta di Windows (amministratore)…").into();
                 return Task::perform(async move { wia::set_quiet(on) }, Message::WiaDone);
             }
             Message::WiaDone(result) => {
                 self.wia_quiet = wia::quiet();
                 self.note = match result {
                     Ok(()) if self.wia_quiet == Some(true) => {
-                        "Windows non apre più la sua app ai tasti dello scanner".into()
+                        tr("Windows non apre più la sua app ai tasti dello scanner").into()
                     }
-                    Ok(()) => "Windows torna ad aprire la sua app ai tasti dello scanner".into(),
-                    Err(e) => format!("Non cambiato: {e}"),
+                    Ok(()) => {
+                        tr("Windows torna ad aprire la sua app ai tasti dello scanner").into()
+                    }
+                    Err(e) => trf("Non cambiato: {e}", &[("e", &e)]),
                 };
             }
             Message::GrantAccess => {
-                self.note = "Conferma con la password per dare lo scanner a questo utente…".into();
+                self.note =
+                    tr("Conferma con la password per dare lo scanner a questo utente…").into();
                 return Task::perform(async { access::grant() }, Message::GrantDone);
             }
             Message::GrantDone(result) => {
                 self.note = match result {
-                    Ok(()) => "Accesso allo scanner concesso".into(),
-                    Err(e) => format!("Accesso non concesso: {e}"),
+                    Ok(()) => tr("Accesso allo scanner concesso").into(),
+                    Err(e) => trf("Accesso non concesso: {e}", &[("e", &e)]),
                 };
                 if let Some(w) = &self.worker {
                     w.send(Command::Status);
@@ -3546,7 +3600,7 @@ impl App {
                 self.undo.clear();
                 self.redo_stack.clear();
                 self.shared_changed();
-                self.note = "Impostazioni di fabbrica ripristinate".into();
+                self.note = tr("Impostazioni di fabbrica ripristinate").into();
             }
             Message::View(view) => *self.current_view() = view,
             Message::Fit => *self.current_view() = View::default(),
@@ -3620,7 +3674,7 @@ impl App {
                     for page in &mut self.pages {
                         page.layout = None;
                     }
-                    self.note = "Impaginazione applicata a tutte le pagine".into();
+                    self.note = tr("Impaginazione applicata a tutte le pagine").into();
                 }
             }
             Message::PageFocus(focus) => {
@@ -3656,7 +3710,7 @@ impl App {
             Message::PresetSave => {
                 let name = self.preset_name.trim().to_string();
                 if name.is_empty() {
-                    self.note = "Dai un nome al preset".into();
+                    self.note = tr("Dai un nome al preset").into();
                     return Task::none();
                 }
                 // "Applica" looks among the factory presets first: one of
@@ -3666,7 +3720,10 @@ impl App {
                     .flat_map(factory_presets)
                     .any(|(n, _)| n == name)
                 {
-                    self.note = format!("«{name}» è un preset di fabbrica: scegli un altro nome");
+                    self.note = trf(
+                        "«{name}» è un preset di fabbrica: scegli un altro nome",
+                        &[("name", &name)],
+                    );
                     return Task::none();
                 }
                 let setup = self.active().to_stored();
@@ -3680,16 +3737,16 @@ impl App {
                         })
                     }
                     None => {
-                        self.note = format!(
-                            "Al massimo {} preset: eliminane uno o salva sopra a uno esistente",
-                            prefs::MAX_PRESETS
+                        self.note = trf(
+                            "Al massimo {n} preset: eliminane uno o salva sopra a uno esistente",
+                            &[("n", &prefs::MAX_PRESETS)],
                         );
                         return Task::none();
                     }
                 }
                 self.note = match prefs::save_presets(&self.presets) {
-                    Ok(()) => format!("Preset «{name}» salvato"),
-                    Err(e) => format!("Preset non salvato: {e}"),
+                    Ok(()) => trf("Preset «{name}» salvato", &[("name", &name)]),
+                    Err(e) => trf("Preset non salvato: {e}", &[("e", &e)]),
                 };
                 self.preset_name.clear();
             }
@@ -3708,14 +3765,17 @@ impl App {
                     new.auto_save = self.settings().auto_save;
                     new.auto_crop = self.settings().auto_crop;
                     self.change(|s| *s = new);
-                    self.note = format!("Preset «{name}» applicato (Ctrl+Z per tornare indietro)");
+                    self.note = trf(
+                        "Preset «{name}» applicato (Ctrl+Z per tornare indietro)",
+                        &[("name", &name)],
+                    );
                 }
             }
             Message::PresetDelete(name) => {
                 self.presets.retain(|p| p.name != name);
                 self.note = match prefs::save_presets(&self.presets) {
-                    Ok(()) => format!("Preset «{name}» eliminato"),
-                    Err(e) => format!("Preset non salvato: {e}"),
+                    Ok(()) => trf("Preset «{name}» eliminato", &[("name", &name)]),
+                    Err(e) => trf("Preset non salvato: {e}", &[("e", &e)]),
                 };
             }
             Message::OwnLook(on) => {
@@ -3726,9 +3786,9 @@ impl App {
                         self.dirty_page = true;
                     }
                     self.note = if on {
-                        "Questa pagina ha ora regolazioni sue".into()
+                        tr("Questa pagina ha ora regolazioni sue").into()
                     } else {
-                        "Questa pagina segue di nuovo le regolazioni comuni".into()
+                        tr("Questa pagina segue di nuovo le regolazioni comuni").into()
                     };
                 }
             }
@@ -3752,7 +3812,7 @@ impl App {
                         .collect();
                     self.dirty_preview = true;
                     self.dirty_page = true;
-                    self.note = "Regolazioni applicate a tutte le pagine".into();
+                    self.note = tr("Regolazioni applicate a tutte le pagine").into();
                 }
             }
             Message::CurveChannel(c) => self.curve_channel = c,
@@ -3779,9 +3839,9 @@ impl App {
                     match self.restore(target, settings) {
                         Some(current) => {
                             self.redo_stack.push(current);
-                            self.note = "Annullato".into();
+                            self.note = tr("Annullato").into();
                         }
-                        None => self.note = "Niente da annullare qui".into(),
+                        None => self.note = tr("Niente da annullare qui").into(),
                     }
                 }
             }
@@ -3789,7 +3849,7 @@ impl App {
                 if let Some((target, settings)) = self.redo_stack.pop() {
                     if let Some(current) = self.restore(target, settings) {
                         self.undo.push(current);
-                        self.note = "Ripristinato".into();
+                        self.note = tr("Ripristinato").into();
                     }
                 }
             }
@@ -3800,7 +3860,9 @@ impl App {
                     if f == field {
                         match text.trim().replace(',', ".").parse::<f32>() {
                             Ok(v) => self.change(|s| field.set(s, v)),
-                            Err(_) => self.note = format!("«{text}» non è un numero"),
+                            Err(_) => {
+                                self.note = trf("«{text}» non è un numero", &[("text", &text)])
+                            }
                         }
                     }
                 }
@@ -3849,9 +3911,9 @@ impl App {
                 };
                 if let Some(sample) = picked {
                     self.change(|s| s.adjust = s.adjust.neutral_at(sample));
-                    self.note = format!(
-                        "Bilanciamento dal punto scelto (R {} G {} B {})",
-                        sample[0], sample[1], sample[2]
+                    self.note = trf(
+                        "Bilanciamento dal punto scelto (R {r} G {g} B {b})",
+                        &[("r", &sample[0]), ("g", &sample[1]), ("b", &sample[2])],
                     );
                 }
             }
@@ -3907,7 +3969,7 @@ impl App {
             Message::Cancel => {
                 if let Some(w) = &self.worker {
                     w.cancel();
-                    self.note = "Annullamento…".into();
+                    self.note = tr("Annullamento…").into();
                 }
             }
             Message::Save => {
@@ -3915,10 +3977,10 @@ impl App {
                 let ext = output.extension();
                 let (prefix, filter) = match (self.kind, output) {
                     (Kind::Document, Output::Image(_)) if self.pages.len() > 1 => {
-                        (self.name(), "Un file per pagina")
+                        (self.name(), tr("Un file per pagina"))
                     }
-                    (Kind::Document, _) => (self.name(), "Documento"),
-                    (Kind::Photo, _) => (self.name(), "Immagine"),
+                    (Kind::Document, _) => (self.name(), tr("Documento")),
+                    (Kind::Photo, _) => (self.name(), tr("Immagine")),
                 };
                 let folder = self.folder();
                 let _ = std::fs::create_dir_all(&folder);
@@ -3944,14 +4006,14 @@ impl App {
                 let then = self.after_save.take();
                 match self.write(&path) {
                     Ok(what) => {
-                        self.note = format!("Salvato: {what}");
+                        self.note = trf("Salvato: {what}", &[("what", &what)]);
                         self.unsaved = false;
                         // "Salva…" in the question: now what was asked.
                         if let Some(then) = then {
                             return self.run_confirmed(then);
                         }
                     }
-                    Err(e) => self.note = format!("Salvataggio non riuscito: {e}"),
+                    Err(e) => self.note = trf("Salvataggio non riuscito: {e}", &[("e", &e)]),
                 }
             }
             Message::SaveTo(None) => self.after_save = None,
@@ -3961,7 +4023,7 @@ impl App {
                         return self.run_confirmed(*confirm.then);
                     }
                     self.print_next = false;
-                    self.note = "Nulla è cambiato".into();
+                    self.note = tr("Nulla è cambiato").into();
                 }
             }
             Message::ConfirmSave => {
@@ -3975,21 +4037,24 @@ impl App {
                 let lost = (n > 0 && self.unsaved).then(|| self.lost_sentence(n));
                 let asked = if self.busy.is_some() {
                     let body = match &lost {
-                        Some(lost) => format!("La scansione in corso si interrompe. {lost}"),
-                        None => "La scansione in corso si interrompe e va persa.".into(),
+                        Some(lost) => trf(
+                            "La scansione in corso si interrompe. {lost}",
+                            &[("lost", &lost)],
+                        ),
+                        None => tr("La scansione in corso si interrompe e va persa.").into(),
                     };
                     self.ask(
                         Message::CloseRequested(id),
-                        "Chiudere durante la scansione?".into(),
+                        tr("Chiudere durante la scansione?").into(),
                         body,
-                        "Chiudi",
+                        tr("Chiudi"),
                     )
                 } else if let Some(lost) = lost {
                     self.ask(
                         Message::CloseRequested(id),
-                        "Chiudere senza salvare?".into(),
+                        tr("Chiudere senza salvare?").into(),
                         lost,
-                        "Chiudi senza salvare",
+                        tr("Chiudi senza salvare"),
                     )
                 } else {
                     false
@@ -4001,7 +4066,7 @@ impl App {
                     else {
                         return iced::window::close(id);
                     };
-                    self.note = "Spegnimento della lampada…".into();
+                    self.note = tr("Spegnimento della lampada…").into();
                     return Task::perform(
                         async move {
                             let (done, wait) = std::sync::mpsc::channel();
@@ -4065,10 +4130,12 @@ impl App {
                     self.tab = Tab::Result;
                     self.result_view = View::default();
                     self.pages_changed();
-                    self.note = format!(
-                        "{} duplicata: la copia è la {}, da ritagliare e regolare a parte",
-                        self.page_title(i),
-                        self.page_name(i + 1)
+                    self.note = trf(
+                        "{title} duplicata: la copia è la {copy}, da ritagliare e regolare a parte",
+                        &[
+                            ("title", &self.page_title(i)),
+                            ("copy", &self.page_name(i + 1)),
+                        ],
                     );
                 }
             }
@@ -4096,7 +4163,7 @@ impl App {
                         self.pages_changed();
                         self.unsaved = true;
                         let name = item_name(self.kind, to, n);
-                        self.note = format!("Spostata: ora è la {name}");
+                        self.note = trf("Spostata: ora è la {name}", &[("name", &name)]);
                     }
                 }
             }
@@ -4106,9 +4173,9 @@ impl App {
                     if self.unsaved
                         && self.ask(
                             Message::PageDelete(i),
-                            format!("Eliminare la {}?", self.page_name(i)),
-                            "Non è salvata e non si può recuperare.".into(),
-                            format!("Elimina la {}", self.page_name(i)),
+                            trf("Eliminare la {name}?", &[("name", &self.page_name(i))]),
+                            tr("Non è salvata e non si può recuperare.").into(),
+                            trf("Elimina la {name}", &[("name", &self.page_name(i))]),
                         )
                     {
                         return Task::none();
@@ -4117,7 +4184,7 @@ impl App {
                     self.redone = None;
                     self.current = (!self.pages.is_empty()).then(|| i.min(self.pages.len() - 1));
                     self.pages_changed();
-                    self.note = format!("{title} eliminata");
+                    self.note = trf("{title} eliminata", &[("title", &title)]);
                 }
             }
             Message::PageRedo(i) => {
@@ -4132,7 +4199,8 @@ impl App {
                         self.pages[index] = page;
                         self.current = Some(index);
                         self.pages_changed();
-                        self.note = format!("{} sostituita", self.page_title(index));
+                        self.note =
+                            trf("{title} sostituita", &[("title", &self.page_title(index))]);
                     }
                 }
             }
@@ -4140,7 +4208,10 @@ impl App {
                 if let Some((index, _)) = self.redone.take() {
                     self.current = Some(index);
                     self.forget_page_undo();
-                    self.note = format!("{} lasciata com'era", self.page_title(index));
+                    self.note = trf(
+                        "{title} lasciata com'era",
+                        &[("title", &self.page_title(index))],
+                    );
                 }
             }
             Message::NewDocument => {
@@ -4149,9 +4220,9 @@ impl App {
                     && self.unsaved
                     && self.ask(
                         Message::NewDocument,
-                        "Iniziare un nuovo documento?".into(),
+                        tr("Iniziare un nuovo documento?").into(),
                         self.lost_sentence(n),
-                        "Scarta e ricomincia",
+                        tr("Scarta e ricomincia"),
                     )
                 {
                     return Task::none();
@@ -4160,7 +4231,7 @@ impl App {
                 self.current = None;
                 self.redone = None;
                 self.pages_changed();
-                self.note = "Nuovo documento".into();
+                self.note = tr("Nuovo documento").into();
             }
         }
         Task::none()
@@ -4288,13 +4359,13 @@ impl App {
                         if e == worker::CANCELLED {
                             // Stopped with "Annulla": nothing went wrong.
                             self.note = match purpose {
-                                Purpose::Preview => "Anteprima annullata".into(),
-                                Purpose::Page => "Scansione annullata".into(),
+                                Purpose::Preview => tr("Anteprima annullata").into(),
+                                Purpose::Page => tr("Scansione annullata").into(),
                             };
                         } else {
-                            self.note = format!("Errore: {e}");
+                            self.note = trf("Errore: {e}", &[("e", &e)]);
                             if purpose == Purpose::Page {
-                                notify("Scansione non riuscita", &e, true);
+                                notify(tr("Scansione non riuscita"), &e, true);
                             }
                         }
                     }
@@ -4309,13 +4380,13 @@ impl App {
 
     fn found_note(n: usize) -> String {
         match n {
-            0 => "Anteprima pronta: trascina per scegliere l'area, regola a destra".into(),
-            1 => {
-                "Anteprima pronta: un originale riconosciuto, sarà ritagliato e raddrizzato".into()
-            }
-            n => format!(
+            0 => tr("Anteprima pronta: trascina per scegliere l'area, regola a destra").into(),
+            1 => tr("Anteprima pronta: un originale riconosciuto, sarà ritagliato e raddrizzato")
+                .into(),
+            n => trf(
                 "Anteprima pronta: {n} originali riconosciuti, ognuno diventa un'immagine \
-                 raddrizzata"
+                 raddrizzata",
+                &[("n", &n)],
             ),
         }
     }
@@ -4373,7 +4444,10 @@ impl App {
         let first = self.batch.0 == 0;
         self.batch.0 += 1;
         let of = if self.batch.1 > 1 {
-            format!(" ({} di {})", self.batch.0, self.batch.1)
+            trf(
+                " ({i} di {n})",
+                &[("i", &self.batch.0), ("n", &self.batch.1)],
+            )
         } else {
             String::new()
         };
@@ -4386,7 +4460,7 @@ impl App {
                     self.current = Some(index);
                     self.pages_changed();
                 }
-                self.note = format!("{} rifatta", self.page_title(index));
+                self.note = trf("{title} rifatta", &[("title", &self.page_title(index))]);
                 notify(&self.note, "", false);
             }
             (Some(index), _) => {
@@ -4394,19 +4468,29 @@ impl App {
                 self.redone = Some((index, page));
                 // The panel and the strip show the page done again.
                 self.current = Some(index);
-                self.note = format!(
-                    "Nuova scansione della {}: tienila o lascia la vecchia",
-                    self.page_name(index)
+                self.note = trf(
+                    "Nuova scansione della {name}: tienila o lascia la vecchia",
+                    &[("name", &self.page_name(index))],
                 );
             }
             (None, Kind::Document) => {
                 self.pages.push(page);
                 self.current = Some(self.pages.len() - 1);
-                self.note = format!(
-                    "Pagina {} acquisita{of} · {w} × {h} pixel a {dpi} dpi",
-                    self.pages.len()
+                self.note = trf(
+                    "Pagina {n} acquisita{of} · {w} × {h} pixel a {dpi} dpi",
+                    &[
+                        ("n", &self.pages.len()),
+                        ("of", &of),
+                        ("w", &w),
+                        ("h", &h),
+                        ("dpi", &dpi),
+                    ],
                 );
-                notify(&format!("Pagina {} acquisita", self.pages.len()), "", false);
+                notify(
+                    &trf("Pagina {n} acquisita", &[("n", &self.pages.len())]),
+                    "",
+                    false,
+                );
             }
             (None, Kind::Photo) => {
                 if first {
@@ -4415,7 +4499,10 @@ impl App {
                 }
                 self.pages.push(page);
                 self.current = Some(if first { 0 } else { self.current.unwrap_or(0) });
-                self.note = format!("Foto acquisita{of} · {w} × {h} pixel a {dpi} dpi");
+                self.note = trf(
+                    "Foto acquisita{of} · {w} × {h} pixel a {dpi} dpi",
+                    &[("of", &of), ("w", &w), ("h", &h), ("dpi", &dpi)],
+                );
             }
         }
     }
@@ -4445,21 +4532,27 @@ impl App {
             self.note = match written {
                 Ok(_) if n > 1 => {
                     notify(
-                        &format!("{n} foto salvate"),
+                        &trf("{n} foto salvate", &[("n", &n)]),
                         &folder.display().to_string(),
                         false,
                     );
-                    format!("{n} foto salvate in {}", folder.display())
+                    trf(
+                        "{n} foto salvate in {dir}",
+                        &[("n", &n), ("dir", &folder.display())],
+                    )
                 }
                 Ok(_) => {
-                    notify("Foto salvata", &path.display().to_string(), false);
-                    format!("Foto salvata in {}", path.display())
+                    notify(tr("Foto salvata"), &path.display().to_string(), false);
+                    trf("Foto salvata in {file}", &[("file", &path.display())])
                 }
-                Err(e) => format!("Salvataggio non riuscito: {e}"),
+                Err(e) => trf("Salvataggio non riuscito: {e}", &[("e", &e)]),
             };
         } else if n > 1 {
-            self.note = format!("{n} foto acquisite: scegli a sinistra, salva con «Salva»");
-            notify(&format!("{n} foto acquisite"), "", false);
+            self.note = trf(
+                "{n} foto acquisite: scegli a sinistra, salva con «Salva»",
+                &[("n", &n)],
+            );
+            notify(&trf("{n} foto acquisite", &[("n", &n)]), "", false);
         }
     }
 
@@ -4472,12 +4565,18 @@ impl App {
             return;
         };
         if self.busy.is_some() {
-            self.note = format!("Tasto {name} ignorato: scansione in corso");
+            self.note = trf(
+                "Tasto {name} ignorato: scansione in corso",
+                &[("name", &name)],
+            );
             return;
         }
         if self.confirm.is_some() {
-            self.note = format!("Tasto {name} ignorato: rispondi prima alla domanda");
-            notify("Rispondi alla domanda nell'app", "", false);
+            self.note = trf(
+                "Tasto {name} ignorato: rispondi prima alla domanda",
+                &[("name", &name)],
+            );
+            notify(tr("Rispondi alla domanda nell'app"), "", false);
             return;
         }
         let action = self.button_action(self.kind, index);
@@ -4489,10 +4588,10 @@ impl App {
             }
             ButtonAction::RedoLast => match self.pages.len() {
                 0 => {
-                    self.note = "Nessuna pagina da rifare: Scan acquisisce la prima".into();
+                    self.note = tr("Nessuna pagina da rifare: Scan acquisisce la prima").into();
                     notify(
-                        "Nessuna pagina da rifare",
-                        "Premi Scan per la prima pagina",
+                        tr("Nessuna pagina da rifare"),
+                        tr("Premi Scan per la prima pagina"),
                         false,
                     );
                 }
@@ -4510,15 +4609,19 @@ impl App {
                 if self.confirm.is_some() {
                     self.notify_question();
                 } else {
-                    notify("Fotocopia", "Scansione in corso, poi la stampa", false);
+                    notify(
+                        tr("Fotocopia"),
+                        tr("Scansione in corso, poi la stampa"),
+                        false,
+                    );
                 }
             }
             ButtonAction::SaveDocument => {
                 if self.pages.is_empty() {
-                    self.note = "Documento vuoto: premi Scan per acquisire una pagina".into();
+                    self.note = tr("Documento vuoto: premi Scan per acquisire una pagina").into();
                     notify(
-                        "Documento vuoto",
-                        "Premi Scan per acquisire una pagina",
+                        tr("Documento vuoto"),
+                        tr("Premi Scan per acquisire una pagina"),
                         false,
                     );
                     return;
@@ -4532,14 +4635,14 @@ impl App {
                 ));
                 match self.write(&path) {
                     Ok(what) => {
-                        self.note = format!("Salvato: {what}");
+                        self.note = trf("Salvato: {what}", &[("what", &what)]);
                         self.unsaved = false;
-                        notify("Documento salvato", &path.display().to_string(), false);
+                        notify(tr("Documento salvato"), &path.display().to_string(), false);
                         open_folder(&folder);
                     }
                     Err(e) => {
-                        self.note = format!("Salvataggio non riuscito: {e}");
-                        notify("Salvataggio non riuscito", &e, true);
+                        self.note = trf("Salvataggio non riuscito: {e}", &[("e", &e)]);
+                        notify(tr("Salvataggio non riuscito"), &e, true);
                     }
                 }
             }
@@ -4552,7 +4655,7 @@ impl App {
     /// person is at the scanner, the question is on the screen.
     fn notify_question(&self) {
         if let Some(confirm) = &self.confirm {
-            notify(&confirm.title, "Rispondi nell'app", false);
+            notify(&confirm.title, tr("Rispondi nell'app"), false);
         }
     }
 
@@ -4566,15 +4669,15 @@ impl App {
         match hp3770_export::save(&path, &image) {
             Ok(()) => match print_file(&path) {
                 Ok(()) => {
-                    self.note = "Fotocopia inviata alla stampante predefinita".into();
-                    notify("Fotocopia inviata alla stampante", "", false);
+                    self.note = tr("Fotocopia inviata alla stampante predefinita").into();
+                    notify(tr("Fotocopia inviata alla stampante"), "", false);
                 }
                 Err(e) => {
-                    self.note = format!("Stampa non riuscita: {e}");
-                    notify("Stampa non riuscita", &e, true);
+                    self.note = trf("Stampa non riuscita: {e}", &[("e", &e)]);
+                    notify(tr("Stampa non riuscita"), &e, true);
                 }
             },
-            Err(e) => self.note = format!("Stampa non riuscita: {e}"),
+            Err(e) => self.note = trf("Stampa non riuscita: {e}", &[("e", &e)]),
         }
     }
 
@@ -4602,11 +4705,11 @@ impl App {
                 text(&confirm.body).size(13),
                 row![
                     Space::new().width(Length::Fill),
-                    button(text("Annulla").size(13))
+                    button(text(tr("Annulla")).size(13))
                         .padding([6, 14])
                         .style(button::secondary)
                         .on_press(Message::Confirm(false)),
-                    button(text("Salva…").size(13))
+                    button(text(tr("Salva…")).size(13))
                         .padding([6, 14])
                         .style(button::primary)
                         .on_press(Message::ConfirmSave),
@@ -4678,44 +4781,46 @@ impl App {
                 })
                 .on_press_maybe(kind.filter(|_| self.busy.is_none()).map(Message::Kind))
         };
-        let modes = container(
-            row![
-                segment("Documento", Some(Kind::Document)),
-                segment("Foto", Some(Kind::Photo)),
-                segment("Pellicola", None),
-            ]
-            .spacing(2),
-        )
-        .padding(3)
-        .style(|theme: &Theme| container::Style {
-            background: Some(theme.extended_palette().background.weak.color.into()),
-            border: iced::Border {
-                radius: 8.0.into(),
+        let mut segments = row![
+            segment(tr("Documento"), Some(Kind::Document)),
+            segment(tr("Foto"), Some(Kind::Photo)),
+        ]
+        .spacing(2);
+        // Film only for a scanner with an adapter for it (not there yet).
+        if self.caps.transparency {
+            segments = segments.push(segment(tr("Pellicola"), None));
+        }
+        let modes = container(segments)
+            .padding(3)
+            .style(|theme: &Theme| container::Style {
+                background: Some(theme.extended_palette().background.weak.color.into()),
+                border: iced::Border {
+                    radius: 8.0.into(),
+                    ..Default::default()
+                },
                 ..Default::default()
-            },
-            ..Default::default()
-        });
+            });
         let (dot, state) = match (&self.status, &self.busy) {
             (_, Some(_)) => (
                 iced::Color::from_rgb(0.95, 0.65, 0.2),
-                "Al lavoro".to_string(),
+                tr("Al lavoro").to_string(),
             ),
             (Some(Ok(s)), None) => (
                 iced::Color::from_rgb(0.24, 0.77, 0.48),
                 match (s.ready, s.lamp) {
-                    (false, _) => "Occupato".to_string(),
-                    (true, Some(LampState::Off)) => "Pronto · lampada spenta".to_string(),
-                    (true, Some(_)) => "Pronto · lampada accesa".to_string(),
-                    (true, None) => "Pronto".to_string(),
+                    (false, _) => tr("Occupato").to_string(),
+                    (true, Some(LampState::Off)) => tr("Pronto · lampada spenta").to_string(),
+                    (true, Some(_)) => tr("Pronto · lampada accesa").to_string(),
+                    (true, None) => tr("Pronto").to_string(),
                 },
             ),
             (Some(Err(_)), None) => (
                 iced::Color::from_rgb(0.94, 0.36, 0.33),
-                "Scanner non trovato".to_string(),
+                tr("Scanner non trovato").to_string(),
             ),
             (None, None) => (
                 iced::Color::from_rgb(0.6, 0.6, 0.6),
-                "Collegamento…".to_string(),
+                tr("Collegamento…").to_string(),
             ),
         };
         let chip = container(
@@ -4746,13 +4851,16 @@ impl App {
         });
         let planned = self.plan().iter().map(|j| j.crops.len()).sum::<usize>();
         let next = match (self.kind, planned) {
-            (Kind::Document, 0 | 1) => format!("Scansiona pagina {}", self.pages.len() + 1),
-            (Kind::Document, n) => format!("Scansiona {n} pagine"),
-            (Kind::Photo, 0 | 1) => "Scansiona foto".into(),
-            (Kind::Photo, n) => format!("Scansiona {n} foto"),
+            (Kind::Document, 0 | 1) => {
+                trf("Scansiona pagina {n}", &[("n", &(self.pages.len() + 1))])
+            }
+            (Kind::Document, n) => trf("Scansiona {n} pagine", &[("n", &n)]),
+            (Kind::Photo, 0 | 1) => tr("Scansiona foto").into(),
+            (Kind::Photo, n) => trf("Scansiona {n} foto", &[("n", &n)]),
         };
         // The name, and at its top right the version, small.
         let name = row![
+            // not translated: the name
             text("Scanjet 3770").size(15),
             text(concat!("v", env!("CARGO_PKG_VERSION")))
                 .size(10)
@@ -4768,7 +4876,7 @@ impl App {
                 .padding(0)
                 .style(button::text)
                 .on_press_maybe(self.idle().then_some(Message::RefreshStatus)),
-            button(text("Anteprima").size(13))
+            button(text(tr("Anteprima")).size(13))
                 .style(button::secondary)
                 .padding([7, 12])
                 .on_press_maybe(self.idle().then_some(Message::Preview)),
@@ -4802,8 +4910,8 @@ impl App {
         };
         let n = self.pages.len();
         let header = match self.kind {
-            Kind::Document => "PAGINE",
-            Kind::Photo => "FOTO",
+            Kind::Document => tr("PAGINE"),
+            Kind::Photo => tr("FOTO"),
         };
         let mut list = column![text(format!("{header} · {n}")).size(11)].spacing(10);
         // Where a page dragged would go: a bar before or after the page it
@@ -4883,20 +4991,20 @@ impl App {
                     .align_y(Alignment::Center),
                     row![
                         tool(
-                            "Modifica",
+                            tr("Modifica"),
                             EditMsg::Open(i).into(),
                             !edited_here && self.redone.is_none()
                         ),
-                        tool("Rifai", Message::PageRedo(i), idle),
+                        tool(tr("Rifai"), Message::PageRedo(i), idle),
                     ],
                     row![
                         tool(
-                            "Duplica",
+                            tr("Duplica"),
                             Message::PageDuplicate(i),
                             idle && self.redone.is_none()
                         ),
                         Space::new().width(Length::Fill),
-                        tool("Elimina", Message::PageDelete(i), idle),
+                        tool(tr("Elimina"), Message::PageDelete(i), idle),
                     ],
                 ]
                 .spacing(2),
@@ -4908,8 +5016,8 @@ impl App {
         // Which front-panel button adds a page (or scans a photo), as set
         // in the preferences.
         let (adds, what) = match self.kind {
-            Kind::Document => (ButtonAction::AddPage, "aggiunge una pagina"),
-            Kind::Photo => (ButtonAction::ScanPhoto, "scansiona una foto"),
+            Kind::Document => (ButtonAction::AddPage, tr("aggiunge una pagina")),
+            Kind::Photo => (ButtonAction::ScanPhoto, tr("scansiona una foto")),
         };
         // A page dragged out of the strip goes back where it was.
         let strip = |list| {
@@ -4932,9 +5040,12 @@ impl App {
         };
         list = list.push(
             container(
-                text(format!("Il tasto {button} dello scanner {what}"))
-                    .size(11)
-                    .center(),
+                text(trf(
+                    "Il tasto {button} dello scanner {what}",
+                    &[("button", &button), ("what", &what)],
+                ))
+                .size(11)
+                .center(),
             )
             .padding(10)
             .width(Length::Fill)
@@ -4957,13 +5068,19 @@ impl App {
         let s = self.settings();
         let e = hp3770_export::Encoding::from_percent(s.pdf_quality);
         let what = match (s.pdf_quality, e.max_dpi) {
-            (100, _) => "come la scansione, JPEG 95".to_string(),
-            (_, None) => format!("JPEG {}, pagine senza colore in grigio", e.quality),
-            (_, Some(dpi)) => format!("JPEG {}, al massimo {dpi} dpi", e.quality),
+            (100, _) => tr("come la scansione, JPEG 95").to_string(),
+            (_, None) => trf(
+                "JPEG {quality}, pagine senza colore in grigio",
+                &[("quality", &e.quality)],
+            ),
+            (_, Some(dpi)) => trf(
+                "JPEG {quality}, al massimo {dpi} dpi",
+                &[("quality", &e.quality), ("dpi", &dpi)],
+            ),
         };
         let quality = column![
             labelled(
-                "Qualità",
+                tr("Qualità"),
                 row![
                     slider(
                         f32::from(PDF_QUALITY_MIN)..=100.0,
@@ -4993,9 +5110,9 @@ impl App {
         });
         let invalid = parse_megabytes(&typed).is_none();
         let limit = labelled(
-            "Al massimo",
+            tr("Al massimo"),
             row![
-                iced::widget::text_input("nessun limite", &typed)
+                iced::widget::text_input(tr("nessun limite"), &typed)
                     .on_input(Message::PdfLimitText)
                     .size(13)
                     .width(Length::Fill),
@@ -5010,38 +5127,50 @@ impl App {
         let estimate = match (current, &self.pdf_estimate) {
             (Some(e), _) => match &e.result {
                 Ok(p) => match s.pdf_limit_kb {
-                    None => format!("Dimensione stimata: circa {}", human_size(p.bytes)),
+                    None => trf(
+                        "Dimensione stimata: circa {size}",
+                        &[("size", &human_size(p.bytes))],
+                    ),
                     Some(kb) if p.fits => {
                         let limit = human_size(u64::from(kb) * 1024);
                         match lightened(&p.encodings, e_base(s.pdf_quality)) {
-                            Some(l) => format!("Circa {}, nel limite di {limit}: {l}", human_size(p.bytes)),
-                            None => format!(
-                                "Circa {}, già nel limite di {limit}: nessuna pagina da alleggerire",
-                                human_size(p.bytes)
+                            Some(l) => trf(
+                                "Circa {size}, nel limite di {limit}: {l}",
+                                &[("size", &human_size(p.bytes)), ("limit", &limit), ("l", &l)],
+                            ),
+                            None => trf(
+                                "Circa {size}, già nel limite di {limit}: nessuna pagina da \
+                                 alleggerire",
+                                &[("size", &human_size(p.bytes)), ("limit", &limit)],
                             ),
                         }
                     }
-                    Some(kb) => format!(
-                        "Anche alleggerendo ogni pagina resta circa {}, oltre {}: prova \
+                    Some(kb) => trf(
+                        "Anche alleggerendo ogni pagina resta circa {size}, oltre {limit}: prova \
                          Grigio o Bianco e nero, o una risoluzione di scansione più bassa",
-                        human_size(p.bytes),
-                        human_size(u64::from(kb) * 1024)
+                        &[
+                            ("size", &human_size(p.bytes)),
+                            ("limit", &human_size(u64::from(kb) * 1024)),
+                        ],
                     ),
                 },
-                Err(err) => format!("Stima non riuscita: {err}"),
+                Err(err) => trf("Stima non riuscita: {err}", &[("err", &err)]),
             },
             (None, Some(old)) => match &old.result {
-                Ok(p) => format!("Circa {} · aggiornamento…", human_size(p.bytes)),
-                Err(_) => "Calcolo della dimensione…".into(),
+                Ok(p) => trf(
+                    "Circa {size} · aggiornamento…",
+                    &[("size", &human_size(p.bytes))],
+                ),
+                Err(_) => tr("Calcolo della dimensione…").into(),
             },
             (None, None) if self.pages.is_empty() => {
-                "La dimensione si vede dopo la prima scansione".into()
+                tr("La dimensione si vede dopo la prima scansione").into()
             }
-            (None, None) => "Calcolo della dimensione…".into(),
+            (None, None) => tr("Calcolo della dimensione…").into(),
         };
-        let mut out = column![heading("Dimensione del PDF"), quality, limit].spacing(8);
+        let mut out = column![heading(tr("Dimensione del PDF")), quality, limit].spacing(8);
         if invalid {
-            out = out.push(text("Scrivi un numero di megabyte, per esempio 5 o 2,5").size(11));
+            out = out.push(text(tr("Scrivi un numero di megabyte, per esempio 5 o 2,5")).size(11));
         }
         out.push(text(estimate).size(12)).into()
     }
@@ -5056,7 +5185,7 @@ impl App {
                 viewer::viewer(
                     self.preview.as_ref().map(|(_, _, p)| p),
                     self.glass(),
-                    "Premi «Anteprima» per vedere il vetro",
+                    tr("Premi «Anteprima» per vedere il vetro"),
                     self.preview_view,
                     self.selection,
                     if self.settings().auto_crop {
@@ -5086,12 +5215,16 @@ impl App {
                     "{} · {} · {}{}",
                     s.pdf_size,
                     match l.sheet {
-                        Sheet::Auto => "orientamento automatico",
+                        Sheet::Auto => tr("orientamento automatico"),
                         Sheet::Portrait => "verticale",
                         Sheet::Landscape => "orizzontale",
                     },
                     l.fit.to_string().to_lowercase(),
-                    if own { " · solo questa pagina" } else { "" }
+                    if own {
+                        tr(" · solo questa pagina")
+                    } else {
+                        ""
+                    }
                 );
                 (
                     sheet::sheet(
@@ -5109,7 +5242,7 @@ impl App {
                 viewer::viewer(
                     self.shown().map(|p| &p.picture),
                     self.glass(),
-                    "Nessuna scansione: premi «Scansiona»",
+                    tr("Nessuna scansione: premi «Scansiona»"),
                     self.result_view,
                     self.crop_selection(),
                     Vec::new(),
@@ -5143,13 +5276,13 @@ impl App {
                 .on_press_maybe(message)
         };
         let result_label = match self.kind {
-            Kind::Document => "Pagina",
-            Kind::Photo => "Foto",
+            Kind::Document => tr("Pagina"),
+            Kind::Photo => tr("Foto"),
         };
         let views = card(
             row![
                 small(
-                    "Anteprima",
+                    tr("Anteprima"),
                     Some(Message::Tab(Tab::Preview)),
                     self.tab == Tab::Preview
                 ),
@@ -5169,10 +5302,10 @@ impl App {
         .flatten();
         let tools = card(
             column![
-                small("Modifica…", edit, false),
-                small("Contagocce", Some(Message::Eyedropper), self.eyedropper),
+                small(tr("Modifica…"), edit, false),
+                small(tr("Contagocce"), Some(Message::Eyedropper), self.eyedropper),
                 small(
-                    "Togli selezione",
+                    tr("Togli selezione"),
                     (self.tab == Tab::Preview && self.selection.is_some())
                         .then_some(Message::Select(None)),
                     false
@@ -5182,19 +5315,19 @@ impl App {
         );
         let compare = card(
             row![
-                small("Prima", Some(Message::Before(true)), self.before),
-                small("Dopo", Some(Message::Before(false)), !self.before),
+                small(tr("Prima"), Some(Message::Before(true)), self.before),
+                small(tr("Dopo"), Some(Message::Before(false)), !self.before),
             ]
             .spacing(2),
         );
         let zoom_label = match zoom {
-            None => "Vista intera".to_string(),
+            None => tr("Vista intera").to_string(),
             Some(s) => format!("{:.0}%", s * 100.0),
         };
         let zoom = card(
             row![
                 text(zoom_label).size(12),
-                small("Adatta", Some(Message::Fit), false),
+                small(tr("Adatta"), Some(Message::Fit), false),
                 small("1:1", Some(Message::ActualSize), false),
             ]
             .spacing(4)
@@ -5246,10 +5379,14 @@ impl App {
                 layers = layers.push(
                     container(card(
                         row![
-                            text(format!("Nuova scansione della {}", self.page_name(*index)))
-                                .size(13),
-                            button(text("Tieni la nuova").size(13)).on_press(Message::AcceptRedo),
-                            button(text("Lascia la vecchia").size(13))
+                            text(trf(
+                                "Nuova scansione della {name}",
+                                &[("name", &self.page_name(*index))],
+                            ))
+                            .size(13),
+                            button(text(tr("Tieni la nuova")).size(13))
+                                .on_press(Message::AcceptRedo),
+                            button(text(tr("Lascia la vecchia")).size(13))
                                 .style(button::secondary)
                                 .on_press(Message::RejectRedo),
                         ]
@@ -5286,30 +5423,31 @@ impl App {
     fn progress_card(&self) -> Option<Element<'_, Message>> {
         let (purpose, stage) = self.busy.as_ref()?;
         let what = match purpose {
-            Purpose::Preview => "Anteprima".to_string(),
+            Purpose::Preview => tr("Anteprima").to_string(),
             Purpose::Page => match self.kind {
                 // "Rifai": the page done again, not the next one.
-                _ if self.redo.is_some() => format!(
-                    "Nuova scansione della {}",
-                    self.page_name(self.redo.unwrap_or_default())
+                _ if self.redo.is_some() => trf(
+                    "Nuova scansione della {name}",
+                    &[("name", &self.page_name(self.redo.unwrap_or_default()))],
                 ),
-                _ if self.job.as_ref().is_some_and(|j| j.crops.len() > 1) => format!(
-                    "Scansione di {} originali in una passata",
-                    self.job.as_ref().map_or(0, |j| j.crops.len())
+                _ if self.job.as_ref().is_some_and(|j| j.crops.len() > 1) => trf(
+                    "Scansione di {n} originali in una passata",
+                    &[("n", &self.job.as_ref().map_or(0, |j| j.crops.len()))],
                 ),
-                _ if self.batch.1 > 1 => {
-                    format!("Scansione {} di {}", self.batch.0 + 1, self.batch.1)
-                }
-                Kind::Document => format!("Scansione pagina {}", self.pages.len() + 1),
-                Kind::Photo => "Scansione foto".to_string(),
+                _ if self.batch.1 > 1 => trf(
+                    "Scansione {i} di {n}",
+                    &[("i", &(self.batch.0 + 1)), ("n", &self.batch.1)],
+                ),
+                Kind::Document => trf("Scansione pagina {n}", &[("n", &(self.pages.len() + 1))]),
+                Kind::Photo => tr("Scansione foto").to_string(),
             },
         };
         let (fraction, detail) = match stage {
-            None | Some(Progress::Starting) => (0.02, "Avvio dello scanner"),
-            Some(Progress::WarmingUp) => (0.05, "La lampada era spenta: riscaldamento"),
-            Some(Progress::Calibrating) => (0.1, "Calibrazione"),
-            Some(Progress::Scanning { .. }) => (0.0, "Lettura"),
-            Some(Progress::Finishing) => (0.97, "Fine della scansione ed elaborazione"),
+            None | Some(Progress::Starting) => (0.02, tr("Avvio dello scanner")),
+            Some(Progress::WarmingUp) => (0.05, tr("La lampada era spenta: riscaldamento")),
+            Some(Progress::Calibrating) => (0.1, tr("Calibrazione")),
+            Some(Progress::Scanning { .. }) => (0.0, tr("Lettura")),
+            Some(Progress::Finishing) => (0.97, tr("Fine della scansione ed elaborazione")),
         };
         let fraction = match stage {
             Some(Progress::Scanning { done, total }) => {
@@ -5323,7 +5461,7 @@ impl App {
                     text(format!("{what} · {:.0}%", fraction * 100.0))
                         .size(13)
                         .width(Length::Fill),
-                    button(text("Annulla").size(12))
+                    button(text(tr("Annulla")).size(12))
                         .style(button::danger)
                         .padding([3, 10])
                         .on_press(Message::Cancel),
@@ -5360,10 +5498,10 @@ impl App {
                 .on_press(Message::Pane(pane))
         };
         let tabs = row![
-            tab("Scansione", Pane::Scan),
-            tab("Regola", Pane::Adjust),
-            tab("Uscita", Pane::Output),
-            tab("Preferenze", Pane::Prefs),
+            tab(tr("Scansione"), Pane::Scan),
+            tab(tr("Regola"), Pane::Adjust),
+            tab(tr("Uscita"), Pane::Output),
+            tab(tr("Preferenze"), Pane::Prefs),
         ]
         .spacing(2);
         if self.editor().is_some() {
@@ -5374,12 +5512,12 @@ impl App {
                     rule::horizontal(1),
                     container(
                         row![
-                            button(text("Scarta").size(14).center().width(Length::Fill))
+                            button(text(tr("Scarta")).size(14).center().width(Length::Fill))
                                 .width(Length::Fill)
                                 .padding([9, 12])
                                 .style(button::secondary)
                                 .on_press(EditMsg::Discard.into()),
-                            button(text("Applica").size(14).center().width(Length::Fill))
+                            button(text(tr("Applica")).size(14).center().width(Length::Fill))
                                 .width(Length::Fill)
                                 .padding([9, 12])
                                 .on_press(EditMsg::Apply.into()),
@@ -5426,9 +5564,9 @@ impl App {
         let memory = self.memory();
         let mut pane = column![
             self.access_card(),
-            heading("Originale"),
+            heading(tr("Originale")),
             labelled(
-                "Risoluzione",
+                tr("Risoluzione"),
                 pick_list(
                     self.caps.resolutions.clone(),
                     Some(self.dpi()),
@@ -5438,7 +5576,7 @@ impl App {
                 .into()
             ),
             labelled(
-                "Colore",
+                tr("Colore"),
                 pick_list(ALL_COLOURS, Some(s.colour), Message::Colour)
                     .width(Length::Fill)
                     .into()
@@ -5449,7 +5587,7 @@ impl App {
         if self.offers_16bit() {
             pane = pane
                 .push(labelled(
-                    "Profondità",
+                    tr("Profondità"),
                     pick_list(
                         [Depth(8), Depth(16)],
                         Some(Depth(self.depth())),
@@ -5460,17 +5598,19 @@ impl App {
                 ))
                 .push(
                     text(if self.depth() == 16 {
-                        "16 bit: ombre e sfumature senza scalini anche dopo curve forti; \
-                         più memoria."
+                        tr(
+                            "16 bit: ombre e sfumature senza scalini anche dopo curve forti; \
+                         più memoria.",
+                        )
                     } else {
-                        "8 bit: come il driver HP. Per foto e RAW meglio 16 bit."
+                        tr("8 bit: come il driver HP. Per foto e RAW meglio 16 bit.")
                     })
                     .size(11),
                 );
         }
-        pane = pane.push(heading("Area")).push(
+        pane = pane.push(heading(tr("Area"))).push(
             checkbox(self.settings().auto_crop)
-                .label("Ritaglio automatico")
+                .label(tr("Ritaglio automatico"))
                 .on_toggle(Message::AutoCrop)
                 .text_size(13),
         );
@@ -5479,16 +5619,22 @@ impl App {
             let n = self.found.len();
             pane = pane.push(
                 text(match n {
-                    1 => "Un originale riconosciuto sul vetro: sarà ritagliato e raddrizzato."
+                    1 => tr("Un originale riconosciuto sul vetro: sarà ritagliato e raddrizzato.")
                         .to_string(),
-                    n => format!(
+                    n => trf(
                         "{n} originali riconosciuti sul vetro: ognuno diventa un'immagine, \
-                         ritagliata e raddrizzata{}.",
-                        if plan.len() == 1 {
-                            ", in una passata sola"
-                        } else {
-                            ", uno alla volta"
-                        }
+                         ritagliata e raddrizzata{how}.",
+                        &[
+                            ("n", &n),
+                            (
+                                "how",
+                                &if plan.len() == 1 {
+                                    tr(", in una passata sola")
+                                } else {
+                                    tr(", uno alla volta")
+                                },
+                            ),
+                        ],
                     ),
                 })
                 .size(12),
@@ -5496,9 +5642,12 @@ impl App {
             let mm = 25.4 / f32::from(PREVIEW_DPI);
             for (i, f) in self.found.iter().enumerate() {
                 let tilt = if f.angle == 0.0 {
-                    "dritto".to_string()
+                    tr("dritto").to_string()
                 } else {
-                    format!("storto di {:.1}°", f.angle.abs()).replace('.', ",")
+                    trf(
+                        "storto di {deg}°",
+                        &[("deg", &i18n::decimal(format!("{:.1}", f.angle.abs())))],
+                    )
                 };
                 pane = pane.push(
                     row![
@@ -5510,7 +5659,7 @@ impl App {
                         ))
                         .size(12)
                         .width(Length::Fill),
-                        button(text("Escludi").size(11))
+                        button(text(tr("Escludi")).size(11))
                             .padding([1, 6])
                             .style(button::text)
                             .on_press(Message::DropFound(i)),
@@ -5518,15 +5667,23 @@ impl App {
                     .align_y(Alignment::Center),
                 );
             }
-            pane = pane.push(text(format!("in memoria fino a {:.0} MB", memory / 1e6)).size(12));
+            pane = pane.push(
+                text(trf(
+                    "in memoria fino a {mb} MB",
+                    &[("mb", &format!("{:.0}", memory / 1e6))],
+                ))
+                .size(12),
+            );
         } else {
             if self.settings().auto_crop && self.preview.is_some() {
                 pane = pane.push(
                     text(if self.selection.is_some() {
-                        "La selezione ha la precedenza sul ritaglio automatico."
+                        tr("La selezione ha la precedenza sul ritaglio automatico.")
                     } else {
-                        "Nessun originale riconosciuto (un foglio bianco sul coperchio \
-                         bianco può sfuggire): trascina sull'anteprima per scegliere l'area."
+                        tr(
+                            "Nessun originale riconosciuto (un foglio bianco sul coperchio \
+                         bianco può sfuggire): trascina sull'anteprima per scegliere l'area.",
+                        )
                     })
                     .size(11),
                 );
@@ -5534,24 +5691,36 @@ impl App {
             pane = pane
                 .push(
                     text(if self.selection.is_none() {
-                        "Tutto il formato A4. Trascina sull'anteprima per scegliere un'area."
+                        tr("Tutto il formato A4. Trascina sull'anteprima per scegliere un'area.")
                             .to_string()
                     } else {
-                        format!("Da {x:.0}, {y:.0} mm · {wmm:.0} × {hmm:.0} mm")
+                        trf(
+                            "Da {x}, {y} mm · {w} × {h} mm",
+                            &[
+                                ("x", &format!("{x:.0}")),
+                                ("y", &format!("{y:.0}")),
+                                ("w", &format!("{wmm:.0}")),
+                                ("h", &format!("{hmm:.0}")),
+                            ],
+                        )
                     })
                     .size(12),
                 )
                 .push(
-                    text(format!(
-                        "{w} × {h} pixel · in memoria {:.0} MB",
-                        memory / 1e6
+                    text(trf(
+                        "{w} × {h} pixel · in memoria {mb} MB",
+                        &[
+                            ("w", &w),
+                            ("h", &h),
+                            ("mb", &format!("{:.0}", memory / 1e6)),
+                        ],
                     ))
                     .size(12),
                 );
         }
         if self.settings().auto_crop && self.preview.is_some() {
             pane = pane.push(
-                button(text("Riconosci di nuovo").size(12))
+                button(text(tr("Riconosci di nuovo")).size(12))
                     .padding([3, 8])
                     .style(button::secondary)
                     .on_press(Message::Detect),
@@ -5559,10 +5728,10 @@ impl App {
         }
         if memory > LARGE_SCAN {
             pane = pane.push(
-                text(format!(
-                    "Scansione molto grande: circa {:.1} GB e alcuni minuti. \
+                text(trf(
+                    "Scansione molto grande: circa {gb} GB e alcuni minuti. \
                      Seleziona un'area o abbassa la risoluzione se non serve tutta.",
-                    memory / 1e9
+                    &[("gb", &format!("{:.1}", memory / 1e9))],
                 ))
                 .size(12)
                 .style(text::danger),
@@ -5570,9 +5739,11 @@ impl App {
         }
         if self.dpi() > 1200 && self.selection.is_none() && plan.is_empty() {
             pane = pane.push(
-                text("2400 dpi servono per piccoli originali: seleziona l'area sull'anteprima.")
-                    .size(12)
-                    .style(text::warning),
+                text(tr(
+                    "2400 dpi servono per piccoli originali: seleziona l'area sull'anteprima.",
+                ))
+                .size(12)
+                .style(text::warning),
             );
         }
         // Only for a scanner with buttons.
@@ -5584,10 +5755,10 @@ impl App {
                 .enumerate()
                 .map(|(i, b)| format!("{}: {}", b.label, self.button_action(self.kind, i)))
                 .collect();
-            pane = pane.push(heading("Tasti dello scanner")).push(
-                text(format!(
-                    "{} (si cambiano nelle Preferenze)",
-                    what.join(" · ")
+            pane = pane.push(heading(tr("Tasti dello scanner"))).push(
+                text(trf(
+                    "{buttons} (si cambiano nelle Preferenze)",
+                    &[("buttons", &what.join(" · "))],
                 ))
                 .size(12),
             );
@@ -5598,33 +5769,38 @@ impl App {
     fn adjust_pane(&self) -> Element<'_, Message> {
         let editing = if self.editing_page() {
             match (&self.redone, self.current) {
-                (Some((i, _)), _) => format!("Nuova scansione della {}", self.page_name(*i)),
+                (Some((i, _)), _) => trf(
+                    "Nuova scansione della {name}",
+                    &[("name", &self.page_name(*i))],
+                ),
                 (None, Some(i)) => self.page_title(i),
                 (None, None) => String::new(),
             }
         } else {
-            "Prossima scansione".to_string()
+            tr("Prossima scansione").to_string()
         };
         let scope: Element<'_, Message> = match (self.kind, self.editing_page()) {
             (Kind::Document, true) => {
                 let own = self.shown().is_some_and(|p| p.own.is_some());
                 let mut scope = column![
                     checkbox(own)
-                        .label("Solo questa pagina")
+                        .label(tr("Solo questa pagina"))
                         .on_toggle(Message::OwnLook)
                         .text_size(13),
                     text(if own {
-                        "Le modifiche valgono solo per questa pagina."
+                        tr("Le modifiche valgono solo per questa pagina.")
                     } else {
-                        "Segue le regolazioni comuni: le modifiche valgono anche per \
-                         l'anteprima e per le pagine senza «Solo questa pagina»."
+                        tr(
+                            "Segue le regolazioni comuni: le modifiche valgono anche per \
+                         l'anteprima e per le pagine senza «Solo questa pagina».",
+                        )
                     })
                     .size(11),
                 ]
                 .spacing(4);
                 if self.pages.len() > 1 {
                     scope = scope.push(
-                        button(text("Applica a tutte le pagine").size(12))
+                        button(text(tr("Applica a tutte le pagine")).size(12))
                             .style(button::text)
                             .padding([2, 6])
                             .on_press(Message::LookApplyToAll),
@@ -5632,13 +5808,13 @@ impl App {
                 }
                 scope.into()
             }
-            (Kind::Document, false) => text(
+            (Kind::Document, false) => text(tr(
                 "Le modifiche valgono per l'anteprima, per le prossime scansioni \
                  e per le pagine senza «Solo questa pagina».",
-            )
+            ))
             .size(11)
             .into(),
-            (Kind::Photo, _) => text("Anteprima e foto hanno sempre le stesse regolazioni.")
+            (Kind::Photo, _) => text(tr("Anteprima e foto hanno sempre le stesse regolazioni."))
                 .size(11)
                 .into(),
         };
@@ -5663,35 +5839,39 @@ impl App {
                     column![
                         canvas(hist).width(Length::Fill).height(84),
                         row![
-                            text(format!("Neri tagliati {black:.1}%"))
+                            text(trf("Neri tagliati {p}%", &[("p", &format!("{black:.1}"))],))
                                 .size(11)
                                 .width(Length::Fill),
-                            text(format!("Bianchi tagliati {white:.1}%")).size(11),
+                            text(trf(
+                                "Bianchi tagliati {p}%",
+                                &[("p", &format!("{white:.1}"))],
+                            ))
+                            .size(11),
                         ],
                     ]
                     .spacing(4)
                     .into()
                 }
-                _ => text("L'istogramma compare dopo l'anteprima")
+                _ => text(tr("L'istogramma compare dopo l'anteprima"))
                     .size(11)
                     .into(),
             }
         };
         let base = self.group(
             Group::Tone,
-            "Base",
+            tr("Base"),
             !lineart,
-            "In bianco e nero conta la soglia, qui sotto",
+            tr("In bianco e nero conta la soglia, qui sotto"),
             column![
                 row![
-                    button(text("Contagocce neutro").size(12))
+                    button(text(tr("Contagocce neutro")).size(12))
                         .style(if self.eyedropper {
                             button::primary
                         } else {
                             button::secondary
                         })
                         .on_press(Message::Eyedropper),
-                    button(text("Livelli auto").size(12))
+                    button(text(tr("Livelli auto")).size(12))
                         .style(button::secondary)
                         .on_press(Message::AutoLevels),
                 ]
@@ -5704,7 +5884,7 @@ impl App {
                 self.adjuster(Field::Shadows, &s),
                 self.adjuster(Field::Whites, &s),
                 self.adjuster(Field::Blacks, &s),
-                text("Livelli").size(12),
+                text(tr("Livelli")).size(12),
                 self.adjuster(Field::Black, &s),
                 self.adjuster(Field::White, &s),
                 self.adjuster(Field::Gamma, &s),
@@ -5715,9 +5895,9 @@ impl App {
         );
         let colour = self.group(
             Group::Colour,
-            "Colore",
+            tr("Colore"),
             s.colour == Colour::Rgb,
-            "Solo per le scansioni a colori",
+            tr("Solo per le scansioni a colori"),
             column![
                 self.adjuster(Field::Vibrance, &s),
                 self.adjuster(Field::Saturation, &s),
@@ -5727,20 +5907,23 @@ impl App {
         );
         let detail = self.group(
             Group::Detail,
-            "Dettaglio",
+            tr("Dettaglio"),
             true,
             "",
             column![
                 self.adjuster(Field::Sharpen, &s),
                 self.adjuster(Field::Noise, &s),
                 labelled(
-                    "Descreening",
+                    tr("Descreening"),
                     pick_list(SCREENS, Some(Screen(s.adjust.descreen)), Message::Descreen)
                         .width(Length::Fill)
                         .text_size(13)
                         .into()
                 ),
-                text("Rimuove il retino di stampa di riviste e giornali (effetto moiré).").size(11),
+                text(tr(
+                    "Rimuove il retino di stampa di riviste e giornali (effetto moiré)."
+                ))
+                .size(11),
             ]
             .spacing(8)
             .into(),
@@ -5761,7 +5944,7 @@ impl App {
             CurveChannel::Green => iced::Color::from_rgb(0.3, 0.8, 0.35),
             CurveChannel::Blue => iced::Color::from_rgb(0.35, 0.5, 1.0),
         };
-        let mut tabs = row![channel_tab("Tutti", CurveChannel::All)].spacing(4);
+        let mut tabs = row![channel_tab(tr("Tutti"), CurveChannel::All)].spacing(4);
         if s.colour == Colour::Rgb {
             tabs = tabs
                 .push(channel_tab("R", CurveChannel::Red))
@@ -5787,9 +5970,9 @@ impl App {
         .and_then(|img| Histogram::of(img).levels());
         let curve_group = self.group(
             Group::Curve,
-            "Curva",
+            tr("Curva"),
             !lineart,
-            "Non serve in bianco e nero",
+            tr("Non serve in bianco e nero"),
             column![
                 tabs,
                 canvas(curve::Editor {
@@ -5801,22 +5984,22 @@ impl App {
                 .width(Length::Fill)
                 .height(220),
                 row![
-                    curve_preset("Lineare", scan_imaging::adjust::Curve::IDENTITY),
+                    curve_preset(tr("Lineare"), scan_imaging::adjust::Curve::IDENTITY),
                     curve_preset(
-                        "Contrasto medio",
+                        tr("Contrasto medio"),
                         scan_imaging::adjust::Curve::MEDIUM_CONTRAST
                     ),
                     curve_preset(
-                        "Contrasto forte",
+                        tr("Contrasto forte"),
                         scan_imaging::adjust::Curve::STRONG_CONTRAST
                     ),
                 ]
                 .spacing(4),
-                text(
+                text(tr(
                     "Clic per aggiungere un punto (fino a 16), trascina per spostarlo, \
                      doppio clic o trascina fuori per toglierlo. Gli estremi sono il punto \
                      del nero e del bianco."
-                )
+                ))
                 .size(11),
             ]
             .spacing(6)
@@ -5824,16 +6007,18 @@ impl App {
         );
         let bw = self.group(
             Group::Lineart,
-            "Bianco e nero",
+            tr("Bianco e nero"),
             lineart,
-            "Solo con il colore «Bianco e nero»",
+            tr("Solo con il colore «Bianco e nero»"),
             column![
-                button(text("Soglia automatica").size(12))
+                button(text(tr("Soglia automatica")).size(12))
                     .style(button::secondary)
                     .on_press(Message::AutoThreshold),
                 self.adjuster(Field::Threshold, &s),
                 checkbox(s.adjust.adaptive)
-                    .label("Soglia adattiva (pagine illuminate in modo non uniforme)")
+                    .label(tr(
+                        "Soglia adattiva (pagine illuminate in modo non uniforme)"
+                    ))
                     .on_toggle(Message::Adaptive)
                     .text_size(13),
             ]
@@ -5846,7 +6031,7 @@ impl App {
             .chain(self.presets.iter().map(|p| p.name.clone()))
             .collect();
         let mut presets = column![row![pick_list(names, None::<String>, Message::PresetApply)
-            .placeholder("Applica un preset…")
+            .placeholder(tr("Applica un preset…"))
             .text_size(13)
             .width(Length::Fill),]]
         .spacing(6);
@@ -5857,11 +6042,11 @@ impl App {
                 .any(|p| p.name == self.preset_name.trim());
         presets = presets.push(
             row![
-                iced::widget::text_input("Nome del preset", &self.preset_name)
+                iced::widget::text_input(tr("Nome del preset"), &self.preset_name)
                     .on_input(Message::PresetName)
                     .on_submit(Message::PresetSave)
                     .size(13),
-                button(text("Salva").size(13))
+                button(text(tr("Salva")).size(13))
                     .style(button::secondary)
                     .on_press_maybe((!full).then_some(Message::PresetSave)),
             ]
@@ -5869,15 +6054,17 @@ impl App {
         );
         if full {
             presets = presets.push(
-                text("Tre preset salvati: scrivi il nome di uno per sostituirlo, o eliminane uno.")
-                    .size(11),
+                text(tr(
+                    "Tre preset salvati: scrivi il nome di uno per sostituirlo, o eliminane uno.",
+                ))
+                .size(11),
             );
         }
         for p in &self.presets {
             presets = presets.push(
                 row![
                     text(&p.name).size(12).width(Length::Fill),
-                    button(text("Elimina").size(11))
+                    button(text(tr("Elimina")).size(11))
                         .style(button::text)
                         .padding([1, 6])
                         .on_press(Message::PresetDelete(p.name.clone())),
@@ -5907,14 +6094,16 @@ impl App {
         }
         container(
             column![
-                text("Lo scanner è collegato, ma Linux non lo lascia usare a questo utente.")
-                    .size(13),
-                text(format!(
-                    "Basta una volta: installa la regola {} (chiede la password).",
-                    access::RULE_PATH_SHOWN
+                text(tr(
+                    "Lo scanner è collegato, ma Linux non lo lascia usare a questo utente."
+                ))
+                .size(13),
+                text(trf(
+                    "Basta una volta: installa la regola {rule} (chiede la password).",
+                    &[("rule", &access::RULE_PATH_SHOWN)],
                 ))
                 .size(11),
-                button(text("Permetti l'accesso allo scanner").size(13))
+                button(text(tr("Permetti l'accesso allo scanner")).size(13))
                     .padding([6, 12])
                     .on_press_maybe(self.idle().then_some(Message::GrantAccess)),
             ]
@@ -5948,17 +6137,17 @@ impl App {
             None => Space::new().into(),
             Some(quiet) => column![
                 text(if quiet {
-                    "Windows lascia i tasti a questa app."
+                    tr("Windows lascia i tasti a questa app.")
                 } else {
-                    "Windows apre anche la sua app di scansione a ogni tasto, \
-                     e toglie lo scanner a questa."
+                    tr("Windows apre anche la sua app di scansione a ogni tasto, \
+                     e toglie lo scanner a questa.")
                 })
                 .size(11),
                 button(
                     text(if quiet {
-                        "Ridai i tasti a Windows"
+                        tr("Ridai i tasti a Windows")
                     } else {
-                        "Usa i tasti dello scanner solo con questa app"
+                        tr("Usa i tasti dello scanner solo con questa app")
                     })
                     .size(12)
                 )
@@ -5969,7 +6158,7 @@ impl App {
                     button::primary
                 })
                 .on_press(Message::WiaQuiet(!quiet)),
-                text("Chiede una volta la conferma di amministratore.").size(11),
+                text(tr("Chiede una volta la conferma di amministratore.")).size(11),
             ]
             .spacing(4)
             .into(),
@@ -5982,8 +6171,8 @@ impl App {
     fn scanner_prefs(&self) -> Element<'_, Message> {
         let mut col = column![].spacing(10);
         if self.devices.len() > 1 {
-            col = col.push(heading("Scanner")).push(labelled(
-                "Usa",
+            col = col.push(heading(tr("Scanner"))).push(labelled(
+                tr("Usa"),
                 pick_list(
                     self.devices.clone(),
                     self.device.clone(),
@@ -5996,27 +6185,27 @@ impl App {
         }
         if !self.caps.buttons.is_empty() {
             col = col.push(heading(match self.kind {
-                Kind::Document => "Tasti dello scanner in Documento",
-                Kind::Photo => "Tasti dello scanner in Foto",
+                Kind::Document => tr("Tasti dello scanner in Documento"),
+                Kind::Photo => tr("Tasti dello scanner in Foto"),
             }));
             for (i, b) in self.caps.buttons.iter().enumerate() {
                 col = col.push(self.button_choice(i, b.label.clone()));
             }
             col = col
                 .push(
-                    text(
+                    text(tr(
                         "Valgono anche con l'app in secondo piano; ignorati durante una \
                          scansione.",
-                    )
+                    ))
                     .size(11),
                 )
                 .push(self.wia_row());
         }
         if self.caps.lamp.is_some() {
             col = col
-                .push(heading("Lampada"))
+                .push(heading(tr("Lampada")))
                 .push(labelled(
-                    "Spegnila",
+                    tr("Spegnila"),
                     pick_list(
                         LAMP_CHOICES,
                         Some(LampAfter(self.lamp_off)),
@@ -6026,12 +6215,12 @@ impl App {
                     .into(),
                 ))
                 .push(
-                    text(
+                    text(tr(
                         "Senza scansioni per questo tempo l'app spegne la lampada, e la \
                          spegne sempre chiudendosi. Riaccenderla costa circa 10 secondi di \
                          riscaldamento alla scansione dopo. Lo scanner la spegne comunque da \
                          solo dopo 13 minuti.",
-                    )
+                    ))
                     .size(11),
                 );
         }
@@ -6058,9 +6247,17 @@ impl App {
             .map(|p| p.display().to_string())
             .unwrap_or_default();
         column![
-            heading("All'avvio"),
+            heading(tr("Lingua")),
+            pick_list(
+                i18n::LangChoice::ALL,
+                Some(self.language),
+                Message::Language
+            )
+            .width(Length::Fill)
+            .text_size(13),
+            heading(tr("All'avvio")),
             labelled(
-                "Modo",
+                tr("Modo"),
                 pick_list(
                     [StartMode::Last, StartMode::Document, StartMode::Photo],
                     Some(self.start_mode),
@@ -6069,51 +6266,60 @@ impl App {
                 .width(Length::Fill)
                 .into()
             ),
-            text(
+            text(tr(
                 "Risoluzione, colore, formato e pagina PDF di ogni modo restano come li \
                  lasci. Le regolazioni ripartono da zero a ogni apertura: per ritrovarle, \
                  salvale in un preset."
-            )
+            ))
             .size(12),
-            heading("Cartella dei file"),
+            heading(tr("Cartella dei file")),
             text(self.folder().display().to_string()).size(12),
             row![
-                button(text("Scegli…").size(13))
+                button(text(tr("Scegli…")).size(13))
                     .style(button::secondary)
                     .on_press(Message::ChooseFolder),
-                button(text(format!("Immagini{}Scansioni", std::path::MAIN_SEPARATOR)).size(13))
-                    .style(button::text)
-                    .on_press_maybe(
-                        self.custom_folder
-                            .is_some()
-                            .then_some(Message::DefaultFolder)
-                    ),
+                button(
+                    text(trf(
+                        "Immagini{sep}Scansioni",
+                        &[("sep", &std::path::MAIN_SEPARATOR)],
+                    ))
+                    .size(13),
+                )
+                .style(button::text)
+                .on_press_maybe(
+                    self.custom_folder
+                        .is_some()
+                        .then_some(Message::DefaultFolder)
+                ),
             ]
             .spacing(8),
-            heading("Nomi dei file"),
+            heading(tr("Nomi dei file")),
             labelled(
-                "Documenti",
+                tr("Documenti"),
                 iced::widget::text_input("documento", &self.document_name)
                     .on_input(Message::DocumentName)
                     .size(13)
                     .into()
             ),
             labelled(
-                "Foto",
+                tr("Foto"),
                 iced::widget::text_input("foto", &self.photo_name)
                     .on_input(Message::PhotoName)
                     .size(13)
                     .into()
             ),
-            text(format!(
-                "Esempio: {}",
-                Self::stamped(self.name(), self.settings().output.extension())
+            text(trf(
+                "Esempio: {name}",
+                &[(
+                    "name",
+                    &Self::stamped(self.name(), self.settings().output.extension()),
+                )],
             ))
             .size(12),
             self.scanner_prefs(),
-            heading("Impostazioni"),
-            text(format!("Salvate in {path}")).size(11),
-            button(text("Ripristina impostazioni di fabbrica").size(13))
+            heading(tr("Impostazioni")),
+            text(trf("Salvate in {path}", &[("path", &path)])).size(11),
+            button(text(tr("Ripristina impostazioni di fabbrica")).size(13))
                 .style(button::danger)
                 .on_press(Message::FactoryReset),
         ]
@@ -6125,33 +6331,39 @@ impl App {
         let s = self.active();
         let options = outputs(self.kind, s.colour, self.depth());
         let mut pane = column![
-            heading("Formato"),
+            heading(tr("Formato")),
             pick_list(options, Some(self.settings().output), Message::Output).width(Length::Fill),
         ]
         .spacing(10);
         if s.colour == Colour::Lineart {
-            pane =
-                pane.push(text("Bianco e nero: niente JPEG/AVIF, rovinerebbero i bordi.").size(11));
+            pane = pane.push(
+                text(tr(
+                    "Bianco e nero: niente JPEG/AVIF, rovinerebbero i bordi.",
+                ))
+                .size(11),
+            );
         }
         if let Output::Raw(_) = self.settings().output {
             pane = pane.push(
-                text(
+                text(tr(
                     "I campioni dello scanner, lineari e senza regolazioni (ritaglio e \
                      raddrizzatura sì): si sviluppano in Lightroom, Camera Raw o Photoshop. \
                      Le regolazioni a destra valgono solo per l'anteprima.",
-                )
+                ))
                 .size(11),
             );
         } else if self.kind == Kind::Photo && s.colour == Colour::Rgb {
             pane = pane.push(
-                text("Per Lightroom o Photoshop scegli un formato RAW (DNG o TIFF 16 bit).")
-                    .size(11),
+                text(tr(
+                    "Per Lightroom o Photoshop scegli un formato RAW (DNG o TIFF 16 bit).",
+                ))
+                .size(11),
             );
         }
         if self.settings().output == Output::Pdf {
             let s = *self.settings();
             pane = pane.push(labelled(
-                "Foglio",
+                tr("Foglio"),
                 pick_list(PDF_SIZES, Some(s.pdf_size), Message::PdfSize)
                     .width(Length::Fill)
                     .into(),
@@ -6162,9 +6374,9 @@ impl App {
                 if let Some(i) = self.current.filter(|&i| i < self.pages.len()) {
                     pane = pane.push(
                         checkbox(own)
-                            .label(format!(
-                                "Impaginazione propria per la {}",
-                                self.page_name(i)
+                            .label(trf(
+                                "Impaginazione propria per la {name}",
+                                &[("name", &self.page_name(i))],
                             ))
                             .on_toggle(Message::PdfOwnLayout)
                             .text_size(13),
@@ -6172,27 +6384,27 @@ impl App {
                 }
                 pane = pane.push(
                     text(if own {
-                        "Le scelte qui sotto valgono solo per questa pagina."
+                        tr("Le scelte qui sotto valgono solo per questa pagina.")
                     } else {
-                        "Le scelte qui sotto valgono per tutte le pagine senza impaginazione propria."
+                        tr("Le scelte qui sotto valgono per tutte le pagine senza impaginazione propria.")
                     })
                     .size(11),
                 );
                 pane = pane.push(labelled(
-                    "Orientamento",
+                    tr("Orientamento"),
                     pick_list(SHEETS, Some(l.sheet), Message::PdfSheet)
                         .width(Length::Fill)
                         .into(),
                 ));
                 pane = pane.push(labelled(
-                    "Sul foglio",
+                    tr("Sul foglio"),
                     pick_list(PDF_FITS, Some(l.fit), Message::PdfFit)
                         .width(Length::Fill)
                         .into(),
                 ));
                 if l.fit != PdfFit::Actual {
                     pane = pane.push(labelled(
-                        "Margine",
+                        tr("Margine"),
                         pick_list(
                             PDF_MARGINS.map(Margin),
                             Some(Margin(l.margin)),
@@ -6205,10 +6417,10 @@ impl App {
                 if own {
                     pane = pane.push(
                         row![
-                            button(text("Applica a tutte le pagine").size(13))
+                            button(text(tr("Applica a tutte le pagine")).size(13))
                                 .style(button::secondary)
                                 .on_press(Message::PdfApplyToAll),
-                            button(text("Come le altre").size(13))
+                            button(text(tr("Come le altre")).size(13))
                                 .style(button::text)
                                 .on_press(Message::PdfOwnLayout(false)),
                         ]
@@ -6218,20 +6430,20 @@ impl App {
                 pane = pane.push(
                     text(match l.fit {
                         PdfFit::Actual => {
-                            "Alla sua misura vera, al centro del foglio (rimpicciolita solo se non ci sta): stampata al 100% misura come l'originale."
+                            tr("Alla sua misura vera, al centro del foglio (rimpicciolita solo se non ci sta): stampata al 100% misura come l'originale.")
                         }
                         PdfFit::Page => {
-                            "Grande quanto il foglio permette, intera, dentro il margine: un ritaglio piccolo riempie l'A4."
+                            tr("Grande quanto il foglio permette, intera, dentro il margine: un ritaglio piccolo riempie l'A4.")
                         }
                         PdfFit::Fill => {
-                            "Copre il foglio dentro il margine; quello che avanza si taglia: trascina la pagina sul foglio, a sinistra, per scegliere cosa tenere."
+                            tr("Copre il foglio dentro il margine; quello che avanza si taglia: trascina la pagina sul foglio, a sinistra, per scegliere cosa tenere.")
                         }
                     })
                     .size(11),
                 );
                 pane = pane.push(
                     text(
-                        "Il foglio con la pagina sopra è nel visore: in rosso il bordo di quello che finisce sulla carta.",
+                        tr("Il foglio con la pagina sopra è nel visore: in rosso il bordo di quello che finisce sulla carta."),
                     )
                     .size(11),
                 );
@@ -6241,19 +6453,19 @@ impl App {
             pane = pane.push(self.pdf_compression());
         }
         pane = pane
-            .push(heading("Cartella"))
+            .push(heading(tr("Cartella")))
             .push(text(self.folder().display().to_string()).size(12));
         if self.kind == Kind::Photo {
             pane = pane.push(
                 checkbox(self.settings().auto_save)
-                    .label("Salva da sola ogni foto nella cartella")
+                    .label(tr("Salva da sola ogni foto nella cartella"))
                     .on_toggle(Message::AutoSave)
                     .text_size(13),
             );
         }
         if self.kind == Kind::Document {
             pane = pane.push(
-                button(text("Nuovo documento").size(13))
+                button(text(tr("Nuovo documento")).size(13))
                     .style(button::secondary)
                     .on_press_maybe(
                         (!self.pages.is_empty() && self.busy.is_none())
@@ -6269,11 +6481,11 @@ impl App {
         let output = self.settings().output;
         let (label, enabled) = match self.kind {
             Kind::Document => (
-                format!("Salva {output}…"),
+                trf("Salva {output}…", &[("output", &output)]),
                 !self.pages.is_empty() && self.busy.is_none(),
             ),
             Kind::Photo => (
-                format!("Salva {output}…"),
+                trf("Salva {output}…", &[("output", &output)]),
                 self.shown().is_some() && self.busy.is_none(),
             ),
         };
@@ -6293,8 +6505,8 @@ impl App {
             Some(Ok(st)) => st
                 .details
                 .first()
-                .map_or_else(|| "collegato".to_string(), |(l, v)| format!("{l} {v}")),
-            Some(Err(_)) => "non collegato".to_string(),
+                .map_or_else(|| tr("collegato").to_string(), |(l, v)| format!("{l} {v}")),
+            Some(Err(_)) => tr("non collegato").to_string(),
             None => "…".to_string(),
         };
         let fact = |label: &'static str, value: String| {
@@ -6302,15 +6514,20 @@ impl App {
         };
         container(
             row![
-                fact("Scanner", link),
-                fact("Risoluzione", format!("{} dpi · {}", self.dpi(), s.colour)),
+                fact(tr("Scanner"), link),
                 fact(
-                    "Immagine",
+                    tr("Risoluzione"),
+                    format!("{} dpi · {}", self.dpi(), s.colour)
+                ),
+                fact(
+                    tr("Immagine"),
                     format!("{} × {}", request.area.width, request.area.height)
                 ),
                 text(self.note.clone()).size(11).width(Length::Fill),
-                text("Rotella zoom · tasto destro sposta · doppio clic su un cursore lo azzera")
-                    .size(11),
+                text(tr(
+                    "Rotella zoom · tasto destro sposta · doppio clic su un cursore lo azzera"
+                ))
+                .size(11),
             ]
             .spacing(18)
             .align_y(Alignment::Center),
@@ -6367,7 +6584,7 @@ impl App {
                 .style(button::text)
                 .on_press(Message::Toggle(group))
                 .width(Length::Fill),
-            button(text("Ripristina").size(12))
+            button(text(tr("Ripristina")).size(12))
                 .style(button::text)
                 .on_press_maybe(enabled.then_some(Message::ResetGroup(group))),
         ]
@@ -6416,6 +6633,7 @@ fn notify(summary: &str, body: &str, error: bool) {
     let body = body.to_string();
     std::thread::spawn(move || {
         let _ = notify_rust::Notification::new()
+            // not translated: the name of the app
             .appname("HP Scanjet 3770")
             .summary(&summary)
             .body(&body)

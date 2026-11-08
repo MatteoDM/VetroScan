@@ -41,6 +41,7 @@ fn keys() -> Vec<String> {
         .lines()
         .map(str::trim)
         .filter(|l| l.starts_with("HKEY_") && l.contains(r"\Events\3770_"))
+        // not translated: registry names
         .map(|l| l.replacen("HKEY_LOCAL_MACHINE", "HKLM", 1))
         .collect()
 }
@@ -53,11 +54,10 @@ pub fn quiet() -> Option<bool> {
     if keys.is_empty() {
         return None;
     }
-    Some(
-        keys.iter().all(|k| {
-            reg(&["query", k, "/v", "DefaultHandler"]).is_some_and(|o| o.contains(NO_ACTION))
-        }),
-    )
+    Some(keys.iter().all(|k| {
+        // not translated: a registry value
+        reg(&["query", k, "/v", "DefaultHandler"]).is_some_and(|o| o.contains(NO_ACTION))
+    }))
 }
 
 #[cfg(not(windows))]
@@ -71,14 +71,16 @@ pub fn quiet() -> Option<bool> {
 pub fn set_quiet(on: bool) -> Result<(), String> {
     let keys = keys();
     if keys.is_empty() {
-        return Err("tasti dello scanner non trovati nel registro".into());
+        return Err(crate::i18n::tr("tasti dello scanner non trovati nel registro").into());
     }
     let commands: Vec<String> = keys
         .iter()
         .map(|k| {
             if on {
+                // not translated: commands
                 format!("reg add \"{k}\" /v DefaultHandler /t REG_SZ /d {NO_ACTION} /f")
             } else {
+                // not translated: commands
                 format!("reg delete \"{k}\" /v DefaultHandler /f")
             }
         })
@@ -86,6 +88,7 @@ pub fn set_quiet(on: bool) -> Result<(), String> {
     let line = commands.join(" & ");
     // PowerShell starts cmd elevated (the confirmation) and waits.
     let script = format!(
+        // not translated: a command
         "Start-Process -FilePath cmd.exe -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList '/c {}'",
         line.replace('\'', "''")
     );
@@ -97,15 +100,15 @@ pub fn set_quiet(on: bool) -> Result<(), String> {
         .status()
         .map_err(|e| e.to_string())?;
     if !status.success() {
-        return Err("conferma di amministratore negata".into());
+        return Err(crate::i18n::tr("conferma di amministratore negata").into());
     }
     match quiet() {
         Some(now) if now == on => Ok(()),
-        _ => Err("Windows non ha accettato la modifica".into()),
+        _ => Err(crate::i18n::tr("Windows non ha accettato la modifica").into()),
     }
 }
 
 #[cfg(not(windows))]
 pub fn set_quiet(_on: bool) -> Result<(), String> {
-    Err("solo su Windows".into())
+    Err(crate::i18n::tr("solo su Windows").into())
 }

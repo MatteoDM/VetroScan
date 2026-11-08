@@ -7,6 +7,7 @@
 //! itself. What it was when the editor opened is kept, so "Scarta" puts it
 //! back; the editor has its own Ctrl+Z.
 
+use crate::i18n::{tr, trf};
 use crate::viewer::Selection;
 use crate::{heading, labelled, App, Colour, Field, Look, Message, Page, Tab, View, ALL_COLOURS};
 use iced::widget::{
@@ -39,10 +40,10 @@ pub const UNITS: [Unit; 4] = [Unit::Pixels, Unit::Percent, Unit::Cm, Unit::Inche
 impl std::fmt::Display for Unit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Self::Pixels => "Pixel",
-            Self::Percent => "Percentuale",
-            Self::Cm => "Centimetri",
-            Self::Inches => "Pollici",
+            Self::Pixels => tr("Pixel"),
+            Self::Percent => tr("Percentuale"),
+            Self::Cm => tr("Centimetri"),
+            Self::Inches => tr("Pollici"),
         })
     }
 }
@@ -78,7 +79,8 @@ pub fn from_pixels(px: f32, unit: Unit, base: f32, dpi: f32) -> f32 {
     }
 }
 
-/// A number the Italian way, with `decimals` (trailing zeros dropped).
+/// A number with `decimals` (trailing zeros dropped), with a decimal comma
+/// in Italian and a point in English.
 pub fn number(v: f32, decimals: usize) -> String {
     let s = format!("{v:.decimals$}");
     let s = if s.contains('.') {
@@ -86,7 +88,10 @@ pub fn number(v: f32, decimals: usize) -> String {
     } else {
         s
     };
-    s.replace('.', ",")
+    match crate::i18n::current() {
+        crate::i18n::Lang::It => s.replace('.', ","),
+        crate::i18n::Lang::En => s,
+    }
 }
 
 /// A number typed by the user (comma or point).
@@ -127,14 +132,14 @@ pub const ASPECTS: [Aspect; 8] = [
 impl std::fmt::Display for Aspect {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Self::Free => "Libere",
-            Self::Original => "Come l'originale",
-            Self::Square => "Quadrato 1:1",
+            Self::Free => tr("Libere"),
+            Self::Original => tr("Come l'originale"),
+            Self::Square => tr("Quadrato 1:1"),
             Self::R4x3 => "4:3",
             Self::R3x2 => "3:2",
             Self::R16x9 => "16:9",
             Self::A4 => "A4 / A3 / A5",
-            Self::Photo10x15 => "Foto 10 × 15",
+            Self::Photo10x15 => tr("Foto 10 × 15"),
         })
     }
 }
@@ -379,9 +384,9 @@ impl App {
         self.eyedropper = false;
         self.result_view = View::default();
         self.dirty_page = true;
-        self.note = format!(
-            "Modifica di {}: Invio applica, Esc scarta, Ctrl+Z annulla",
-            self.page_name(i)
+        self.note = trf(
+            "Modifica di {name}: Invio applica, Esc scarta, Ctrl+Z annulla",
+            &[("name", &self.page_name(i))],
         );
     }
 
@@ -403,9 +408,9 @@ impl App {
             // A render still running may be of the editor's view.
             self.dirty_page = true;
             self.note = match (keep, changed) {
-                (true, true) => format!("Modifiche di {name} applicate"),
+                (true, true) => trf("Modifiche di {name} applicate", &[("name", &name)]),
                 (true, false) => String::new(),
-                (false, _) => format!("Modifiche di {name} scartate"),
+                (false, _) => trf("Modifiche di {name} scartate", &[("name", &name)]),
             };
         }
         self.result_view = View::default();
@@ -481,9 +486,9 @@ impl App {
                 };
                 let Some(edit) = from.pop() else {
                     self.note = if undo {
-                        "Niente da annullare".into()
+                        tr("Niente da annullare").into()
                     } else {
-                        "Niente da ripristinare".into()
+                        tr("Niente da ripristinare").into()
                     };
                     return;
                 };
@@ -492,7 +497,12 @@ impl App {
                     page.set_edit(edit);
                 }
                 self.dirty_page = true;
-                self.note = if undo { "Annullato" } else { "Ripristinato" }.into();
+                self.note = if undo {
+                    tr("Annullato")
+                } else {
+                    tr("Ripristinato")
+                }
+                .into();
             }
             EditMsg::ResetAll => {
                 self.edit_remember(None);
@@ -504,7 +514,7 @@ impl App {
                     });
                 }
                 self.dirty_page = true;
-                self.note = "Tornata com'era stata scansionata (Ctrl+Z per annullare)".into();
+                self.note = tr("Tornata com'era stata scansionata (Ctrl+Z per annullare)").into();
             }
             EditMsg::ResetColour => {
                 self.edit_remember(None);
@@ -727,9 +737,9 @@ impl App {
         };
         let sections = container(
             row![
-                section_tab("Colore", Section::Colour),
-                section_tab("Ritaglia", Section::Frame),
-                section_tab("Dimensioni", Section::Size),
+                section_tab(tr("Colore"), Section::Colour),
+                section_tab(tr("Ritaglia"), Section::Frame),
+                section_tab(tr("Dimensioni"), Section::Size),
             ]
             .spacing(2),
         )
@@ -743,13 +753,13 @@ impl App {
             ..Default::default()
         });
         let title = row![
-            text(format!(
-                "MODIFICA · {}",
-                self.page_name(e.index).to_uppercase()
+            text(trf(
+                "MODIFICA · {name}",
+                &[("name", &self.page_name(e.index).to_uppercase())],
             ))
             .size(11)
             .width(Length::Fill),
-            button(text("Ripristina originale").size(12))
+            button(text(tr("Ripristina originale")).size(12))
                 .style(button::text)
                 .padding([2, 6])
                 .on_press(EditMsg::ResetAll.into()),
@@ -768,7 +778,7 @@ impl App {
         let own = self.edited_page().is_some_and(|p| p.own.is_some());
         let top = column![
             labelled(
-                "Modo",
+                tr("Modo"),
                 pick_list(ALL_COLOURS, Some(s.colour), Message::Colour)
                     .width(Length::Fill)
                     .text_size(13)
@@ -776,13 +786,13 @@ impl App {
             ),
             row![
                 text(if own {
-                    "Regolazioni solo di questa scansione."
+                    tr("Regolazioni solo di questa scansione.")
                 } else {
-                    "Segue le regolazioni comuni finché non ne cambi una."
+                    tr("Segue le regolazioni comuni finché non ne cambi una.")
                 })
                 .size(11)
                 .width(Length::Fill),
-                button(text("Ripristina colori").size(12))
+                button(text(tr("Ripristina colori")).size(12))
                     .style(button::text)
                     .padding([2, 6])
                     .on_press(EditMsg::ResetColour.into()),
@@ -816,13 +826,17 @@ impl App {
         let (fw, fh) = t.oriented_size(full.width, full.height);
         let (_, _, cw, ch) = t.crop_pixels(full.width, full.height);
         let mm = |px: usize| px as f32 * 25.4 / f32::from(full.dpi.max(1));
-        let crop_info = format!(
-            "Ritaglio {cw} × {ch} pixel · {} × {} mm",
-            number(mm(cw), 0),
-            number(mm(ch), 0)
+        let crop_info = trf(
+            "Ritaglio {cw} × {ch} pixel · {wmm} × {hmm} mm",
+            &[
+                ("cw", &cw),
+                ("ch", &ch),
+                ("wmm", &number(mm(cw), 0)),
+                ("hmm", &number(mm(ch), 0)),
+            ],
         );
         let mut crop = column![labelled(
-            "Proporzioni",
+            tr("Proporzioni"),
             pick_list(ASPECTS, Some(e.aspect), |a| EditMsg::Aspect(a).into())
                 .width(Length::Fill)
                 .text_size(13)
@@ -833,9 +847,9 @@ impl App {
             crop = crop.push(
                 button(
                     text(if e.portrait {
-                        "Verticale · passa a orizzontale"
+                        tr("Verticale · passa a orizzontale")
                     } else {
-                        "Orizzontale · passa a verticale"
+                        tr("Orizzontale · passa a verticale")
                     })
                     .size(12),
                 )
@@ -848,7 +862,7 @@ impl App {
             .push(
                 row![
                     text(crop_info).size(11).width(Length::Fill),
-                    button(text("Tutta l'immagine").size(12))
+                    button(text(tr("Tutta l'immagine")).size(12))
                         .style(button::text)
                         .padding([2, 6])
                         .on_press_maybe(t.crop.is_some().then_some(EditMsg::CropFull.into())),
@@ -856,29 +870,29 @@ impl App {
                 .align_y(Alignment::Center),
             )
             .push(
-                text(
+                text(tr(
                     "Trascina sull'immagine per un nuovo ritaglio; sposta i bordi con le \
                      maniglie o tutto il riquadro da dentro.",
-                )
+                ))
                 .size(11),
             );
         let angle = t.angle;
         column![
-            heading("Ruota"),
+            heading(tr("Ruota")),
             row![
-                tool("90° a sinistra", EditMsg::Rotate(false)),
-                tool("90° a destra", EditMsg::Rotate(true)),
+                tool(tr("90° a sinistra"), EditMsg::Rotate(false)),
+                tool(tr("90° a destra"), EditMsg::Rotate(true)),
                 tool("180°", EditMsg::HalfTurn),
             ]
             .spacing(6),
             row![
-                tool("Specchia", EditMsg::MirrorH),
-                tool("Capovolgi", EditMsg::MirrorV),
+                tool(tr("Specchia"), EditMsg::MirrorH),
+                tool(tr("Capovolgi"), EditMsg::MirrorV),
             ]
             .spacing(6),
-            heading("Raddrizza"),
+            heading(tr("Raddrizza")),
             row![
-                text("Angolo").size(12).width(Length::Fill),
+                text(tr("Angolo")).size(12).width(Length::Fill),
                 text(format!("{}°", number(angle, 1))).size(12),
             ],
             mouse_area(
@@ -892,15 +906,19 @@ impl App {
                 nudge("+1°", 1.0),
             ]
             .spacing(4),
-            text(
+            text(tr(
                 "Allinea un bordo o una riga di testo alla griglia. Finché non scegli un \
                  ritaglio, gli angoli vuoti vengono tagliati da soli.",
-            )
+            ))
             .size(11),
-            heading("Ritaglio"),
+            heading(tr("Ritaglio")),
             crop,
-            text(format!("Immagine girata: {fw} × {fh} pixel")).size(11),
-            button(text("Ripristina rotazione e ritaglio").size(12))
+            text(trf(
+                "Immagine girata: {fw} × {fh} pixel",
+                &[("fw", &fw), ("fh", &fh)]
+            ))
+            .size(11),
+            button(text(tr("Ripristina rotazione e ritaglio")).size(12))
                 .style(button::text)
                 .padding([2, 0])
                 .on_press(EditMsg::ResetFrame.into()),
@@ -960,13 +978,13 @@ impl App {
         let cm = |px: usize| px as f32 / d * 2.54;
         let upscaled = ow > cw || oh > ch;
         let mut pane = column![
-            text(format!(
-                "Dopo il ritaglio: {cw} × {ch} pixel a {} dpi",
-                full.dpi
+            text(trf(
+                "Dopo il ritaglio: {cw} × {ch} pixel a {dpi} dpi",
+                &[("cw", &cw), ("ch", &ch), ("dpi", &full.dpi)],
             ))
             .size(11),
             labelled(
-                "Unità",
+                tr("Unità"),
                 pick_list(UNITS, Some(e.unit), |u| EditMsg::Unit(u).into())
                     .width(Length::Fill)
                     .text_size(13)
@@ -974,13 +992,13 @@ impl App {
             ),
             row![
                 column![
-                    text(format!("Larghezza ({})", e.unit.suffix())).size(12),
+                    text(trf("Larghezza ({unit})", &[("unit", &e.unit.suffix())])).size(12),
                     input(SizeField::Width, width),
                 ]
                 .spacing(2)
                 .width(Length::Fill),
                 column![
-                    text(format!("Altezza ({})", e.unit.suffix())).size(12),
+                    text(trf("Altezza ({unit})", &[("unit", &e.unit.suffix())])).size(12),
                     input(SizeField::Height, height),
                 ]
                 .spacing(2)
@@ -989,39 +1007,46 @@ impl App {
             .spacing(6)
             .align_y(Alignment::End),
             checkbox(e.lock)
-                .label("Mantieni le proporzioni")
+                .label(tr("Mantieni le proporzioni"))
                 .on_toggle(|on| EditMsg::Lock(on).into())
                 .text_size(13),
             labelled(
-                "Risoluzione",
+                tr("Risoluzione"),
                 row![input(SizeField::Dpi, resolution), text("dpi").size(12)]
                     .spacing(6)
                     .align_y(Alignment::Center)
                     .into()
             ),
             text(match e.unit {
-                Unit::Cm | Unit::Inches => {
+                Unit::Cm | Unit::Inches => tr(
                     "In centimetri e pollici la misura sulla carta resta: cambiando i dpi \
-                     cambiano i pixel."
-                }
-                _ => {
+                     cambiano i pixel.",
+                ),
+                _ => tr(
                     "Con pixel e percentuale la misura sulla carta resta, cambiano i dpi \
-                     scritti nel file; scrivili qui per sceglierli tu."
-                }
+                     scritti nel file; scrivili qui per sceglierli tu.",
+                ),
             })
             .size(11),
             row![percent(25.0), percent(50.0), percent(75.0), percent(200.0)].spacing(4),
             container(
                 column![
-                    text(format!("Risultato: {ow} × {oh} pixel")).size(14),
-                    text(format!(
-                        "{} × {} cm a {dpi} dpi · {} megapixel",
-                        number(cm(ow), 1),
-                        number(cm(oh), 1),
-                        number((ow * oh) as f32 / 1e6, 1)
+                    text(trf(
+                        "Risultato: {ow} × {oh} pixel",
+                        &[("ow", &ow), ("oh", &oh)]
+                    ))
+                    .size(14),
+                    text(trf(
+                        "{w} × {h} cm a {dpi} dpi · {mp} megapixel",
+                        &[
+                            ("w", &number(cm(ow), 1)),
+                            ("h", &number(cm(oh), 1)),
+                            ("dpi", &dpi),
+                            ("mp", &number((ow * oh) as f32 / 1e6, 1)),
+                        ],
                     ))
                     .size(12),
-                    text("Ricampionamento Lanczos (3 lobi)").size(11),
+                    text(tr("Ricampionamento Lanczos (3 lobi)")).size(11),
                 ]
                 .spacing(2),
             )
@@ -1032,12 +1057,12 @@ impl App {
         .spacing(8);
         if upscaled {
             pane = pane.push(
-                text("Ingrandire non aggiunge dettagli: per più definizione rifai la scansione a più dpi.")
+                text(tr("Ingrandire non aggiunge dettagli: per più definizione rifai la scansione a più dpi."))
                     .size(11),
             );
         }
         pane.push(
-            button(text("Dimensione originale").size(12))
+            button(text(tr("Dimensione originale")).size(12))
                 .style(button::text)
                 .padding([2, 0])
                 .on_press_maybe(
@@ -1058,13 +1083,17 @@ impl App {
         };
         Some(crate::card(
             row![
-                text(format!("Modifica di {}", self.page_name(e.index))).size(13),
-                small("Annulla", (!e.undo.is_empty()).then_some(EditMsg::Undo)),
-                small("Ripeti", (!e.redo.is_empty()).then_some(EditMsg::Redo)),
-                button(text("Scarta").size(13))
+                text(trf(
+                    "Modifica di {name}",
+                    &[("name", &self.page_name(e.index))]
+                ))
+                .size(13),
+                small(tr("Annulla"), (!e.undo.is_empty()).then_some(EditMsg::Undo)),
+                small(tr("Ripeti"), (!e.redo.is_empty()).then_some(EditMsg::Redo)),
+                button(text(tr("Scarta")).size(13))
                     .style(button::secondary)
                     .on_press(EditMsg::Discard.into()),
-                button(text("Applica").size(13)).on_press(EditMsg::Apply.into()),
+                button(text(tr("Applica")).size(13)).on_press(EditMsg::Apply.into()),
             ]
             .spacing(8)
             .align_y(Alignment::Center),

@@ -1322,6 +1322,8 @@ fn the_flatbed_offers_its_lamp_its_buttons_and_16_bits() {
     }
     // One scanner: no choice of scanner.
     assert!(!ui.shows("Usa"));
+    // No adapter for slides: no film.
+    assert!(!ui.shows("Pellicola"));
 }
 
 #[test]
@@ -1432,4 +1434,59 @@ fn button_actions_are_kept_for_each_model() {
         stored["Prova Piano A3"].document["start"],
         "salva-documento"
     );
+}
+
+// ------------------------------------------------------------ languages
+
+#[test]
+fn the_app_speaks_english_when_asked_and_italian_again() {
+    use crate::i18n::LangChoice;
+    let mut ui = Ui::new();
+    assert!(ui.shows("Anteprima"));
+    ui.send(Message::Language(LangChoice::En));
+    assert!(ui.shows("Preview"));
+    assert!(ui.shows("Scan page 1"));
+    assert!(!ui.shows("Anteprima"));
+    // A whole job in English: two pages, their notes, the panels.
+    ui.scan(2);
+    assert!(ui.shows("Scan page 3"));
+    assert!(
+        ui.app.note.starts_with("Page 2 acquired"),
+        "{}",
+        ui.app.note
+    );
+    ui.send(Message::Pane(crate::Pane::Adjust));
+    assert!(ui.shows("This page only"));
+    ui.send(Message::Pane(crate::Pane::Prefs));
+    for label in [
+        "Language",
+        "Lamp",
+        "Switch it off",
+        "Scanner buttons in Document",
+    ] {
+        assert!(ui.shows(label), "{label}");
+    }
+    // Numbers the English way.
+    assert_eq!(crate::editor::number(2.5, 1), "2.5");
+    ui.send(Message::Pane(crate::Pane::Output));
+    ui.send(Message::Save);
+    assert_eq!(ui.saved().len(), 1, "{:?} {}", ui.saved(), ui.app.note);
+    assert!(ui.app.note.starts_with("Saved: "), "{}", ui.app.note);
+    // Remembered, and back to Italian.
+    assert_eq!(ui.app.prefs().language, "english");
+    ui.send(Message::Language(LangChoice::It));
+    assert!(ui.shows("Anteprima"));
+    assert_eq!(crate::editor::number(2.5, 1), "2,5");
+}
+
+#[test]
+fn a_question_and_its_answers_in_english() {
+    use crate::i18n::LangChoice;
+    let mut ui = document(2);
+    ui.send(Message::Language(LangChoice::En));
+    ui.send(Message::Kind(Kind::Photo));
+    assert_eq!(ui.question(), Some("Switch to Photo?"));
+    assert!(ui.shows("Switch to Photo"));
+    ui.key(iced::keyboard::key::Named::Escape);
+    assert!(ui.question().is_none());
 }

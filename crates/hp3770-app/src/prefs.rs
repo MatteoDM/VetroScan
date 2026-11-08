@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 /// The scanner whose buttons the preferences before v0.2.0 meant, and the
 /// ids of its buttons in that order.
-pub const LEGACY_MODEL: &str = "HP Scanjet 3770";
+pub const LEGACY_MODEL: &str = "HP Scanjet 3770"; // not translated: a model name
 pub const LEGACY_BUTTONS: [&str; 3] = ["scan", "copy", "instant-share"];
 
 /// What the buttons of one scanner model do in each way of working:
@@ -161,6 +161,8 @@ pub struct Prefs {
     /// Minutes without scanning before the app switches the lamp off (0:
     /// as soon as a scan is over).
     pub lamp_off_minutes: u8,
+    /// "automatica" (the system's), "italiano" or "english".
+    pub language: String,
 }
 
 impl Default for Prefs {
@@ -190,6 +192,7 @@ impl Default for Prefs {
                 ..StoredMode::default()
             },
             lamp_off_minutes: 2,
+            language: "automatica".into(),
         }
     }
 }
@@ -247,7 +250,8 @@ impl Prefs {
 
     /// Writes the preferences (errors are reported, not fatal).
     pub fn save(&self) -> Result<(), String> {
-        let path = Self::path().ok_or("cartella delle impostazioni sconosciuta")?;
+        let path =
+            Self::path().ok_or(crate::i18n::tr("cartella delle impostazioni sconosciuta"))?;
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
@@ -285,7 +289,7 @@ pub fn load_presets() -> Vec<Preset> {
 
 /// Writes the presets.
 pub fn save_presets(presets: &[Preset]) -> Result<(), String> {
-    let path = presets_path().ok_or("cartella delle impostazioni sconosciuta")?;
+    let path = presets_path().ok_or(crate::i18n::tr("cartella delle impostazioni sconosciuta"))?;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
