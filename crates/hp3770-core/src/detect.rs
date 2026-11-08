@@ -95,21 +95,32 @@ pub fn objects(image: &Image) -> Vec<Found> {
     if bw < 8 || bh < 8 {
         return Vec::new();
     }
-    // Mean colour of each block.
+    // Mean colour of each block, and how much its brightness varies inside
+    // it (texture: a shadow has none, a photo has some).
     let mut mean = vec![[0f32; 3]; bw * bh];
+    let mut texture = vec![0f32; bw * bh];
     for by in 0..bh {
         for bx in 0..bw {
             let mut sum = [0u32; 3];
+            let (mut luma, mut luma2) = (0f32, 0f32);
             for y in by * block..(by + 1) * block {
                 let row = (y * image.width + bx * block) * channels;
                 for x in 0..block {
+                    let mut l = 0u32;
                     for (c, s) in sum.iter_mut().enumerate() {
-                        *s += u32::from(image.data[row + x * channels + c.min(channels - 1)]);
+                        let v = u32::from(image.data[row + x * channels + c.min(channels - 1)]);
+                        *s += v;
+                        l += v;
                     }
+                    let l = l as f32 / 3.0;
+                    luma += l;
+                    luma2 += l * l;
                 }
             }
             let n = (block * block) as f32;
             mean[by * bw + bx] = sum.map(|s| s as f32 / n);
+            let m = luma / n;
+            texture[by * bw + bx] = (luma2 / n - m * m).max(0.0).sqrt();
         }
     }
     // The lid: the commonest colour along the edges of the glass (the lid
@@ -162,19 +173,50 @@ pub fn objects(image: &Image) -> Vec<Found> {
     let far = 0.14 * level;
     let edge = 0.08 * level;
     let diff = |a: &[f32; 3], b: &[f32; 3]| (0..3).map(|c| (a[c] - b[c]).abs()).fold(0.0, f32::max);
+    // The shadow of the lid where thick prints keep it up (the narrow
+    // gaps between them, a band along their edges): the lid's own colour,
+    // only darker, and smooth. It is lid, not an original: else prints a
+    // few millimetres apart come out as one.
+    let luma = |i: usize| (mean[i][0] + mean[i][1] + mean[i][2]) / 3.0;
+    // The lid's colour, as bright or a little darker (lid, shadow, a white
+    // sheet, the edge between them).
+    let lidish = |i: usize| {
+        let (m, l) = (&mean[i], luma(i));
+        let tint = (0..3)
+            .map(|c| ((m[c] - l) - (lid[c] - level)).abs())
+            .fold(0.0, f32::max);
+        l > 0.72 * level && tint < 0.03 * level + 2.0
+    };
+    let shadow = |i: usize| lidish(i) && luma(i) < level && texture[i] < 0.02 * level + 1.5;
     let mut mask = vec![false; bw * bh];
     for by in 0..bh {
         for bx in 0..bw {
             let i = by * bw + bx;
+            if shadow(i) {
+                continue;
+            }
             let m = &mean[i];
             // An edge only counts on the side that is not the lid (else
             // the object would grow by a block).
             let from_lid = diff(m, &lid);
             let mut on = from_lid > far;
             if !on && from_lid > edge / 2.0 && bx > 0 && by > 0 && bx + 1 < bw && by + 1 < bh {
-                on = [i - 1, i + 1, i - bw, i + bw]
-                    .iter()
-                    .any(|&j| diff(m, &mean[j]) > edge);
+                // Between two blocks of the lid's colour, an edge is a thin
+                // dark line (the edge of a white sheet: darker than both
+                // sides), not a step (into a shadow, lighter on one side).
+                let line = |j: usize, o: usize| {
+                    luma(i) + edge / 2.0 < luma(j) && luma(i) + edge / 2.0 < luma(o)
+                };
+                on = [
+                    (i - 1, i + 1),
+                    (i + 1, i - 1),
+                    (i - bw, i + bw),
+                    (i + bw, i - bw),
+                ]
+                .iter()
+                .any(|&(j, o)| {
+                    diff(m, &mean[j]) > edge && (!lidish(i) || !lidish(j) || line(j, o))
+                });
             }
             mask[i] = on;
         }
@@ -213,10 +255,13 @@ pub fn objects(image: &Image) -> Vec<Found> {
         })
         .map(|f| refine(image, channels, &lid, far, block as f32, f))
         .collect();
-    // Reading order: rows of objects that overlap in height.
+    // Reading order: rows of objects side by side, that is overlapping for
+    // at least half the height of the lower one (a postcard askew reaches a
+    // little into the row under it without being part of it).
     found.sort_by(|a, b| {
         let (ta, tb) = (a.bounds(), b.bounds());
-        let same_row = ta[1] < tb[1] + tb[3] && tb[1] < ta[1] + ta[3];
+        let overlap = (ta[1] + ta[3]).min(tb[1] + tb[3]) - ta[1].max(tb[1]);
+        let same_row = overlap > 0.5 * ta[3].min(tb[3]);
         if same_row {
             ta[0].total_cmp(&tb[0])
         } else {
@@ -240,10 +285,16 @@ fn refine(image: &Image, channels: usize, lid: &[f32; 3], far: f32, block: f32, 
             return None;
         }
         let i = (y as usize * image.width + x as usize) * channels;
-        let d = (0..3)
-            .map(|k| (f32::from(image.data[i + k.min(channels - 1)]) - lid[k]).abs())
+        let p: [f32; 3] = std::array::from_fn(|k| f32::from(image.data[i + k.min(channels - 1)]));
+        let d = (0..3).map(|k| (p[k] - lid[k]).abs()).fold(0.0, f32::max);
+        // The lid's shadow (see `objects`): its colour, a little darker.
+        let level = (lid[0] + lid[1] + lid[2]) / 3.0;
+        let luma = (p[0] + p[1] + p[2]) / 3.0;
+        let tint = (0..3)
+            .map(|k| ((p[k] - luma) - (lid[k] - level)).abs())
             .fold(0.0, f32::max);
-        Some(d > far)
+        let shadow = luma < level && luma > 0.72 * level && tint < 0.03 * level + 4.0;
+        Some(d > far && !shadow)
     };
     let (hw, hh) = (f.width / 2.0, f.height / 2.0);
     // Distance from the centre of each side: right, left, bottom, top
@@ -723,6 +774,142 @@ mod tests {
         for (f, t) in found.iter().zip(&truth) {
             near(f, t);
         }
+    }
+
+    /// The whole glass at 200 dpi (1700 × 2340) with thick prints on it:
+    /// colourful photos, and where the lid cannot come down (the narrow
+    /// gaps between prints, a band around each) a smooth grey shadow,
+    /// darker than the lid.
+    fn glass_with_shadows(objects: &[Found], shadow: u8, band: f32) -> Image {
+        let (w, h) = (1700, 2340);
+        let mut data = vec![0u8; w * h * 3];
+        for y in 0..h {
+            for x in 0..w {
+                let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
+                let p = (y * w + x) * 3;
+                let inside = objects.iter().position(|f| f.contains(fx, fy));
+                let near = objects.iter().any(|f| {
+                    Found {
+                        width: f.width + 2.0 * band,
+                        height: f.height + 2.0 * band,
+                        ..*f
+                    }
+                    .contains(fx, fy)
+                });
+                let rgb = match inside {
+                    // A photo: leaves and flowers, colour and texture.
+                    Some(i) => {
+                        let t = ((x * 7 + y * 3 + i * 50) % 70) as u8;
+                        [60 + t, 110 + t / 2, 40 + t / 3]
+                    }
+                    // Lifted lid: shadow, smooth and neutral.
+                    None if near => [shadow, shadow, shadow.saturating_sub(4)],
+                    None => {
+                        let v = 236 + ((x * 13 + y * 7) % 4) as u8;
+                        [v, v, v.saturating_sub(4)]
+                    }
+                };
+                data[p..p + 3].copy_from_slice(&rgb);
+            }
+        }
+        Image {
+            width: w,
+            height: h,
+            dpi: 200,
+            format: Format::Rgb,
+            data,
+        }
+    }
+
+    /// As on the glass that started this: a postcard askew at the top, two
+    /// photos under it touching the bottom and right edges of the glass,
+    /// about 3 mm apart, the gaps in shadow.
+    fn postcard_and_two_photos() -> [Found; 3] {
+        [
+            Found {
+                cx: 819.0,
+                cy: 531.0,
+                width: 1150.0,
+                height: 780.0,
+                angle: -14.8,
+            },
+            Found {
+                cx: 455.0,
+                cy: 1700.0,
+                width: 850.0,
+                height: 1240.0,
+                angle: 0.0,
+            },
+            Found {
+                cx: 1302.0,
+                cy: 1693.0,
+                width: 796.0,
+                height: 1254.0,
+                angle: 0.0,
+            },
+        ]
+    }
+
+    #[test]
+    fn prints_a_few_millimetres_apart_stay_apart_despite_the_shadow() {
+        let truth = postcard_and_two_photos();
+        for (shadow, band) in [(214, 12.0), (200, 16.0), (186, 20.0)] {
+            let found = objects(&glass_with_shadows(&truth, shadow, band));
+            assert_eq!(found.len(), 3, "shadow {shadow}, band {band}: {found:?}");
+            for (f, t) in found.iter().zip(&truth) {
+                // The shadow may add a little; never another print.
+                assert!(
+                    (f.cx - t.cx).abs() < 25.0 && (f.cy - t.cy).abs() < 25.0,
+                    "{f:?} {t:?}"
+                );
+                assert!(
+                    f.width < t.width + 50.0 && f.height < t.height + 50.0,
+                    "{f:?} {t:?}"
+                );
+                assert!(
+                    f.width > t.width - 30.0 && f.height > t.height - 30.0,
+                    "{f:?} {t:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_white_sheet_is_still_found_by_the_thin_shadow_of_its_edges() {
+        // A sheet as white as the lid, outlined by a 2-pixel dark line.
+        let (w, h) = (1000, 1300);
+        let sheet = [150usize, 120, 850, 1180];
+        let mut data = vec![0u8; w * h * 3];
+        for y in 0..h {
+            for x in 0..w {
+                let inside = x >= sheet[0] && x < sheet[2] && y >= sheet[1] && y < sheet[3];
+                let edge = inside
+                    && (x < sheet[0] + 2
+                        || x >= sheet[2] - 2
+                        || y < sheet[1] + 2
+                        || y >= sheet[3] - 2);
+                let v = if edge {
+                    190
+                } else {
+                    236 + ((x * 13 + y * 7) % 4) as u8
+                };
+                data[(y * w + x) * 3..][..3].copy_from_slice(&[v, v, v - 4]);
+            }
+        }
+        let image = Image {
+            width: w,
+            height: h,
+            dpi: 200,
+            format: Format::Rgb,
+            data,
+        };
+        let found = objects(&image);
+        assert_eq!(found.len(), 1, "{found:?}");
+        let b = found[0].bounds();
+        assert!(
+            (b[0] - 150.0).abs() < 8.0 && (b[2] - 700.0).abs() < 16.0,
+            "{b:?}"
+        );
     }
 
     #[test]

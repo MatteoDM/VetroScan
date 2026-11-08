@@ -19,6 +19,14 @@ manca.
   «appena finita la scansione» a 13 minuti, di base 2) e sempre chiudendosi, invece di
   lasciarla accesa 13 minuti; il timer dello scanner resta come sicurezza.
 
+### Fixed
+- Ritaglio automatico: stampe spesse a pochi millimetri l'una dall'altra (il coperchio non
+  scende fra loro e lascia un'ombra grigia) venivano prese per un solo originale grande quanto
+  il vetro; ora l'ombra del coperchio non conta come originale, e ognuna esce da sola e senza
+  la fascia d'ombra intorno. Un foglio bianco si trova ancora dalla linea scura del suo bordo.
+- L'ordine degli originali trovati non mette più una cartolina inclinata dopo le foto della
+  riga sotto, in cui sporge appena.
+
 ## [0.1.0] - 2026-11-08
 
 Prima versione.
