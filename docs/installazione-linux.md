@@ -135,7 +135,10 @@ che **non trova lo scanner**, vedi [Problemi](#problemi).
 
 ```sh
 install -Dm 644 packaging/linux/hp3770-app.desktop ~/.local/share/applications/hp3770-app.desktop
+install -Dm 644 packaging/linux/hp3770-app.svg ~/.local/share/icons/hicolor/scalable/apps/hp3770-app.svg
 ```
+
+La prima riga mette l'app nel menu, la seconda le dà la sua icona.
 
 Ora apri il lanciatore delle app con **Super + Alt + Spazio**, scrivi **scanner**
 (o **HP**) e compare **HP Scanjet 3770**. Invio, e l'app si apre.
@@ -186,6 +189,11 @@ Le impostazioni dell'app restano: sono salvate in `~/.config/hp3770`.
 
 ## Problemi
 
+**L'app dice «Lo scanner è collegato, ma Linux non lo lascia usare a questo utente».**
+Manca la regola del Passo 3. Premi **Permetti l'accesso allo scanner** nella stessa
+scheda e scrivi la password: l'app installa la regola da sola e si ricollega allo
+scanner, senza staccare il cavo.
+
 **L'app dice «Scanner non trovato».**
 - Lo scanner è acceso e il cavo è collegato? Prova un'altra porta USB, meglio se
   direttamente sul computer.
@@ -226,6 +234,7 @@ minuto, oppure dopo essere uscito dalla sessione e rientrato.
 cargo uninstall hp3770-app
 cargo uninstall hp3770-cli
 rm ~/.local/share/applications/hp3770-app.desktop
+rm ~/.local/share/icons/hicolor/scalable/apps/hp3770-app.svg
 sudo rm /etc/udev/rules.d/70-hp3770.rules
 rm -r ~/Work/scanner          # il codice scaricato
 rm -r ~/.config/hp3770        # le impostazioni (facoltativo)
