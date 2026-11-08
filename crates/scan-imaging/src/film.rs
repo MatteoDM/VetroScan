@@ -85,6 +85,10 @@ const NEAR_BASE: f32 = 0.04;
 /// Share of the samples left beyond the black and white of the levels.
 const CLIP: f64 = 0.001;
 
+/// Share of a negative's samples, the densest, its highlights are measured
+/// on (see [`Negative::measure`]).
+const HIGH_SHARE: f64 = 0.005;
+
 /// Fewest samples of film to measure anything on.
 const FEWEST: usize = 64;
 
@@ -215,7 +219,8 @@ pub fn base_auto(samples: &[u16]) -> Option<[f32; 3]> {
 pub struct Negative {
     /// The film base, transmission per channel (orange in colour films).
     pub base: [f32; 3],
-    /// Density above the base of the brightest highlights, per channel.
+    /// Density above the base of the brightest highlights, per channel:
+    /// the mean over the densest pixels of the three channels together.
     pub high: [f32; 3],
     /// The black, as a share of `high` (the same for the three channels:
     /// the base is neutral, the shadows keep its balance).
@@ -265,7 +270,45 @@ impl Negative {
             }
             0.0
         };
-        let high: [f32; 3] = std::array::from_fn(|c| density(c, true).max(0.05));
+        // The highlights: the same pixels for the three channels, the densest
+        // by their total density, each channel's density averaged over
+        // them. The densest of each channel on its own are different pixels
+        // (a saturated colour, a speck), and a first scan of real negatives
+        // came out with a cast that way; the brightest parts of a scene are
+        // nearly always nearly neutral.
+        let total_bins = 3 * DENSITY_BINS;
+        let mut totals = vec![0u64; total_bins];
+        let mut densities = Vec::with_capacity(counted as usize);
+        for p in samples.chunks_exact(3).filter(|p| is_film(p)) {
+            let d: [f32; 3] = std::array::from_fn(|c| base_log[c] - transmission(p[c]).log10());
+            if d.iter().all(|&d| d < NEAR_BASE) {
+                continue;
+            }
+            let t = d.iter().map(|&d| d.max(0.0)).sum::<f32>();
+            totals[((t / DENSITY_STEP) as usize).min(total_bins - 1)] += 1;
+            densities.push((t, d));
+        }
+        let top = ((counted as f64 * HIGH_SHARE) as u64).max(1);
+        let mut sum = 0;
+        let mut threshold = 0.0;
+        for bin in (0..total_bins).rev() {
+            sum += totals[bin];
+            if sum >= top {
+                threshold = bin as f32 * DENSITY_STEP;
+                break;
+            }
+        }
+        let mut high = [0f32; 3];
+        let mut n = 0f32;
+        for (t, d) in &densities {
+            if *t >= threshold {
+                for c in 0..3 {
+                    high[c] += d[c].max(0.0);
+                }
+                n += 1.0;
+            }
+        }
+        let high: [f32; 3] = high.map(|h| (h / n.max(1.0)).max(0.05));
         let black = (0..3)
             .map(|c| density(c, false) / high[c])
             .fold(1.0f32, f32::min)

@@ -89,6 +89,20 @@ enum Command {
         #[arg(long, value_enum)]
         film: Option<FilmArg>,
     },
+    /// Turn a saved scan of the transparency adapter (the NAME-16bit.png of
+    /// `tma-scan`) into its picture again, without the scanner.
+    Develop {
+        /// The 16-bit samples (NAME-16bit.png).
+        input: PathBuf,
+        /// The picture to write.
+        output: PathBuf,
+        /// Resolution of the scan.
+        #[arg(long, default_value_t = 1200)]
+        dpi: u16,
+        /// What is in the holder.
+        #[arg(long, value_enum)]
+        film: Option<FilmArg>,
+    },
     /// Switch the flatbed lamp, or the transparency adapter's, on or off.
     ///
     /// Writes E946 and E954 like the HP driver (E965 and E946 for the
@@ -235,6 +249,13 @@ fn main() -> ExitCode {
         Command::TmaScan { output, dpi, film } => {
             open(cli.backend).and_then(|s| tma_scan(s, &output, dpi, film))
         }
+        Command::Develop {
+            input,
+            output,
+            dpi,
+            film,
+        } => read_png16(&input)
+            .and_then(|(w, h, samples)| develop(samples, w, h, dpi, film, &output)),
         Command::Detect { input, crop } => detect(&input, crop.as_deref()),
         Command::Buttons { count, method, raw } => {
             open(cli.backend).and_then(|s| buttons(s, count, method, raw))
@@ -507,6 +528,27 @@ fn save_png16(output: &std::path::Path, width: usize, height: usize, samples: &[
     Ok(())
 }
 
+/// Reads a 16-bit RGB PNG (as [`save_png16`] writes it): width, height and
+/// the samples.
+fn read_png16(
+    path: &std::path::Path,
+) -> Result<(usize, usize, Vec<u16>), Box<dyn std::error::Error>> {
+    let decoder = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(path)?));
+    let mut reader = decoder.read_info()?;
+    let info = reader.info();
+    if info.bit_depth != png::BitDepth::Sixteen || info.color_type != png::ColorType::Rgb {
+        return Err(format!("{} is not a 16-bit RGB PNG", path.display()).into());
+    }
+    let (w, h) = (info.width as usize, info.height as usize);
+    let mut buf = vec![0u8; reader.output_buffer_size().ok_or("PNG too large")?];
+    reader.next_frame(&mut buf)?;
+    let samples = buf[..w * h * 6]
+        .chunks_exact(2)
+        .map(|b| u16::from_be_bytes([b[0], b[1]]))
+        .collect();
+    Ok((w, h, samples))
+}
+
 /// Writes an image as PNG, or as binary PNM (PPM, PGM or PBM) if the name
 /// ends in `.ppm`, `.pgm` or `.pbm`.
 fn save_image(
@@ -551,23 +593,18 @@ fn save_image(
     Ok(())
 }
 
-/// What is in the adapter's holder (`tma-scan --film`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-enum FilmArg {
-    /// Slides: positives.
-    Slide,
-    /// Negatives, colour or black and white.
-    Negative,
-}
-
-fn tma_scan(
-    scanner: Scanner,
-    output: &std::path::Path,
+/// What a scan with the transparency adapter becomes: its 16-bit samples
+/// (`width` x `height` RGB, the adapter's area from its top left corner,
+/// at `dpi`), measured and turned into the picture with `film`, saved as
+/// `output`. Shared by `tma-scan` and `develop`.
+fn develop(
+    samples: Vec<u16>,
+    width: usize,
+    height: usize,
     dpi: u16,
     film: Option<FilmArg>,
+    output: &std::path::Path,
 ) -> CliResult {
-    use hp3770_core::geometry::Area;
-    use hp3770_core::session::{self, Request, Stage, TMA_WARMUP};
     use scan_imaging::adjust::{render_samples, Adjustments, Samples};
     use scan_imaging::film::{self, Film, Negative, Slide};
     let profile = &hp3770_core::profile::HP3770;
@@ -575,56 +612,14 @@ fn tma_scan(
         .transparency
         .as_ref()
         .ok_or("this scanner has no transparency adapter")?;
-    let mut chip = Chip::new(scanner);
-    if !chip.status()?.tma_attached {
-        return Err("the transparency adapter is not plugged in".into());
-    }
-    let mm = |tenths: u16| f64::from(tenths) / 10.0;
-    let [left, top, width, height] = adapter.area.map(mm);
-    let area = Area::from_mm(dpi, left, top, width, height);
-    let request = Request {
-        linear: true,
-        transparency: true,
-        negative: film == Some(FilmArg::Negative),
-        depth: 16,
-        adjust: Adjustments {
-            sharpen: 0.0,
-            ..Default::default()
-        },
-        ..Request::new(dpi, area, scan_imaging::Mode::Colour)
+    // The linear picture at 8 bits, for finding the frames.
+    let image = scan_imaging::Image {
+        width,
+        height,
+        dpi,
+        format: scan_imaging::Format::Rgb,
+        data: samples.iter().map(|&v| (v >> 8) as u8).collect(),
     };
-    let start = Instant::now();
-    let mut calibrating = false;
-    let mut last_percent = None;
-    let (image, report) = session::scan(&mut chip, profile, &request, &mut |stage| {
-        match stage {
-            Stage::Starting => eprintln!("starting"),
-            Stage::WarmingUp => eprintln!(
-                "TMA lamp         on, warming up for {} s",
-                TMA_WARMUP.as_secs()
-            ),
-            Stage::Calibrating if !calibrating => {
-                calibrating = true;
-                eprintln!("calibrating      (adapter's lamp, slot without film)");
-            }
-            Stage::Calibrating => {}
-            Stage::Scanning { done, total } => {
-                let percent = done * 100 / total.max(1) / 10 * 10;
-                if last_percent != Some(percent) {
-                    last_percent = Some(percent);
-                    eprintln!("scanning         {percent} %");
-                }
-            }
-            Stage::Finishing => eprintln!("finishing        (adapter's lamp off)"),
-        }
-        true
-    })?;
-    eprintln!(
-        "calibration      offsets {:?}, gains {:?}",
-        report.offsets, report.gains
-    );
-    let samples = report.samples16.ok_or("no 16-bit samples")?;
-    save_png16(output, image.width, image.height, &samples)?;
     // How much light the calibration made of the slot without film (its
     // middle third, 65535 = the lamp at full scale).
     let px = |tenths: u16| (f64::from(tenths) / 254.0 * f64::from(dpi)) as usize;
@@ -723,13 +718,86 @@ fn tma_scan(
         &film::TONE,
     );
     save_image(output, shown.width, shown.height, &shown.data, shown.format)?;
-    println!(
-        "scanned          {} x {} pixels in {:.1} s",
-        shown.width,
-        shown.height,
-        start.elapsed().as_secs_f32()
-    );
+    println!("picture          {} x {} pixels", shown.width, shown.height);
     println!("saved            {}", output.display());
+    Ok(())
+}
+
+/// What is in the adapter's holder (`tma-scan --film`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum FilmArg {
+    /// Slides: positives.
+    Slide,
+    /// Negatives, colour or black and white.
+    Negative,
+}
+
+fn tma_scan(
+    scanner: Scanner,
+    output: &std::path::Path,
+    dpi: u16,
+    film: Option<FilmArg>,
+) -> CliResult {
+    use hp3770_core::geometry::Area;
+    use hp3770_core::session::{self, Request, Stage, TMA_WARMUP};
+    use scan_imaging::adjust::Adjustments;
+    let profile = &hp3770_core::profile::HP3770;
+    let adapter = profile
+        .transparency
+        .as_ref()
+        .ok_or("this scanner has no transparency adapter")?;
+    let mut chip = Chip::new(scanner);
+    if !chip.status()?.tma_attached {
+        return Err("the transparency adapter is not plugged in".into());
+    }
+    let mm = |tenths: u16| f64::from(tenths) / 10.0;
+    let [left, top, width, height] = adapter.area.map(mm);
+    let area = Area::from_mm(dpi, left, top, width, height);
+    let request = Request {
+        linear: true,
+        transparency: true,
+        negative: film == Some(FilmArg::Negative),
+        depth: 16,
+        adjust: Adjustments {
+            sharpen: 0.0,
+            ..Default::default()
+        },
+        ..Request::new(dpi, area, scan_imaging::Mode::Colour)
+    };
+    let start = Instant::now();
+    let mut calibrating = false;
+    let mut last_percent = None;
+    let (image, report) = session::scan(&mut chip, profile, &request, &mut |stage| {
+        match stage {
+            Stage::Starting => eprintln!("starting"),
+            Stage::WarmingUp => eprintln!(
+                "TMA lamp         on, warming up for {} s",
+                TMA_WARMUP.as_secs()
+            ),
+            Stage::Calibrating if !calibrating => {
+                calibrating = true;
+                eprintln!("calibrating      (adapter's lamp, slot without film)");
+            }
+            Stage::Calibrating => {}
+            Stage::Scanning { done, total } => {
+                let percent = done * 100 / total.max(1) / 10 * 10;
+                if last_percent != Some(percent) {
+                    last_percent = Some(percent);
+                    eprintln!("scanning         {percent} %");
+                }
+            }
+            Stage::Finishing => eprintln!("finishing        (adapter's lamp off)"),
+        }
+        true
+    })?;
+    eprintln!(
+        "calibration      offsets {:?}, gains {:?}",
+        report.offsets, report.gains
+    );
+    let samples = report.samples16.ok_or("no 16-bit samples")?;
+    save_png16(output, image.width, image.height, &samples)?;
+    develop(samples, image.width, image.height, dpi, film, output)?;
+    println!("scanned in       {:.1} s", start.elapsed().as_secs_f32());
     Ok(())
 }
 

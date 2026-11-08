@@ -442,9 +442,13 @@ It needs no new hardware, only slides and negatives to put in the holder.
   per colour (`EXPT`/`MEXPT`, kept in `NEGATIVE_EXPOSURES`: `MEXPT` how long, `EXPT` where it
   starts; with them the calibration's reads, lengthened by `set_multi_exposure`, and the scan
   did not expose red alike).
+  **Colour balance**: the highlights of a negative are measured on the same pixels for the three
+  channels (the densest 0.5 % by total density, each channel averaged over them), not on the
+  densest of each channel on its own: the cyan cast of the light, neutral parts went away.
+  `hp3770 develop` turns a saved scan (NAME-16bit.png) into its picture again in a second,
+  without the scanner.
   Still open: the light uneven along the strip (a correction along the travel, measured once
-  on the empty holder); the colour balance of the positive (a little cool with the new
-  exposure); slides not tried yet (their mode would be the glass's, the gains at their
+  on the empty holder); slides not tried yet (their mode would be the glass's, the gains at their
   maximum: perhaps the negatives' longer line for them too); the contract and the app (below).
 - **Driver**: the adapter's lamp (done: bit 5 of `E946` and bit 6 of `E965`, see above), its
   calibration (no white strip under the lid: what the HP driver does instead comes from the
