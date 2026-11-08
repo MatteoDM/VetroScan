@@ -15,6 +15,7 @@
 
 #![windows_subsystem = "windows"]
 
+mod curve;
 mod histogram;
 mod prefs;
 mod viewer;
@@ -275,6 +276,10 @@ impl Settings {
                 whites: a.whites,
                 blacks: a.blacks,
                 vibrance: a.vibrance,
+                curve: a.curve,
+                noise: a.noise,
+                descreen: a.descreen,
+                adaptive: a.adaptive,
                 black: a.black,
                 white: a.white,
                 gamma: a.gamma,
@@ -335,6 +340,10 @@ impl Settings {
                 whites: a.whites,
                 blacks: a.blacks,
                 vibrance: a.vibrance,
+                curve: a.curve,
+                noise: a.noise,
+                descreen: a.descreen,
+                adaptive: a.adaptive,
                 black: a.black,
                 white: a.white,
                 gamma: a.gamma,
@@ -552,14 +561,63 @@ impl Page {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Group {
     Tone,
+    Curve,
     Colour,
     Detail,
     Lineart,
 }
 
+/// The channel the curve editor shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CurveChannel {
+    All,
+    Red,
+    Green,
+    Blue,
+}
+
+impl CurveChannel {
+    fn index(self) -> usize {
+        match self {
+            Self::All => 0,
+            Self::Red => 1,
+            Self::Green => 2,
+            Self::Blue => 3,
+        }
+    }
+}
+
+/// Screens of printed matter, as offered.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Screen(f32);
+
+impl Eq for Screen {}
+
+impl std::fmt::Display for Screen {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 as u32 {
+            0 => f.write_str("Nessuno"),
+            85 => f.write_str("Giornale (85 lpi)"),
+            133 => f.write_str("Rivista (133 lpi)"),
+            150 => f.write_str("Rivista fine (150 lpi)"),
+            175 => f.write_str("Stampa d'arte (175 lpi)"),
+            n => write!(f, "{n} lpi"),
+        }
+    }
+}
+
+const SCREENS: [Screen; 5] = [
+    Screen(0.0),
+    Screen(85.0),
+    Screen(133.0),
+    Screen(150.0),
+    Screen(175.0),
+];
+
 /// An adjustment with a slider and a number.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Field {
+    Noise,
     Temperature,
     Tint,
     Exposure,
@@ -582,6 +640,7 @@ impl Field {
     fn label(self) -> &'static str {
         match self {
             Self::Temperature => "Temperatura (freddo ↔ caldo)",
+            Self::Noise => "Riduzione rumore",
             Self::Tint => "Tinta (verde ↔ magenta)",
             Self::Exposure => "Esposizione (stop)",
             Self::Highlights => "Luci",
@@ -608,6 +667,7 @@ impl Field {
             Self::Sharpen => 0.0..=4.0,
             Self::Threshold => 0.0..=255.0,
             Self::Exposure => -3.0..=3.0,
+            Self::Noise => 0.0..=100.0,
             _ => -100.0..=100.0,
         }
     }
@@ -624,6 +684,7 @@ impl Field {
         let a = &s.adjust;
         match self {
             Self::Temperature => a.temperature,
+            Self::Noise => a.noise,
             Self::Tint => a.tint,
             Self::Exposure => a.exposure,
             Self::Highlights => a.highlights,
@@ -653,6 +714,7 @@ impl Field {
         let a = &mut s.adjust;
         match self {
             Self::Temperature => a.temperature = v,
+            Self::Noise => a.noise = v,
             Self::Tint => a.tint = v,
             Self::Exposure => a.exposure = v,
             Self::Highlights => a.highlights = v,
@@ -728,6 +790,10 @@ enum Message {
     Pane(Pane),
     Undo,
     Redo,
+    CurveChannel(CurveChannel),
+    CurvePoint(usize, f32),
+    Descreen(Screen),
+    Adaptive(bool),
     /// "Solo questa pagina" on or off for the page shown.
     OwnLook(bool),
     PresetName(String),
@@ -815,6 +881,9 @@ struct App {
     redo_auto: bool,
     redone: Option<(usize, Page)>,
     note: String,
+    curve_channel: CurveChannel,
+    /// When the curve was last dragged (one step of Ctrl+Z per drag).
+    curve_drag: Option<std::time::Instant>,
     /// Named setups (at most three), and the name being typed.
     presets: Vec<prefs::Preset>,
     preset_name: String,
@@ -884,6 +953,8 @@ impl App {
                 redone: None,
                 note: "Pronto: fai un'anteprima, scegli l'area e scansiona".into(),
                 draft: None,
+                curve_channel: CurveChannel::All,
+                curve_drag: None,
                 presets: prefs::load_presets(),
                 preset_name: String::new(),
                 undo: Vec::new(),
@@ -1512,6 +1583,34 @@ impl App {
                     };
                 }
             }
+            Message::CurveChannel(c) => self.curve_channel = c,
+            Message::CurvePoint(i, y) => {
+                let c = self.curve_channel.index();
+                // A drag is one step of Ctrl+Z.
+                let now = std::time::Instant::now();
+                if self
+                    .curve_drag
+                    .is_none_or(|at| now - at > std::time::Duration::from_secs(1))
+                {
+                    self.remember(None);
+                }
+                self.curve_drag = Some(now);
+                self.apply(|s| {
+                    let mut points = s.adjust.curve[c];
+                    points[i] = y;
+                    // Keep the points in order.
+                    for (k, p) in points.iter_mut().enumerate() {
+                        if k < i {
+                            *p = p.min(y);
+                        } else if k > i {
+                            *p = p.max(y);
+                        }
+                    }
+                    s.adjust.curve[c] = points;
+                });
+            }
+            Message::Descreen(screen) => self.change(|s| s.adjust.descreen = screen.0),
+            Message::Adaptive(on) => self.change(|s| s.adjust.adaptive = on),
             Message::Undo => {
                 if let Some((target, settings)) = self.undo.pop() {
                     match self.restore(target, settings) {
@@ -1607,8 +1706,16 @@ impl App {
                         j.saturation = d.saturation;
                         j.vibrance = d.vibrance;
                     }
-                    Group::Detail => j.sharpen = d.sharpen,
-                    Group::Lineart => s.threshold = convert::DEFAULT_THRESHOLD,
+                    Group::Curve => j.curve = d.curve,
+                    Group::Detail => {
+                        j.sharpen = d.sharpen;
+                        j.noise = d.noise;
+                        j.descreen = d.descreen;
+                    }
+                    Group::Lineart => {
+                        s.threshold = convert::DEFAULT_THRESHOLD;
+                        j.adaptive = d.adaptive;
+                    }
                 }
             }),
             Message::Before(on) => {
@@ -2583,7 +2690,69 @@ impl App {
             "Dettaglio",
             true,
             "",
-            self.adjuster(Field::Sharpen, &s),
+            column![
+                self.adjuster(Field::Sharpen, &s),
+                self.adjuster(Field::Noise, &s),
+                labelled(
+                    "Antiretino",
+                    pick_list(SCREENS, Some(Screen(s.adjust.descreen)), Message::Descreen)
+                        .width(Length::Fill)
+                        .text_size(13)
+                        .into()
+                ),
+                text("Per riviste e giornali: toglie il retino della stampa (effetto moiré).")
+                    .size(11),
+            ]
+            .spacing(8)
+            .into(),
+        );
+        let channel_tab = |label: &'static str, c: CurveChannel| {
+            button(text(label).size(12))
+                .padding([3, 10])
+                .style(if self.curve_channel == c {
+                    button::primary
+                } else {
+                    button::secondary
+                })
+                .on_press(Message::CurveChannel(c))
+        };
+        let curve_colour = match self.curve_channel {
+            CurveChannel::All => iced::Color::from_rgb(0.85, 0.85, 0.85),
+            CurveChannel::Red => iced::Color::from_rgb(0.95, 0.3, 0.3),
+            CurveChannel::Green => iced::Color::from_rgb(0.3, 0.8, 0.35),
+            CurveChannel::Blue => iced::Color::from_rgb(0.35, 0.5, 1.0),
+        };
+        let mut tabs = row![channel_tab("Tutti", CurveChannel::All)].spacing(4);
+        if s.colour == Colour::Rgb {
+            tabs = tabs
+                .push(channel_tab("R", CurveChannel::Red))
+                .push(channel_tab("G", CurveChannel::Green))
+                .push(channel_tab("B", CurveChannel::Blue));
+        }
+        let channel = if s.colour == Colour::Rgb {
+            self.curve_channel.index()
+        } else {
+            0
+        };
+        let curve_group = self.group(
+            Group::Curve,
+            "Curva",
+            !lineart,
+            "Non serve in bianco e nero",
+            column![
+                tabs,
+                canvas(curve::Editor {
+                    points: s.adjust.curve[channel],
+                    colour: curve_colour,
+                    on_change: Message::CurvePoint,
+                })
+                .width(Length::Fill)
+                .height(200),
+                text("Trascina i punti in su o in giù: a sinistra le ombre, a destra le luci.")
+                    .size(11),
+            ]
+            .spacing(6)
+            .into(),
         );
         let bw = self.group(
             Group::Lineart,
@@ -2595,6 +2764,10 @@ impl App {
                     .style(button::secondary)
                     .on_press(Message::AutoThreshold),
                 self.adjuster(Field::Threshold, &s),
+                checkbox(s.adjust.adaptive)
+                    .label("Soglia adattiva (pagine illuminate in modo non uniforme)")
+                    .on_toggle(Message::Adaptive)
+                    .text_size(13),
             ]
             .spacing(8)
             .into(),
@@ -2679,6 +2852,7 @@ impl App {
             presets,
             histogram,
             base,
+            curve_group,
             colour,
             detail,
             bw

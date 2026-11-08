@@ -37,6 +37,18 @@ pub struct Adjustments {
     pub blacks: f32,
     /// Vibrance, −100 to 100: saturation that spares colours already vivid.
     pub vibrance: f32,
+    /// Tone curve: the output (0-1) at inputs ¼, ½ and ¾, for all channels
+    /// together, then red, green and blue. `CURVE_IDENTITY` leaves the
+    /// tones alone.
+    pub curve: [[f32; 3]; 4],
+    /// Noise reduction, 0-100: smooths small differences, keeps edges.
+    pub noise: f32,
+    /// Screen of printed matter to remove (descreen), in lines per inch;
+    /// 0 for none (magazines about 150, newspapers about 85).
+    pub descreen: f32,
+    /// Black and white against the local brightness instead of one level
+    /// for the whole page (pages unevenly lit, shadows of the binding).
+    pub adaptive: bool,
     /// Black point of the output, 0-254: levels at or below become black.
     pub black: f32,
     /// White point of the output, 1-255: levels at or above become white.
@@ -65,6 +77,10 @@ impl Default for Adjustments {
             whites: 0.0,
             blacks: 0.0,
             vibrance: 0.0,
+            curve: [CURVE_IDENTITY; 4],
+            noise: 0.0,
+            descreen: 0.0,
+            adaptive: false,
             black: 0.0,
             white: 255.0,
             gamma: 1.0,
@@ -75,6 +91,9 @@ impl Default for Adjustments {
         }
     }
 }
+
+/// The points of a curve that changes nothing.
+pub const CURVE_IDENTITY: [f32; 3] = [0.25, 0.5, 0.75];
 
 /// How strongly temperature and tint move the channels at ±100.
 const BALANCE_RANGE: f32 = 0.35;
@@ -131,10 +150,178 @@ impl Adjustments {
                 let v = tone_regions(v, highlights, shadows, whites, blacks);
                 let v = 255.0 * v.powf(1.0 / gamma);
                 let v = (v - 128.0) * contrast + 128.0 + brightness;
-                v.round().clamp(0.0, 255.0) as u8
+                let v = (v / 255.0).clamp(0.0, 1.0);
+                let v = curve(&self.curve[0], curve(&self.curve[c + 1], v));
+                (v * 255.0).round().clamp(0.0, 255.0) as u8
             })
         })
     }
+}
+
+/// A tone curve through (0, 0), (¼, y0), (½, y1), (¾, y2) and (1, 1),
+/// monotone cubic (Fritsch-Carlson): no overshoot between the points.
+pub fn curve(points: &[f32; 3], t: f32) -> f32 {
+    if *points == CURVE_IDENTITY {
+        return t;
+    }
+    let xs = [0.0, 0.25, 0.5, 0.75, 1.0];
+    let ys = [0.0, points[0], points[1], points[2], 1.0];
+    let d: Vec<f32> = (0..4).map(|i| (ys[i + 1] - ys[i]) / 0.25).collect();
+    let mut m = [0.0f32; 5];
+    m[0] = d[0];
+    m[4] = d[3];
+    for i in 1..4 {
+        m[i] = if d[i - 1] * d[i] <= 0.0 {
+            0.0
+        } else {
+            (d[i - 1] + d[i]) / 2.0
+        };
+    }
+    for i in 0..4 {
+        if d[i] == 0.0 {
+            m[i] = 0.0;
+            m[i + 1] = 0.0;
+        } else {
+            let (a, b) = (m[i] / d[i], m[i + 1] / d[i]);
+            let n = a * a + b * b;
+            if n > 9.0 {
+                let k = 3.0 / n.sqrt();
+                m[i] = k * a * d[i];
+                m[i + 1] = k * b * d[i];
+            }
+        }
+    }
+    let t = t.clamp(0.0, 1.0);
+    let i = ((t / 0.25) as usize).min(3);
+    let h = 0.25;
+    let u = (t - xs[i]) / h;
+    let (u2, u3) = (u * u, u * u * u);
+    let v = (2.0 * u3 - 3.0 * u2 + 1.0) * ys[i]
+        + (u3 - 2.0 * u2 + u) * h * m[i]
+        + (-2.0 * u3 + 3.0 * u2) * ys[i + 1]
+        + (u3 - u2) * h * m[i + 1];
+    v.clamp(0.0, 1.0)
+}
+
+/// Box blur of radius `r` across and down, `channels` samples per pixel.
+pub fn box_blur(data: &mut [u8], width: usize, channels: usize, r: usize) {
+    if r == 0 || width == 0 {
+        return;
+    }
+    let height = data.len() / (width * channels);
+    let mut tmp = vec![0u8; data.len()];
+    // Across.
+    for y in 0..height {
+        for c in 0..channels {
+            let at = |x: usize| (y * width + x) * channels + c;
+            let mut sum: u32 = 0;
+            let mut n: u32 = 0;
+            for x in 0..=r.min(width - 1) {
+                sum += u32::from(data[at(x)]);
+                n += 1;
+            }
+            for x in 0..width {
+                tmp[at(x)] = (sum / n) as u8;
+                if x + r + 1 < width {
+                    sum += u32::from(data[at(x + r + 1)]);
+                    n += 1;
+                }
+                if x >= r {
+                    sum -= u32::from(data[at(x - r)]);
+                    n -= 1;
+                }
+            }
+        }
+    }
+    // Down.
+    for x in 0..width {
+        for c in 0..channels {
+            let at = |y: usize| (y * width + x) * channels + c;
+            let mut sum: u32 = 0;
+            let mut n: u32 = 0;
+            for y in 0..=r.min(height.saturating_sub(1)) {
+                sum += u32::from(tmp[at(y)]);
+                n += 1;
+            }
+            for y in 0..height {
+                data[at(y)] = (sum / n) as u8;
+                if y + r + 1 < height {
+                    sum += u32::from(tmp[at(y + r + 1)]);
+                    n += 1;
+                }
+                if y >= r {
+                    sum -= u32::from(tmp[at(y - r)]);
+                    n -= 1;
+                }
+            }
+        }
+    }
+}
+
+/// Removes the screen of printed matter at `lpi` lines per inch from an
+/// image at `dpi`: a blur about as wide as one screen cell (twice, close
+/// to a Gaussian).
+pub fn descreen(data: &mut [u8], width: usize, channels: usize, dpi: u16, lpi: f32) {
+    if lpi <= 0.0 {
+        return;
+    }
+    let r = ((f32::from(dpi) / lpi) * 0.5).round().max(1.0) as usize;
+    box_blur(data, width, channels, r);
+    box_blur(data, width, channels, r);
+}
+
+/// Noise reduction, 0-100: each sample moves towards the mean of its
+/// neighbourhood, less where it differs a lot from it (an edge).
+pub fn denoise(data: &mut [u8], width: usize, channels: usize, amount: f32) {
+    if amount <= 0.0 {
+        return;
+    }
+    let mut smooth = data.to_vec();
+    box_blur(&mut smooth, width, channels, 1);
+    box_blur(&mut smooth, width, channels, 1);
+    let k = amount.clamp(0.0, 100.0) / 100.0;
+    for (v, &m) in data.iter_mut().zip(&smooth) {
+        let diff = f32::from(m) - f32::from(*v);
+        let weight = k * (1.0 - (diff.abs() / 28.0).min(1.0));
+        *v = (f32::from(*v) + weight * diff).round().clamp(0.0, 255.0) as u8;
+    }
+}
+
+/// Black and white against the local brightness: a pixel is white when it
+/// is not much darker than the mean of the square around it (about an
+/// eighth of an inch), and not darker than a floor. `threshold` (as the
+/// HP driver's) makes the page darker or lighter. Packed as
+/// [`convert::to_lineart`].
+pub fn to_lineart_adaptive(grey: &[u8], width: usize, dpi: u16, threshold: u8) -> Vec<u8> {
+    let height = grey.len() / width.max(1);
+    let r = (usize::from(dpi) / 16).max(7);
+    // Integral image.
+    let mut sum = vec![0u64; (width + 1) * (height + 1)];
+    for y in 0..height {
+        let mut row = 0u64;
+        for x in 0..width {
+            row += u64::from(grey[y * width + x]);
+            sum[(y + 1) * (width + 1) + x + 1] = sum[y * (width + 1) + x + 1] + row;
+        }
+    }
+    let offset = 12.0 + (55.0 - f32::from(threshold)) * 0.25;
+    let stride = width.div_ceil(8);
+    let mut out = vec![0u8; stride * height];
+    for y in 0..height {
+        let (y0, y1) = (y.saturating_sub(r), (y + r + 1).min(height));
+        for x in 0..width {
+            let (x0, x1) = (x.saturating_sub(r), (x + r + 1).min(width));
+            let total = sum[y1 * (width + 1) + x1] + sum[y0 * (width + 1) + x0]
+                - sum[y0 * (width + 1) + x1]
+                - sum[y1 * (width + 1) + x0];
+            let mean = total as f32 / ((y1 - y0) * (x1 - x0)) as f32;
+            let g = f32::from(grey[y * width + x]);
+            if g >= mean - offset && g > 60.0 {
+                out[y * stride + x / 8] |= 0x80 >> (x % 8);
+            }
+        }
+    }
+    out
 }
 
 /// Highlights, shadows, whites and blacks on a level `t` (0-1): each moves
@@ -287,6 +474,8 @@ pub fn render(
                 .collect();
             saturate(&mut out, adjustments.saturation);
             vibrance(&mut out, adjustments.vibrance);
+            descreen(&mut out, width, 3, dpi, adjustments.descreen);
+            denoise(&mut out, width, 3, adjustments.noise);
             convert::sharpen(&mut out, width, 3, adjustments.sharpen);
             (Format::Rgb, out)
         }
@@ -295,9 +484,16 @@ pub fn render(
             // through the tone tables (without the balance again).
             let gains = adjustments.gains();
             let white = geometry::host_white(profile);
+            // One grey level: the overall curve only.
             let tables = Adjustments {
                 temperature: 0.0,
                 tint: 0.0,
+                curve: [
+                    adjustments.curve[0],
+                    CURVE_IDENTITY,
+                    CURVE_IDENTITY,
+                    CURVE_IDENTITY,
+                ],
                 ..*adjustments
             }
             .tables([white; 3], linear);
@@ -309,8 +505,14 @@ pub fn render(
                     tables[1][level]
                 })
                 .collect();
+            descreen(&mut grey, width, 1, dpi, adjustments.descreen);
+            denoise(&mut grey, width, 1, adjustments.noise);
             convert::sharpen(&mut grey, width, 1, adjustments.sharpen);
             match mode {
+                Mode::Lineart { threshold } if adjustments.adaptive => (
+                    Format::Lineart,
+                    to_lineart_adaptive(&grey, width, dpi, threshold),
+                ),
                 Mode::Lineart { threshold } => (
                     Format::Lineart,
                     convert::to_lineart(&grey, width, threshold),
@@ -406,6 +608,67 @@ mod tests {
             ..Adjustments::default()
         };
         assert_eq!(a.tables([255.0; 3], true)[0][60], 120);
+    }
+
+    #[test]
+    fn curve_is_identity_by_default_and_monotone() {
+        for i in 0..=20 {
+            let t = i as f32 / 20.0;
+            assert_eq!(curve(&CURVE_IDENTITY, t), t);
+        }
+        // An S curve: darker shadows, lighter highlights, never backwards.
+        let s = [0.18, 0.5, 0.82];
+        assert!(curve(&s, 0.25) < 0.2 && curve(&s, 0.75) > 0.8);
+        let mut last = 0.0;
+        for i in 0..=100 {
+            let v = curve(&s, i as f32 / 100.0);
+            assert!(v >= last - 1e-6);
+            last = v;
+        }
+    }
+
+    #[test]
+    fn blur_denoise_descreen() {
+        // A flat image stays flat.
+        let mut flat = vec![100u8; 30 * 10];
+        box_blur(&mut flat, 30, 1, 3);
+        assert!(flat.iter().all(|&v| v == 100));
+        // A strong edge survives the noise reduction.
+        let mut edge: Vec<u8> = (0..20 * 5)
+            .map(|i| if i % 20 < 10 { 0 } else { 200 })
+            .collect();
+        let before = edge.clone();
+        denoise(&mut edge, 20, 1, 100.0);
+        assert_eq!(edge[5], before[5]);
+        // A fine screen pattern is flattened.
+        let mut screen: Vec<u8> = (0..40 * 40)
+            .map(|i| if (i % 40 + i / 40) % 2 == 0 { 50 } else { 200 })
+            .collect();
+        descreen(&mut screen, 40, 1, 300, 150.0);
+        let mid = screen[20 * 40 + 20];
+        assert!((110..=140).contains(&mid), "{mid}");
+    }
+
+    #[test]
+    fn adaptive_threshold_follows_uneven_light() {
+        // Text (dark dots) on paper getting darker from left to right: one
+        // level loses the right side, the local one keeps paper white.
+        let (w, h) = (64, 16);
+        let grey: Vec<u8> = (0..w * h)
+            .map(|i| {
+                let x = i % w;
+                let paper = 230 - (x as u32 * 2) as u8;
+                if x % 16 == 8 {
+                    paper - 90
+                } else {
+                    paper
+                }
+            })
+            .collect();
+        let out = to_lineart_adaptive(&grey, w, 300, 55);
+        let white = |x: usize| out[x / 8] & (0x80 >> (x % 8)) != 0;
+        assert!(white(2) && white(60), "paper stays white");
+        assert!(!white(8) && !white(56), "text stays black");
     }
 
     #[test]
