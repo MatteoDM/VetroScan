@@ -17,6 +17,8 @@ GitHub; here they are in English.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-08
+
 ### Added
 - **Open the folder** of the scans from the window: a button next to «Save …», one next to
   the folder's path in the Preferences, and the **Ctrl+O** shortcut (⌘O on macOS). The folder
@@ -202,7 +204,8 @@ First version.
 - Texts with a run of spaces in the middle (note on RAW, on 16 bits and on the buttons in
   Windows); the button of the default folder uses the system's separator.
 
-[Unreleased]: https://github.com/MatteoDM/scanner/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/MatteoDM/scanner/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/MatteoDM/scanner/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/MatteoDM/scanner/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/MatteoDM/scanner/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/MatteoDM/scanner/compare/v0.1.1...v0.1.2
