@@ -14,6 +14,10 @@ manca.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-08
+
+Prima versione.
+
 ### Added
 - **App desktop** `hp3770-app` per Linux e Windows (su macOS si compila, ma non è ancora
   stata provata con lo scanner), con due modi di lavoro:
@@ -56,11 +60,26 @@ manca.
   quando la regola manca.
 - Windows: funziona con il driver HP già installato (`usbscan.sys`), senza cambiare driver,
   oppure con WinUSB.
+- Prima di un'azione che butterebbe via scansioni non salvate (passare da Documento a Foto,
+  Nuovo documento, una nuova foto, Elimina, chiudere la finestra) l'app chiede: Annulla,
+  **Salva…** (salva e poi continua) o l'azione.
+- **Duplica** una pagina (anche Ctrl+D): la copia usa la stessa scansione ma si ritaglia, si
+  gira e si regola per conto suo, per tenere separate più foto acquisite insieme.
+- Le miniature delle pagine si **trascinano** per cambiarne l'ordine.
+- **PDF su carta**: foglio A3, A4, A5, Letter, Legal, 10 × 15 o 13 × 18 cm (o come la
+  scansione), orientamento automatico, verticale o orizzontale (anche per una sola pagina),
+  scansione a dimensione reale, adattata al foglio o a pieno foglio, margine. Il PDF c'è
+  anche in modo Foto, per stampare.
+- **Dimensione del PDF**: qualità dal 30 al 100%, dimensione stimata prima di salvare e un
+  limite in MB che l'app rispetta alleggerendo una pagina alla volta, quella che fa
+  risparmiare di più.
+- Icona nuova, anche nella finestra e nell'eseguibile Windows.
 - Pacchetti per ogni sistema, a ogni versione: installer e zip portatile per Windows, `.dmg`
   per macOS, `.deb`, `.rpm`, pacchetto Arch e AppImage per Linux (x86_64 e aarch64). I
   pacchetti `.deb`, `.rpm` e Arch installano anche la regola udev.
 
 ### Fixed
+- Due salvataggi nello stesso secondo non si sovrascrivono più: il secondo prende « (2)».
 - «Rifai»: il riquadro di avanzamento diceva «Scansione pagina N+1» (la prossima pagina nuova)
   invece della pagina rifatta; ora dice «Nuova scansione della pagina N» e, finita la
   scansione, mostra quella pagina anche nel pannello «Regola».
@@ -92,4 +111,5 @@ manca.
 - Testi con una fila di spazi in mezzo (nota sul RAW, sui 16 bit e sui tasti in Windows); il
   pulsante della cartella predefinita usa il separatore del sistema.
 
-[Unreleased]: https://github.com/MatteoDM/scanner/commits/main
+[Unreleased]: https://github.com/MatteoDM/scanner/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/MatteoDM/scanner/releases/tag/v0.1.0

@@ -74,6 +74,13 @@ fn main() -> iced::Result {
 fn window_settings() -> iced::window::Settings {
     iced::window::Settings {
         size: Size::new(1360.0, 900.0),
+        // The title bar's and the taskbar's icon (the .exe has its own,
+        // from build.rs, for Explorer).
+        icon: iced::window::icon::from_file_data(
+            include_bytes!("../../../packaging/icons/hp3770-app-256.png"),
+            None,
+        )
+        .ok(),
         // Closing asks first when scans are not saved (Message::CloseRequested).
         exit_on_close_request: false,
         #[cfg(target_os = "linux")]
