@@ -157,23 +157,29 @@ Finito: da qui in poi il terminale non serve più.
 3. Premi **Anteprima**: dopo pochi secondi vedi il vetro. La prima volta la lampada
    deve scaldarsi e ci vuole un po' di più.
 4. **Trascina sull'anteprima** per scegliere l'area da acquisire (se non scegli niente
-   acquisisce tutto il vetro). Con **Ritaglio automatico** l'app trova da sola le foto
+   acquisisce un foglio A4). Con **Ritaglio automatico** l'app trova da sola le foto
    appoggiate sul vetro, anche più di una.
-5. Premi **Scansiona**. Nel modo Documento ogni scansione aggiunge una pagina.
+5. Premi **Scansiona pagina 1** (in Foto **Scansiona foto**). Nel modo Documento ogni
+   scansione aggiunge una pagina.
 6. Nella scheda **Uscita** scegli il formato, poi premi il pulsante in basso a destra
-   (**Salva PDF…**, **Salva…**) e scegli dove salvare.
+   (**Salva PDF…**, **Salva JPEG…**) e scegli dove salvare.
 
 I **tasti dello scanner** funzionano anche con l'app aperta in secondo piano:
 
-| Tasto | Cosa fa (si cambia nelle Preferenze) |
-| --- | --- |
-| Scan (sinistro) | aggiunge una pagina |
-| Copy (centrale) | rifà l'ultima pagina, oppure stampa una fotocopia |
-| Instant Share (destro) | salva il documento e apre la cartella |
+| Tasto | In Documento | In Foto |
+| --- | --- | --- |
+| Scan (sinistro) | aggiunge una pagina | scansiona la foto |
+| Copy (centrale) | rifà l'ultima pagina | fotocopia: scansiona e stampa |
+| Instant Share (destro) | salva il documento e apre la cartella | apre la cartella |
+
+Cosa fa ogni tasto si cambia nelle **Preferenze**.
 
 **Per Lightroom o Photoshop** scegli in **Uscita** il formato **RAW · DNG**
-(Lightroom, Camera Raw) o **RAW · TIFF 16 bit**. Sono i dati dello scanner senza
+(Lightroom, Camera Raw) o **RAW · TIFF 16 bit lineare**. Sono i dati dello scanner senza
 ritocchi, alte luci comprese, da sviluppare nel programma di fotoritocco.
+
+Tutto il resto (regolazioni, editor delle scansioni, formati, tasti, preferenze, problemi
+frequenti) è spiegato nella **[guida d'uso](uso.md)**.
 
 ---
 
@@ -218,8 +224,8 @@ poi esci dalla sessione e rientra.
 
 **La fotocopia (tasto Copy) non stampa.**
 La stampa passa dal sistema di stampa (CUPS): la stampante deve essere configurata e
-impostata come predefinita. Prova con `lp -d` seguito dal nome della stampante, oppure
-configurala dal menu di Omarchy (**Super + Spazio**).
+impostata come predefinita, perché l'app stampa sempre su quella. Prova con `lp` seguito dal
+nome di un'immagine; la stampante si configura dal menu di Omarchy (**Super + Spazio**).
 
 **`cargo install` si ferma con un errore.**
 Di solito manca qualcosa dal Passo 1. Rifai il Passo 1, apri un terminale nuovo e

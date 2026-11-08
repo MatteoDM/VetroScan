@@ -18,6 +18,8 @@ Tutti i file sono nella pagina
 [Releases](https://github.com/MatteoDM/scanner/releases/latest), con nomi come
 `hp3770-v0.1.0-linux-x86_64.deb`. `SHA256SUMS.txt` ha le impronte per controllarli.
 
+Come si usa l'app, una volta installata: **[guida d'uso](uso.md)**.
+
 **Prima di tutto, su ogni sistema:** collega lo scanner alla corrente e, con il cavo USB,
 direttamente al computer (un hub va bene solo se ha il suo alimentatore). Un solo programma
 alla volta può usare lo scanner.
@@ -79,7 +81,8 @@ Cosa installano i pacchetti:
    Scrivi la password del computer (mentre la scrivi non compare niente) e conferma con
    **Invio**.
 3. Controlla (vedi [Controllare che funzioni](#controllare-che-funzioni-linux)).
-4. Apri l'app dal lanciatore (in Omarchy **Super + Spazio**, scrivi «HP Scanjet»).
+4. Apri l'app dal lanciatore delle applicazioni (in Omarchy **Super + Alt + Spazio**, scrivi
+   «HP Scanjet»).
 
 Se avevi installato dal codice con `cargo install` o il pacchetto AUR `hp3770-git`, toglili
 prima: `cargo uninstall hp3770-app hp3770-cli` oppure `sudo pacman -R hp3770-git`.

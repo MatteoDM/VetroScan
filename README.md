@@ -12,7 +12,8 @@ sulle catture USB del driver HP.
 > da 200 a 2400 dpi, anche a 16 bit per canale. Avvio, calibrazione e scansione sono
 > verificati byte per byte sulle catture del driver HP. Provato sullo scanner su Windows
 > (con il driver HP installato) e su Linux (Arch, Wayland). Mancano ancora il backend
-> SANE e l'adattatore per trasparenti; su macOS non è mai stato compilato.
+> SANE e l'adattatore per trasparenti; su macOS si compila e si pacchettizza a ogni versione,
+> ma non è ancora stato provato con lo scanner.
 
 ## Installazione
 
@@ -42,6 +43,13 @@ certificato a pagamento: Windows SmartScreen può dire *Windows ha protetto il P
 **Ulteriori informazioni → Esegui comunque**); macOS dice che non può verificare l'app: clic
 su **Fine**, poi *Impostazioni di Sistema → Privacy e sicurezza → Apri comunque*.
 
+## Usare l'app
+
+Come si usa l'app, per chi non è tecnico: modi Documento e Foto, anteprima e ritaglio
+automatico, regolazioni, editor delle scansioni, formati di uscita (RAW e 16 bit compresi),
+tasti dello scanner, preferenze, scorciatoie e problemi frequenti:
+**[docs/uso.md](docs/uso.md)**.
+
 Le novità di ogni versione sono in [CHANGELOG.md](CHANGELOG.md).
 
 ## Struttura
@@ -51,7 +59,7 @@ Le novità di ogni versione sono in [CHANGELOG.md](CHANGELOG.md).
 | [`hp3770-core`](crates/hp3770-core) | Protocollo USB dell'RTS8822 (richieste vendor, registri, EEPROM, DMA), identità del dispositivo, pulsanti, trait `Transport` indipendente dalla libreria USB |
 | [`hp3770-capture`](crates/hp3770-capture) | Lettore di catture USBPcap e strumento `hp3770-decode`, che trasforma una cattura in una sequenza leggibile di operazioni sul chip |
 | [`hp3770-usb`](crates/hp3770-usb) | Accesso USB: `nusb` (Linux, macOS, Windows con WinUSB) e `usbscan.sys` (Windows con il driver HP installato, nessun cambio di driver) |
-| [`hp3770-export`](crates/hp3770-export) | Salvataggio in PNG, TIFF (anche a 16 bit), DNG e PDF a più pagine |
+| [`hp3770-export`](crates/hp3770-export) | Salvataggio in PNG, JPEG, TIFF (anche a 16 bit e multipagina), WebP, AVIF, DNG, PDF a più pagine e ZIP |
 | [`hp3770-cli`](crates/hp3770-cli) | Comando `hp3770` |
 | [`hp3770-app`](crates/hp3770-app) | App desktop `hp3770-app` (iced): documenti e foto, anteprima, regolazioni, tasti dello scanner |
 
@@ -134,6 +142,7 @@ Per avere l'app nel menu delle applicazioni:
 ```sh
 cargo install --path crates/hp3770-app --locked     # in ~/.cargo/bin, che deve essere nel PATH
 install -Dm 644 packaging/linux/hp3770-app.desktop ~/.local/share/applications/hp3770-app.desktop
+install -Dm 644 packaging/linux/hp3770-app.svg ~/.local/share/icons/hicolor/scalable/apps/hp3770-app.svg
 ```
 
 L'app su Linux:

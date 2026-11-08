@@ -47,6 +47,8 @@ manca.
   - **Dimensioni**: in pixel, percentuale, centimetri o pollici, con i dpi e le proporzioni
     bloccabili, ricampionamento Lanczos; vale anche per i file a 16 bit e RAW.
 - Tema chiaro, scuro o di sistema; preferenze salvate.
+- **Guida d'uso** dell'app per chi non è tecnico, per Linux, Windows e macOS:
+  [docs/uso.md](docs/uso.md), collegata dal README e dalle guide di installazione.
 - Comando **`hp3770`**: `list`, `status`, `probe`, `buttons`, `init`, `lamp`, `park`,
   `scan`.
 - Linux: regola udev che lascia usare lo scanner senza root, voce nel menu delle
