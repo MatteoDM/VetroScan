@@ -16,6 +16,7 @@
 #![windows_subsystem = "windows"]
 
 mod histogram;
+mod prefs;
 mod viewer;
 mod worker;
 
@@ -230,6 +231,132 @@ impl Settings {
                 threshold: self.threshold,
             },
         }
+    }
+}
+
+// ------------------------------------------------------------ preferences
+
+impl Settings {
+    fn to_stored(self) -> prefs::StoredMode {
+        let a = self.adjust;
+        prefs::StoredMode {
+            dpi: self.dpi,
+            colour: match self.colour {
+                Colour::Rgb => "colore",
+                Colour::Grey => "grigio",
+                Colour::Lineart => "bn",
+            }
+            .into(),
+            threshold: self.threshold,
+            output: match self.output {
+                Output::Pdf => "pdf",
+                Output::TiffPages => "tiff-pagine",
+                Output::Image(ImageFormat::Png) => "png",
+                Output::Image(ImageFormat::Jpeg { .. }) => "jpeg",
+                Output::Image(ImageFormat::Tiff) => "tiff",
+                Output::Image(ImageFormat::WebP) => "webp",
+                Output::Image(ImageFormat::Avif { .. }) => "avif",
+                Output::Image(ImageFormat::Bmp) => "bmp",
+            }
+            .into(),
+            pdf_size: match self.pdf_size {
+                PdfSize::Fit => "scansione",
+                PdfSize::A4 => "a4",
+                PdfSize::Letter => "letter",
+            }
+            .into(),
+            auto_save: self.auto_save,
+            adjust: prefs::StoredAdjust {
+                temperature: a.temperature,
+                tint: a.tint,
+                black: a.black,
+                white: a.white,
+                gamma: a.gamma,
+                brightness: a.brightness,
+                contrast: a.contrast,
+                saturation: a.saturation,
+                sharpen: a.sharpen,
+            },
+        }
+    }
+
+    /// Settings from the stored form; what does not make sense for `kind`
+    /// falls back to the defaults.
+    fn from_stored(kind: Kind, m: &prefs::StoredMode) -> Self {
+        let base = match kind {
+            Kind::Document => Settings::document(),
+            Kind::Photo => Settings::photo(),
+        };
+        let colour = match m.colour.as_str() {
+            "grigio" => Colour::Grey,
+            "bn" => Colour::Lineart,
+            _ => Colour::Rgb,
+        };
+        let output = match m.output.as_str() {
+            "pdf" => Output::Pdf,
+            "tiff-pagine" => Output::TiffPages,
+            "png" => Output::Image(ImageFormat::Png),
+            "jpeg" => Output::Image(ImageFormat::Jpeg { quality: 92 }),
+            "tiff" => Output::Image(ImageFormat::Tiff),
+            "webp" => Output::Image(ImageFormat::WebP),
+            "avif" => Output::Image(ImageFormat::Avif { quality: 80 }),
+            _ => base.output,
+        };
+        let allowed = outputs(kind, colour);
+        let output = allowed
+            .iter()
+            .copied()
+            .find(|o| {
+                std::mem::discriminant(o) == std::mem::discriminant(&output)
+                    && o.extension() == output.extension()
+            })
+            .unwrap_or(allowed[0]);
+        let a = m.adjust;
+        Self {
+            dpi: if RESOLUTIONS.contains(&m.dpi) {
+                m.dpi
+            } else {
+                base.dpi
+            },
+            colour,
+            threshold: m.threshold,
+            adjust: Adjustments {
+                temperature: a.temperature,
+                tint: a.tint,
+                black: a.black,
+                white: a.white,
+                gamma: a.gamma,
+                brightness: a.brightness,
+                contrast: a.contrast,
+                saturation: a.saturation,
+                sharpen: a.sharpen,
+            },
+            output,
+            pdf_size: match m.pdf_size.as_str() {
+                "a4" => PdfSize::A4,
+                "letter" => PdfSize::Letter,
+                _ => PdfSize::Fit,
+            },
+            auto_save: m.auto_save,
+        }
+    }
+}
+
+/// Which way of working the application opens with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StartMode {
+    Last,
+    Document,
+    Photo,
+}
+
+impl std::fmt::Display for StartMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Last => "L'ultimo usato",
+            Self::Document => "Documento",
+            Self::Photo => "Foto",
+        })
     }
 }
 
@@ -506,6 +633,7 @@ enum Pane {
     Scan,
     Adjust,
     Output,
+    Prefs,
 }
 
 /// Which image the viewer shows.
@@ -524,6 +652,13 @@ enum Message {
     Kind(Kind),
     Tab(Tab),
     Pane(Pane),
+    StartMode(StartMode),
+    ChooseFolder,
+    Folder(Option<PathBuf>),
+    DefaultFolder,
+    DocumentName(String),
+    PhotoName(String),
+    FactoryReset,
     View(View),
     Fit,
     ActualSize,
@@ -573,6 +708,13 @@ struct App {
     photo: Settings,
     tab: Tab,
     pane: Pane,
+    start_mode: StartMode,
+    /// Where scans are saved (None: Pictures\Scansioni).
+    custom_folder: Option<PathBuf>,
+    document_name: String,
+    photo_name: String,
+    /// What was last written to the preferences file.
+    saved: prefs::Prefs,
     /// The raw preview of the glass, its adjusted image and picture.
     preview: Option<(Raw, Image, Picture)>,
     preview_view: View,
@@ -600,17 +742,39 @@ struct App {
 
 impl App {
     fn new() -> (Self, Task<Message>) {
+        let stored = prefs::Prefs::load();
+        let start_mode = match stored.start_mode.as_str() {
+            "documento" => StartMode::Document,
+            "foto" => StartMode::Photo,
+            _ => StartMode::Last,
+        };
+        let kind = match (start_mode, stored.last_mode.as_str()) {
+            (StartMode::Document, _) => Kind::Document,
+            (StartMode::Photo, _) => Kind::Photo,
+            (StartMode::Last, "foto") => Kind::Photo,
+            (StartMode::Last, _) => Kind::Document,
+        };
+        let theme = match stored.theme.as_str() {
+            "chiaro" => ThemeChoice::Light,
+            "scuro" => ThemeChoice::Dark,
+            _ => ThemeChoice::System,
+        };
         (
             Self {
                 worker: None,
                 status: None,
                 system_dark: false,
-                theme: ThemeChoice::System,
-                kind: Kind::Document,
-                document: Settings::document(),
-                photo: Settings::photo(),
+                theme,
+                kind,
+                document: Settings::from_stored(Kind::Document, &stored.document),
+                photo: Settings::from_stored(Kind::Photo, &stored.photo),
                 tab: Tab::Preview,
                 pane: Pane::Scan,
+                start_mode,
+                custom_folder: (!stored.folder.is_empty()).then(|| PathBuf::from(&stored.folder)),
+                document_name: stored.document_name.clone(),
+                photo_name: stored.photo_name.clone(),
+                saved: stored.clone(),
                 preview: None,
                 preview_view: View::default(),
                 result_view: View::default(),
@@ -841,12 +1005,64 @@ impl App {
         }
     }
 
-    /// Default folder of saved scans.
-    fn folder() -> PathBuf {
+    /// The usual folder of saved scans: Pictures\Scansioni.
+    fn default_folder() -> PathBuf {
         dirs::picture_dir()
             .or_else(dirs::document_dir)
             .unwrap_or_else(|| PathBuf::from("."))
             .join("Scansioni")
+    }
+
+    /// Where scans are saved.
+    fn folder(&self) -> PathBuf {
+        self.custom_folder
+            .clone()
+            .unwrap_or_else(Self::default_folder)
+    }
+
+    /// The start of file names in the current way of working.
+    fn name(&self) -> &str {
+        let name = match self.kind {
+            Kind::Document => &self.document_name,
+            Kind::Photo => &self.photo_name,
+        };
+        if name.trim().is_empty() {
+            "scansione"
+        } else {
+            name.trim()
+        }
+    }
+
+    /// The preferences as they are now.
+    fn prefs(&self) -> prefs::Prefs {
+        prefs::Prefs {
+            start_mode: match self.start_mode {
+                StartMode::Last => "ultimo",
+                StartMode::Document => "documento",
+                StartMode::Photo => "foto",
+            }
+            .into(),
+            last_mode: match self.kind {
+                Kind::Document => "documento",
+                Kind::Photo => "foto",
+            }
+            .into(),
+            theme: match self.theme {
+                ThemeChoice::System => "sistema",
+                ThemeChoice::Light => "chiaro",
+                ThemeChoice::Dark => "scuro",
+            }
+            .into(),
+            folder: self
+                .custom_folder
+                .as_ref()
+                .map(|f| f.display().to_string())
+                .unwrap_or_default(),
+            document_name: self.document_name.clone(),
+            photo_name: self.photo_name.clone(),
+            document: self.document.to_stored(),
+            photo: self.photo.to_stored(),
+        }
     }
 
     /// A file name with the date and time.
@@ -896,6 +1112,13 @@ impl App {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         let task = self.handle(message);
+        let now = self.prefs();
+        if now != self.saved {
+            if let Err(e) = now.save() {
+                self.note = format!("Impostazioni non salvate: {e}");
+            }
+            self.saved = now;
+        }
         Task::batch([task, self.schedule()])
     }
 
@@ -949,6 +1172,37 @@ impl App {
             }
             Message::Tab(tab) => self.tab = tab,
             Message::Pane(pane) => self.pane = pane,
+            Message::StartMode(mode) => self.start_mode = mode,
+            Message::ChooseFolder => {
+                let start = self.folder();
+                return Task::perform(
+                    async move {
+                        rfd::AsyncFileDialog::new()
+                            .set_directory(start)
+                            .pick_folder()
+                            .await
+                            .map(|f| f.path().to_path_buf())
+                    },
+                    Message::Folder,
+                );
+            }
+            Message::Folder(Some(folder)) => self.custom_folder = Some(folder),
+            Message::Folder(None) => {}
+            Message::DefaultFolder => self.custom_folder = None,
+            Message::DocumentName(name) => self.document_name = name,
+            Message::PhotoName(name) => self.photo_name = name,
+            Message::FactoryReset => {
+                let d = prefs::Prefs::default();
+                self.document = Settings::document();
+                self.photo = Settings::photo();
+                self.start_mode = StartMode::Last;
+                self.custom_folder = None;
+                self.document_name = d.document_name;
+                self.photo_name = d.photo_name;
+                self.theme = ThemeChoice::System;
+                self.redraw_preview();
+                self.note = "Impostazioni di fabbrica ripristinate".into();
+            }
             Message::View(view) => *self.current_view() = view,
             Message::Fit => *self.current_view() = View::default(),
             Message::ActualSize => {
@@ -1038,17 +1292,15 @@ impl App {
                 let j = &mut s.adjust;
                 match group {
                     Group::Tone => {
+                        j.temperature = d.temperature;
+                        j.tint = d.tint;
                         j.black = d.black;
                         j.white = d.white;
                         j.gamma = d.gamma;
                         j.brightness = d.brightness;
                         j.contrast = d.contrast;
                     }
-                    Group::Colour => {
-                        j.temperature = d.temperature;
-                        j.tint = d.tint;
-                        j.saturation = d.saturation;
-                    }
+                    Group::Colour => j.saturation = d.saturation,
                     Group::Detail => j.sharpen = d.sharpen,
                     Group::Lineart => s.threshold = convert::DEFAULT_THRESHOLD,
                 }
@@ -1081,13 +1333,13 @@ impl App {
                 let ext = output.extension();
                 let (prefix, filter) = match (self.kind, output) {
                     (Kind::Document, Output::Image(_)) if self.pages.len() > 1 => {
-                        ("pagina", "Un file per pagina")
+                        (self.name(), "Un file per pagina")
                     }
-                    (Kind::Document, _) => ("documento", "Documento"),
-                    (Kind::Photo, _) => ("foto", "Immagine"),
+                    (Kind::Document, _) => (self.name(), "Documento"),
+                    (Kind::Photo, _) => (self.name(), "Immagine"),
                 };
                 let file = Self::stamped(prefix, ext);
-                let folder = Self::folder();
+                let folder = self.folder();
                 let _ = std::fs::create_dir_all(&folder);
                 return Task::perform(
                     async move {
@@ -1263,10 +1515,10 @@ impl App {
                         self.current = Some(0);
                         self.note = format!("Foto acquisita · {w} × {h} pixel a {dpi} dpi");
                         if self.photo.auto_save {
-                            let folder = Self::folder();
+                            let folder = self.folder();
                             let _ = std::fs::create_dir_all(&folder);
-                            let path =
-                                folder.join(Self::stamped("foto", self.photo.output.extension()));
+                            let path = folder
+                                .join(Self::stamped(self.name(), self.photo.output.extension()));
                             self.note = match self.write(&path) {
                                 Ok(_) => {
                                     notify("Foto salvata", &path.display().to_string(), false);
@@ -1320,10 +1572,10 @@ impl App {
                     );
                     return;
                 }
-                let folder = Self::folder();
+                let folder = self.folder();
                 let _ = std::fs::create_dir_all(&folder);
                 let path =
-                    folder.join(Self::stamped("documento", self.document.output.extension()));
+                    folder.join(Self::stamped(self.name(), self.document.output.extension()));
                 match self.write(&path) {
                     Ok(what) => {
                         self.note = format!("Salvato: {what}");
@@ -1336,7 +1588,7 @@ impl App {
                     }
                 }
             }
-            (Kind::Photo, Button::InstantShare) => open_folder(&Self::folder()),
+            (Kind::Photo, Button::InstantShare) => open_folder(&self.folder()),
         }
     }
 
@@ -1796,12 +2048,14 @@ impl App {
             tab("Scansione", Pane::Scan),
             tab("Regola", Pane::Adjust),
             tab("Uscita", Pane::Output),
+            tab("Preferenze", Pane::Prefs),
         ]
         .spacing(2);
         let content = match self.pane {
             Pane::Scan => self.scan_pane(),
             Pane::Adjust => self.adjust_pane(),
             Pane::Output => self.output_pane(),
+            Pane::Prefs => self.prefs_pane(),
         };
         let footer = self.footer();
         container(
@@ -1995,6 +2249,72 @@ impl App {
         .into()
     }
 
+    fn prefs_pane(&self) -> Element<'_, Message> {
+        let path = prefs::Prefs::path()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        column![
+            heading("All'avvio"),
+            labelled(
+                "Modo",
+                pick_list(
+                    [StartMode::Last, StartMode::Document, StartMode::Photo],
+                    Some(self.start_mode),
+                    Message::StartMode
+                )
+                .width(Length::Fill)
+                .into()
+            ),
+            text(
+                "Risoluzione, colore, formato, pagina PDF e regolazioni di ogni modo \
+                 restano come li lasci: li ritrovi alla prossima apertura."
+            )
+            .size(12),
+            heading("Cartella dei file"),
+            text(self.folder().display().to_string()).size(12),
+            row![
+                button(text("Scegli…").size(13))
+                    .style(button::secondary)
+                    .on_press(Message::ChooseFolder),
+                button(text("Immagini\\Scansioni").size(13))
+                    .style(button::text)
+                    .on_press_maybe(
+                        self.custom_folder
+                            .is_some()
+                            .then_some(Message::DefaultFolder)
+                    ),
+            ]
+            .spacing(8),
+            heading("Nomi dei file"),
+            labelled(
+                "Documenti",
+                iced::widget::text_input("documento", &self.document_name)
+                    .on_input(Message::DocumentName)
+                    .size(13)
+                    .into()
+            ),
+            labelled(
+                "Foto",
+                iced::widget::text_input("foto", &self.photo_name)
+                    .on_input(Message::PhotoName)
+                    .size(13)
+                    .into()
+            ),
+            text(format!(
+                "Esempio: {}",
+                Self::stamped(self.name(), self.settings().output.extension())
+            ))
+            .size(12),
+            heading("Impostazioni"),
+            text(format!("Salvate in {path}")).size(11),
+            button(text("Ripristina impostazioni di fabbrica").size(13))
+                .style(button::danger)
+                .on_press(Message::FactoryReset),
+        ]
+        .spacing(10)
+        .into()
+    }
+
     fn output_pane(&self) -> Element<'_, Message> {
         let s = self.active();
         let options = outputs(self.kind, s.colour);
@@ -2021,7 +2341,7 @@ impl App {
         }
         pane = pane
             .push(heading("Cartella"))
-            .push(text(Self::folder().display().to_string()).size(12));
+            .push(text(self.folder().display().to_string()).size(12));
         if self.kind == Kind::Photo {
             pane = pane.push(
                 checkbox(self.settings().auto_save)

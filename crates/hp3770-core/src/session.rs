@@ -12,7 +12,7 @@ use crate::arrange;
 use crate::convert;
 use crate::error::{Error, Result};
 use crate::geometry::{self, Area};
-use crate::motor::park_registers;
+use crate::motor::{park_registers, Direction, MotorPosition};
 use crate::profile::Profile;
 use crate::scan::LAMP_WARMUP;
 use crate::setup::ArrangeLine;
@@ -47,6 +47,9 @@ pub struct Request {
     pub adjust: Adjustments,
     /// Keep the chip's linear samples (no tone curve).
     pub linear: bool,
+    /// Bring the carriage near the area at high speed before a scan at
+    /// 600 dpi and up (see [`fast_travel`]).
+    pub fast_travel: bool,
 }
 
 impl Request {
@@ -58,6 +61,7 @@ impl Request {
             mode,
             adjust: Adjustments::default(),
             linear: false,
+            fast_travel: true,
         }
     }
 }
@@ -210,6 +214,27 @@ pub struct Report {
     pub white: [Vec<u16>; 3],
 }
 
+/// The carriage move that brings a scan at `resolution_y` starting at line
+/// `top` (from the home position) near its area, and the top of the scan
+/// after it: `(full motor steps, new top)` (`Head_Relocate` in hp3900's
+/// `Scan_Start`).
+///
+/// At 600 dpi and up the carriage would travel to the area at scan speed
+/// (about 7.5 s/cm at 2400 dpi). hp3900 moves it first at the speed of
+/// the park, leaving a tenth of an inch of travel (`resolution_y / 10`
+/// lines) for the scan to get up to speed. Not in the captures, whose
+/// high-resolution scans start at the top of the glass.
+pub fn fast_travel(profile: &Profile, resolution_y: u16, top: u32) -> Option<(u16, u32)> {
+    let lead = u32::from(resolution_y) / 10;
+    if resolution_y < 600 || top <= lead * 2 {
+        return None;
+    }
+    let lines = top - lead;
+    let steps =
+        u64::from(lines) * u64::from(profile.platform.motor_resolution) / u64::from(resolution_y);
+    Some((u16::try_from(steps).ok()?, top - lines))
+}
+
 /// Makes the scan `request`.
 ///
 /// `progress` is called at every stage and after every piece of image data;
@@ -221,7 +246,7 @@ pub fn scan<T: Transport>(
     request: &Request,
     progress: &mut dyn FnMut(Stage) -> bool,
 ) -> Result<(Image, Report)> {
-    let (params, hw) = geometry::scan_window(request.dpi, request.area)?;
+    let (mut params, hw) = geometry::scan_window(request.dpi, request.area)?;
     let gamma = geometry::identity_gamma();
     if !progress(Stage::Starting) {
         return Err(Error::Cancelled("start"));
@@ -255,6 +280,20 @@ pub fn scan<T: Transport>(
         }),
     };
     let tables = calibration.tables(Some(&gamma));
+    if request.fast_travel {
+        if let Some((steps, top)) = fast_travel(profile, params.resolution_y, params.top) {
+            chip.motor_move(
+                &park_registers(&init),
+                &profile.park,
+                &MotorPosition {
+                    direction: Direction::Forward,
+                    e801_bit2: false,
+                    steps,
+                },
+            )?;
+            params.top = top;
+        }
+    }
     let mut job = chip.start_scan(
         &init,
         profile,

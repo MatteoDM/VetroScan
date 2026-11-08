@@ -113,6 +113,10 @@ enum Command {
         /// driver applies on the host (white at 196, gamma 2.2).
         #[arg(long)]
         linear: bool,
+        /// Let the carriage travel to the area at scan speed (no fast
+        /// move first; for comparisons).
+        #[arg(long)]
+        no_fast_travel: bool,
         /// Sharpening as the HP driver's; 0 for none.
         #[arg(long, default_value_t = hp3770_core::convert::HP_SHARPEN)]
         sharpen: f32,
@@ -175,9 +179,16 @@ fn main() -> ExitCode {
             threshold,
             linear,
             sharpen,
+            no_fast_travel,
         } => open(cli.backend).and_then(|s| {
             let area = hp3770_core::geometry::Area::from_mm(dpi, left, top, width, height);
-            scan(s, &output, dpi, area, (mode, threshold, linear, sharpen))
+            scan(
+                s,
+                &output,
+                dpi,
+                area,
+                (mode, threshold, linear, sharpen, !no_fast_travel),
+            )
         }),
         Command::Buttons { count, method, raw } => {
             open(cli.backend).and_then(|s| buttons(s, count, method, raw))
@@ -327,11 +338,12 @@ fn scan(
     output: &std::path::Path,
     dpi: u16,
     area: hp3770_core::geometry::Area,
-    (mode, threshold, linear, sharpen): (Mode, u8, bool, f32),
+    (mode, threshold, linear, sharpen, fast_travel): (Mode, u8, bool, f32, bool),
 ) -> CliResult {
     use hp3770_core::session::{self, Request, Stage};
     let profile = &hp3770_core::profile::HP3770;
     let request = Request {
+        fast_travel,
         adjust: hp3770_core::adjust::Adjustments {
             sharpen,
             ..Default::default()
