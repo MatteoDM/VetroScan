@@ -246,7 +246,7 @@ enum ThemeChoice {
 impl std::fmt::Display for ThemeChoice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Self::System => "Tema di sistema",
+            Self::System => "Sistema",
             Self::Light => "Chiaro",
             Self::Dark => "Scuro",
         })
