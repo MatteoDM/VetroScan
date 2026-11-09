@@ -742,7 +742,8 @@ The scanner needs `esfw54.bin` sent at every power-on, before anything else.
      named by `VETROSCAN_ESFW54` (on Matteo's PC `C:\Windows\System32\esfw54.bin`), checks its
      SHA-256 (`B01384A9…EF0F9`, the Windows driver's copy) and includes it
      (`include_bytes!`); the bytes are never changed;
-  2. still **never in the git repository**: the build takes it from the disk of whoever builds,
+  2. **never in the git repository while it is public** (until step 4): the build takes it from
+     the disk of whoever builds,
      so no clone and no public CI build carries the copy under Epson's EULA. A build without it
      looks for the file at run time (a path in the Preferences, `System32\esfw54.bin`,
      `/usr/lib/firmware/epson/esfw54.bin` of `iscan-firmware`), with the same SHA-256 check;
@@ -754,6 +755,20 @@ The scanner needs `esfw54.bin` sent at every power-on, before anything else.
      licences, and a note of ours in the licence allowing that blob inside the GPL program
      (Matteo is the copyright holder). Builds kept by Matteo alone need none of this: the
      licences bind who distributes.
+  4. **Decided on 10 November 2026: the repository becomes private, then the firmware goes in
+     it.** Once `MatteoDM/scanner` is private (not before: today it is public), the original
+     `esfw54.bin` of Epson's Windows driver (SHA-256 `B01384A9…EF0F9`) is committed in the
+     repository, versioned, and embedded in the executable of **every** build, CI's included:
+     - first make the repository private on GitHub and check it (`gh repo view --json
+       visibility`); the releases go private with it;
+     - put the file in the crate (`crates/epson-gt-x750/firmware/esfw54.bin`), take
+       `esfw54.bin` / `ESFW54.BIN` out of `.gitignore`;
+     - `build.rs` embeds that copy by default (same SHA-256 check; `VETROSCAN_ESFW54` stays only
+       to choose another copy, the AVASYS one for a try); the run-time search stays for builds
+       without it;
+     - this section, "Where it stands" and the CHANGELOG say so.
+     The Windows copy's EULA forbids giving it to third parties: the private releases are for
+     Matteo; packages for anyone else still need the AVASYS copy (point 3).
 - **The captures are not reverse engineering of the firmware**: the file is never disassembled
   nor examined, only sent; what is studied is what passes on the USB cable while Epson's own
   driver is used normally, as for the HP 3770. In the EU the lawful user of a program may
@@ -914,6 +929,10 @@ lists every place tried, and `epson_firmware` in `impostazioni.json`). Showing t
 scanner that needs a firmware is a new field of `Capabilities` (the capabilities rule), better
 designed once it is known how the scanner behaves around the upload; on Windows the firmware
 is found in System32 anyway.
+
+**When the repository becomes private** (decided on 10 November 2026, any time, scanner or
+not): the firmware into the repository and into every executable, point 4 of "What we do"
+above.
 
 ### When it arrives, in order
 
