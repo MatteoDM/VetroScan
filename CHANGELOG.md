@@ -50,6 +50,13 @@ GitHub; here they are in English.
   any scanner that has them; **The model's** goes back.
 - `hp3770 stripes FILE.png` measures the stripes on a scan of something uniform, without the
   scanner.
+- **First steps for the Epson Perfection 4490 Photo** (experimental, written before the
+  scanner arrived: **it does not scan yet**). VetroScan finds it on USB (`04b8:0119`, next to
+  Epson's driver on Windows) and reads its state; it sends nothing that could move the
+  carriage. Its firmware (`esfw54.bin`, from Epson's driver) is not part of VetroScan: it is
+  taken from where Epson's drivers install it, and for now sent only on request
+  (`VETROSCAN_EPSON_UPLOAD=1`). The Linux packages carry a udev rule for it,
+  `70-epson-4490.rules`.
 
 ### Changed
 - The scanner contract: a scan says where it comes from, the glass or a film in the adapter,
