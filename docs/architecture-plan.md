@@ -873,8 +873,9 @@ pushed): the crate **`crates/epson-gt-x750`**, in the app's `Registry` after the
   same place on every system; then System32 on Windows, the `iscan` places on Linux; on macOS
   no driver place is known), with the same check. `esfw54.bin` is in `.gitignore`.
 - Tried on: Windows (tests, clippy, the command); Linux in WSL (tests, clippy, the command);
-  **macOS only compiled** (clippy for `aarch64-apple-darwin` from Windows, not linked nor run):
-  the CI's macOS job is the first real run there.
+  macOS in the CI only (run 42716373743 on `epson-4490-milestone1`, 10 November 2026: the
+  tests, the 4490's e2e included, and the macOS packages built; no Mac here). With the
+  scanner, so far on no system.
 - Provisional `Capabilities`: glass 8.5 × 11.7 in, 8/16 bits, colour and grey, the four buttons,
   no lamp, no adapter.
 - 24 unit tests with a mock transport (the upload's exact bytes, any answer but `06` refused, no
