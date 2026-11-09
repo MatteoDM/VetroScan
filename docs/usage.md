@@ -54,7 +54,7 @@ The rest of this guide is about doing these same things better.
 | Where | What is there |
 |---|---|
 | **At the top** | the app's name and version, the **Document** and **Photo** modes, the scanner's state, the **Preview** and **Scan…** buttons, the choice of theme (**System**, **Light**, **Dark**) |
-| **On the left** | the column of the **pages** (always in Document, in Photo when there are several photos) |
+| **On the left** | the column of the **pages** (always in Document, in Photo and Film from the first photo) |
 | **In the middle** | the **viewer**: the preview of the glass or the scan made |
 | **On the right** | four tabs: **Scan**, **Adjust**, **Output**, **Preferences**; below them, the **Save …** and **Open the folder** buttons |
 | **At the bottom** | the status bar: the scanner in use and its connection, resolution and colour, size of the image in pixels, the app's last message |
@@ -93,8 +93,10 @@ choice of depth, and the resolutions and the glass are the scanner's own.
 ## Document and Photo
 
 The app has two ways of working, chosen at the top. Each remembers its own settings
-(resolution, colour, format, adjustments, scanner buttons): going from one to the other you
-find again what you had left. Closing and opening the app again brings back resolution,
+(resolution, colour, format, adjustments, scanner buttons) and keeps its own work: the pages
+of the document, the photos of the last scan. Going from one to the other throws nothing away
+and changes nothing: you find again what you had left, as you had left it (the preview of the
+glass too, which the two share). Closing and opening the app again brings back resolution,
 colour, format and buttons; the **adjustments** instead start from zero, so that a new scan
 does not inherit by mistake the colours of the session before. A look to reuse is saved as a
 [preset](#the-adjust-tab).
@@ -102,7 +104,7 @@ does not inherit by mistake the colours of the session before. A look to reuse i
 | | **Document** | **Photo** |
 |---|---|---|
 | For | letters, contracts, receipts, magazines, books | printed photos, postcards, drawings |
-| Each scan | **adds a page** to the document | **replaces** the previous photo |
+| Each scan | **adds a page** to the document | **replaces** the photos of the scan before |
 | Saved as | a single PDF or TIFF, or one image per page | one image per photo, also RAW |
 | By default | 300 dpi, colour, 8 bits, PDF, automatic crop off | 600 dpi, colour, 16 bits, JPEG, automatic crop on |
 
@@ -113,14 +115,18 @@ VetroScan scans **negatives** with it (slides not yet):
 1. put the strip in the holder and the holder on the glass, as the HP manual shows, and plug
    the adapter's cable in at the back of the scanner;
 2. choose **Film** (with the cable unplugged a message says so);
-3. **Preview**: it covers only the adapter's area and shows the negatives already turned into
-   positives, with their natural colours; each frame found is marked and becomes its own
-   image, as the photos in Photo;
-4. **Scan**: one image for each frame.
+3. **Scan photo**, straight away: Film has no preview (the adapter's area is small and full
+   of frames, and a preview would only add a lamp warm-up). The scan covers the adapter's
+   area, turns the negatives into positives with their natural colours and, with the
+   **automatic crop** on (the default), finds the frames in it: one image for each frame, as
+   the photos in Photo. **Redo** on a frame scans that frame only.
+
+With the automatic crop off you get the whole strip as one image; **Split the frames**, on the
+viewer, cuts it into one image per frame afterwards, without scanning again. To scan only a
+part of the adapter's area, type it in millimetres in the **Scan** tab.
 
 Film keeps its own settings: by default 1200 dpi, colour, 16 bits, JPEG; the resolution is
-600 or 1200 dpi only (lower ones would make the motor stall), and the preview too is made at
-600 dpi. Every scan with the
+600 or 1200 dpi only (lower ones would make the motor stall). Every scan with the
 adapter first switches its light on and waits about 30 seconds for it to warm up, then
 calibrates on the empty slot at the top of the holder: a strip at 1200 dpi takes about two
 minutes. 1200 dpi gives a 35 mm frame about 2 megapixels, fine for the screen and 10 × 15
@@ -128,10 +134,11 @@ prints; the scanner has no infrared, so no automatic dust removal: blow on the f
 
 **Take care:**
 
-- In **Photo** a new scan takes the place of the one you see. Save first, or tick **Save each
-  photo to the folder by itself** in the **Output** tab.
-- Going from **Document** to **Photo** only the last page of the document stays: save the
-  document before changing mode.
+- In **Photo** and **Film** a new scan takes the place of the photos you see (the app asks
+  first if they are not saved). Save first, or tick **Save each photo to the folder by
+  itself** in the **Output** tab.
+- Film keeps its own work too: the frames scanned stay there to see and save even with the
+  adapter's cable unplugged, or with a scanner without the adapter.
 
 ---
 
@@ -339,7 +346,7 @@ only. The last 100 steps are kept.
 
 - A change made with **This page only** is undone on that page, even if meanwhile you look at
   another one.
-- Changing between Document and Photo the history starts again from zero.
+- Each mode has its own history: going back to a mode, Ctrl+Z goes on from where it was.
 - Ctrl+Z does **not** bring back resolution, depth and format chosen by hand, nor pages
   deleted, moved or replaced.
 
@@ -829,13 +836,17 @@ but at the next start you will find the old settings.
 Delete cannot be undone (that is why, if the page is not saved, the app asks first): put the
 original back on the glass and acquire it again, then drag it to its place.
 
-### The app asks "Switch to Photo?", "Close without saving?"…
+### The app asks "Make a new scan?", "Close without saving?"…
 
-Before an action that would throw away scans not saved yet, the app asks: going from Document
-to Photo (in Photo only the last scan stays), **New document**, a new scan in Photo (it
-replaces the previous photo), **Delete** and closing the window. You can answer **Cancel** (or
-Esc: nothing changes), **Save…** (saves, then does the action) or confirm the action. After a
-save, automatic too, the app does not ask again until something changes.
+Before an action that would throw away scans not saved yet, the app asks: **New document**, a
+new scan in Photo or Film (it replaces the photos there), **Delete** and closing the window.
+Changing mode never asks: nothing is thrown away. You can answer **Cancel** (or Esc: nothing
+changes), **Save…** (saves, then does the action) or confirm the action. After a save,
+automatic too, the app does not ask again until something changes.
+
+Closing, the question counts the work of every mode (*Still to save: 3 pages in Document, 2
+photos in Photo*). **Save…** saves the mode shown, or the first with work not saved, then asks
+again for the next one; the window closes when nothing is left to save.
 
 ### Starting from scratch
 

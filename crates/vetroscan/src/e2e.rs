@@ -217,25 +217,50 @@ fn pages_add_up_in_a_document() {
 // ------------------------------------- questions before losing scans
 
 #[test]
-fn photo_mode_asks_before_dropping_unsaved_pages_and_annulla_keeps_them() {
+fn each_way_of_working_keeps_its_own_pages() {
     let mut ui = document(3);
+    let pages = scans(&ui);
+    // Foto: nothing asked, nothing of the document there.
     ui.click("Foto");
-    assert_eq!(ui.question(), Some("Passare a Foto?"));
-    assert!(ui.shows(
-        "In Foto resta solo l'ultima scansione. \
-         Le altre 2 pagine del documento non sono salvate e andranno perse."
-    ));
-    assert_eq!(ui.app.kind, Kind::Document);
-    ui.click("Annulla");
     assert_eq!(ui.question(), None);
-    assert_eq!(ui.app.kind, Kind::Document);
-    assert_eq!(ui.app.pages.len(), 3);
+    assert_eq!(ui.app.kind, Kind::Photo);
+    assert!(ui.app.pages.is_empty() && !ui.app.unsaved);
+    ui.click("Anteprima");
+    ui.click("Scansiona 3 foto");
+    let photos = scans(&ui);
+    assert_eq!(photos.len(), 3);
+    // And back, as many times as wanted: each finds its own as it was.
+    for _ in 0..2 {
+        ui.click("Documento");
+        assert_eq!(scans(&ui), pages);
+        assert!(ui.app.unsaved);
+        assert!(ui.shows("Scansiona pagina 4"));
+        ui.click("Foto");
+        assert_eq!(scans(&ui), photos);
+        assert!(ui.app.unsaved);
+    }
+}
+
+#[test]
+fn photos_look_the_same_after_going_to_document_and_back() {
+    use crate::Field;
+    let mut ui = Ui::new();
+    ui.send(Message::Kind(Kind::Photo));
+    ui.send(Message::Adjust(Field::Temperature, 40.0));
+    ui.scan(1);
+    ui.send(Message::Kind(Kind::Document));
+    ui.send(Message::Kind(Kind::Photo));
+    let shared = *ui.app.settings();
+    assert_eq!(ui.app.pages[0].effective(&shared).adjust.temperature, 40.0);
+    // Ctrl+Z still takes back what was done in Foto.
+    ui.send(Message::Undo);
+    assert_eq!(ui.app.settings().adjust.temperature, 0.0);
 }
 
 #[test]
 fn escape_answers_no() {
     let mut ui = document(2);
-    ui.click("Foto");
+    ui.send(Message::NewDocument);
     assert!(ui.question().is_some());
     ui.key(iced::keyboard::key::Named::Enter);
     assert!(ui.question().is_some(), "Enter must not throw pages away");
@@ -245,21 +270,12 @@ fn escape_answers_no() {
 }
 
 #[test]
-fn going_on_to_photo_keeps_the_last_page() {
-    let mut ui = document(3);
-    ui.click("Foto");
-    ui.click("Passa a Foto");
-    assert_eq!(ui.app.kind, Kind::Photo);
-    assert_eq!(ui.app.pages.len(), 1);
-}
-
-#[test]
 fn salva_in_the_question_saves_then_goes_on() {
     let mut ui = document(2);
-    ui.click("Foto");
+    ui.send(Message::NewDocument);
     ui.click("Salva…");
     assert_eq!(ui.saved().len(), 1, "{:?}", ui.saved());
-    assert_eq!(ui.app.kind, Kind::Photo);
+    assert!(ui.app.pages.is_empty(), "the new document");
     assert!(!ui.app.unsaved);
 }
 
@@ -267,10 +283,9 @@ fn salva_in_the_question_saves_then_goes_on() {
 fn a_save_dialog_cancelled_changes_nothing() {
     let mut ui = document(2);
     testing::cancel_save_dialog(true);
-    ui.click("Foto");
+    ui.send(Message::NewDocument);
     ui.click("Salva…");
     assert!(ui.saved().is_empty());
-    assert_eq!(ui.app.kind, Kind::Document);
     assert_eq!(ui.app.pages.len(), 2);
     assert!(ui.app.unsaved);
 }
@@ -280,9 +295,9 @@ fn saved_pages_are_not_asked_about() {
     let mut ui = document(2);
     ui.send(Message::Save);
     assert!(!ui.app.unsaved);
-    ui.click("Foto");
+    ui.send(Message::NewDocument);
     assert_eq!(ui.question(), None);
-    assert_eq!(ui.app.kind, Kind::Photo);
+    assert!(ui.app.pages.is_empty());
 }
 
 #[test]
@@ -291,7 +306,7 @@ fn a_change_after_saving_is_asked_about_again() {
     ui.send(Message::Save);
     ui.send(Message::PageRotate(0, true));
     assert!(ui.app.unsaved);
-    ui.click("Foto");
+    ui.send(Message::NewDocument);
     assert!(ui.question().is_some());
 }
 
@@ -388,6 +403,32 @@ fn closing_with_unsaved_pages_asks_and_closes_on_yes() {
     assert_eq!(ui.question(), Some("Chiudere senza salvare?"));
     assert!(!ui.closed);
     ui.click("Chiudi senza salvare");
+    assert!(ui.closed);
+}
+
+#[test]
+fn closing_asks_about_the_work_of_every_way_of_working_and_saves_each() {
+    let mut ui = document(1);
+    ui.send(Message::Kind(Kind::Photo));
+    ui.scan(1);
+    ui.send(Message::CloseRequested(iced::window::Id::unique()));
+    assert_eq!(ui.question(), Some("Chiudere senza salvare?"));
+    assert!(ui.shows(
+        "Ancora da salvare: 1 pagina in Documento, 1 foto in Foto. \
+         Chiudendo senza salvare, il lavoro va perso."
+    ));
+    // "Salva…": the photo shown, then the question again for the document.
+    ui.click("Salva…");
+    assert_eq!(ui.saved().len(), 1, "{:?}", ui.saved());
+    assert!(!ui.closed);
+    assert!(ui.shows(
+        "Ancora da salvare: 1 pagina in Documento. \
+         Chiudendo senza salvare, il lavoro va perso."
+    ));
+    // Saved too, from Documento: nothing left, the window closes.
+    ui.click("Salva…");
+    assert_eq!(ui.app.kind, Kind::Document);
+    assert_eq!(ui.saved().len(), 2, "{:?}", ui.saved());
     assert!(ui.closed);
 }
 
@@ -1370,6 +1411,39 @@ fn films_need_the_adapter_and_its_cable() {
 }
 
 #[test]
+fn frames_scanned_stay_to_see_and_save_with_the_adapter_unplugged() {
+    let (mut ui, controls) = with_adapter();
+    ui.click("Pellicola");
+    ui.send(Message::Dpi(200));
+    ui.click("Scansiona foto");
+    let frames = scans(&ui);
+    assert_eq!(frames.len(), 2);
+    ui.click("Foto");
+    assert!(ui.app.pages.is_empty());
+    controls.unplug_adapter(true);
+    ui.send(Message::RefreshStatus);
+    ui.settle();
+    ui.click("Pellicola");
+    assert!(ui.app.filming());
+    assert_eq!(scans(&ui), frames);
+    assert!(ui.app.note.contains("non è collegato"), "{}", ui.app.note);
+}
+
+#[test]
+fn a_single_photo_has_its_tools_in_the_column() {
+    let mut ui = Ui::new();
+    ui.send(Message::Kind(Kind::Photo));
+    assert!(!ui.shows("Duplica"), "no photo, no column");
+    ui.scan(1);
+    assert_eq!(ui.app.pages.len(), 1);
+    for label in ["Modifica", "Rifai", "Duplica", "Elimina"] {
+        assert!(ui.shows(label), "{label}");
+    }
+    ui.click("Duplica");
+    assert_eq!(ui.app.pages.len(), 2);
+}
+
+#[test]
 fn a_strip_of_negatives_becomes_a_picture_per_frame() {
     let (mut ui, _) = with_adapter();
     ui.click("Pellicola");
@@ -1861,10 +1935,17 @@ fn a_question_and_its_answers_in_english() {
     let mut ui = document(2);
     ui.send(Message::Language(LangChoice::En));
     ui.send(Message::Kind(Kind::Photo));
-    assert_eq!(ui.question(), Some("Switch to Photo?"));
-    assert!(ui.shows("Switch to Photo"));
+    ui.scan(1);
+    ui.send(Message::CloseRequested(iced::window::Id::unique()));
+    assert_eq!(ui.question(), Some("Close without saving?"));
+    assert!(ui.shows(
+        "Still to save: 2 pages in Document, 1 photo in Photo. \
+         Closing without saving, the work is lost."
+    ));
+    assert!(ui.shows("Close without saving"));
     ui.key(iced::keyboard::key::Named::Escape);
     assert!(ui.question().is_none());
+    assert!(!ui.closed);
 }
 
 // ---------------------------------------------------------------- the tour
@@ -1919,20 +2000,16 @@ fn tour() {
         )));
         shot(&mut ui, "editor-size");
         ui.send(Message::Edit(EditMsg::Discard));
-        ui.send(Message::Kind(Kind::Photo));
+        ui.send(Message::CloseRequested(iced::window::Id::unique()));
         shot(&mut ui, "question");
+        ui.send(Message::Confirm(false));
         // Photo: the originals found on the glass, its formats, its buttons.
-        ui.send(Message::Confirm(true));
+        ui.send(Message::Kind(Kind::Photo));
         ui.send(Message::Pane(crate::Pane::Scan));
         ui.send(Message::Preview);
         ui.settle();
         shot(&mut ui, "photo-scan");
         ui.scan(1);
-        // The photo kept from the document is not saved: scan anyway.
-        if ui.question().is_some() {
-            ui.send(Message::Confirm(true));
-            ui.settle();
-        }
         ui.send(Message::Pane(crate::Pane::Output));
         shot(&mut ui, "photo-output");
         ui.send(Message::Pane(crate::Pane::Prefs));

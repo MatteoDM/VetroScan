@@ -120,6 +120,48 @@ enum Kind {
     Photo,
 }
 
+/// A way of working as the button at the top chooses it, each with its
+/// own work apart (see [`Bench`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Work {
+    Document,
+    Photo,
+    /// Foto with films in the adapter.
+    Film,
+}
+
+const WORKS: [Work; 3] = [Work::Document, Work::Photo, Work::Film];
+
+impl Work {
+    fn of(kind: Kind, film: bool) -> Self {
+        match (kind, film) {
+            (Kind::Document, _) => Self::Document,
+            (Kind::Photo, false) => Self::Photo,
+            (Kind::Photo, true) => Self::Film,
+        }
+    }
+
+    fn index(self) -> usize {
+        match self {
+            Self::Document => 0,
+            Self::Photo => 1,
+            Self::Film => 2,
+        }
+    }
+
+    /// What it holds, and where: "3 pagine in Documento".
+    fn holding(self, n: usize) -> String {
+        match (self, n) {
+            (Self::Document, 1) => tr("1 pagina in Documento").into(),
+            (Self::Document, n) => trf("{n} pagine in Documento", &[("n", &n)]),
+            (Self::Photo, 1) => tr("1 foto in Foto").into(),
+            (Self::Photo, n) => trf("{n} foto in Foto", &[("n", &n)]),
+            (Self::Film, 1) => tr("1 foto in Pellicola").into(),
+            (Self::Film, n) => trf("{n} foto in Pellicola", &[("n", &n)]),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Colour {
     Rgb,
@@ -2064,6 +2106,56 @@ const ONE_PASS: f64 = 700e6;
 /// blurred and a sliver of the lid would show.
 const INSET_MM: f32 = 0.4;
 
+/// The work of a way of working put aside while another is shown: its
+/// pages and what goes with them, found again as they were when it comes
+/// back. The way of working shown has its work in [`App`]'s own fields.
+struct Bench {
+    pages: Vec<Page>,
+    current: Option<usize>,
+    /// A rescan waiting for a choice.
+    redone: Option<(usize, Page)>,
+    unsaved: bool,
+    /// Ctrl+Z and Ctrl+Y of its settings and pages.
+    undo: Vec<(Target, Settings)>,
+    redo_stack: Vec<(Target, Settings)>,
+    tab: Tab,
+    result_view: View,
+}
+
+impl Bench {
+    /// Nothing done yet: the glass's preview first, a film's scans (they
+    /// have no preview).
+    fn new(work: Work) -> Self {
+        Self {
+            pages: Vec::new(),
+            current: None,
+            redone: None,
+            unsaved: false,
+            undo: Vec::new(),
+            redo_stack: Vec::new(),
+            tab: if work == Work::Film {
+                Tab::Result
+            } else {
+                Tab::Preview
+            },
+            result_view: View::default(),
+        }
+    }
+}
+
+/// What belongs to where the scans come from, the glass or the adapter's
+/// area: its preview, the area chosen and the originals found on it.
+/// Documento and Foto share the glass's.
+#[derive(Default)]
+struct Bed {
+    preview: Option<(Raw, Image, Picture)>,
+    preview_view: View,
+    selection: Option<Selection>,
+    found: Vec<Found>,
+    film_preview: Option<Image>,
+    negative: Option<Negative>,
+}
+
 // --------------------------------------------------------------------- app
 
 struct App {
@@ -2087,6 +2179,12 @@ struct App {
     photo: Settings,
     /// In Foto, films in the adapter instead of the glass ("Pellicola").
     film: bool,
+    /// The work of the ways of working not shown, by [`Work::index`] (the
+    /// slot of the one shown is empty: its work is in the fields below).
+    benches: [Bench; 3],
+    /// The preview, area and originals of the source not in use (the
+    /// adapter's while on the glass, and the other way round).
+    other_bed: Bed,
     /// The settings for films, apart from the photos' ones.
     film_settings: Settings,
     /// The preview of films as the scanner gave it (their transmission,
@@ -2247,6 +2345,8 @@ impl App {
                 document: Settings::from_stored(Kind::Document, &stored.document).fresh_look(),
                 photo: Settings::from_stored(Kind::Photo, &stored.photo).fresh_look(),
                 film: false,
+                benches: WORKS.map(Bench::new),
+                other_bed: Bed::default(),
                 film_settings: Settings::from_stored_on(
                     Kind::Photo,
                     Settings::film(),
@@ -2503,9 +2603,96 @@ impl App {
     }
 
     /// Whether the scans are of negatives in the adapter: Foto with
-    /// "Pellicola" chosen, on a scanner that takes them.
+    /// "Pellicola" chosen. (Its work stays there to be saved with a
+    /// scanner without the adapter; such a scanner does not scan in it,
+    /// see `start`.)
     fn filming(&self) -> bool {
-        self.kind == Kind::Photo && self.film && self.caps.offers(Source::Negative)
+        self.kind == Kind::Photo && self.film
+    }
+
+    /// The way of working shown.
+    fn work(&self) -> Work {
+        Work::of(self.kind, self.film)
+    }
+
+    /// Whether a way of working put aside has pages.
+    fn has_work(&self, work: Work) -> bool {
+        work != self.work() && !self.benches[work.index()].pages.is_empty()
+    }
+
+    /// The work not saved, in every way of working: which, and how many
+    /// pages or photos.
+    fn unsaved_work(&self) -> Vec<(Work, usize)> {
+        WORKS
+            .into_iter()
+            .filter_map(|w| {
+                let (n, unsaved) = if w == self.work() {
+                    (self.pages.len(), self.unsaved)
+                } else {
+                    let b = &self.benches[w.index()];
+                    (b.pages.len(), b.unsaved)
+                };
+                (n > 0 && unsaved).then_some((w, n))
+            })
+            .collect()
+    }
+
+    /// What is lost closing now, if anything: the sentence of the question.
+    fn lost_closing(&self) -> Option<String> {
+        match self.unsaved_work().as_slice() {
+            [] => None,
+            [(w, n)] if *w == self.work() => Some(self.lost_sentence(*n)),
+            all => {
+                let list: Vec<String> = all.iter().map(|(w, n)| w.holding(*n)).collect();
+                Some(trf(
+                    "Ancora da salvare: {list}. Chiudendo senza salvare, il lavoro va perso.",
+                    &[("list", &list.join(", "))],
+                ))
+            }
+        }
+    }
+
+    /// Puts the work shown aside, in its slot.
+    fn park(&mut self) {
+        let bench = Bench {
+            pages: std::mem::take(&mut self.pages),
+            current: self.current.take(),
+            redone: self.redone.take(),
+            unsaved: std::mem::take(&mut self.unsaved),
+            undo: std::mem::take(&mut self.undo),
+            redo_stack: std::mem::take(&mut self.redo_stack),
+            tab: self.tab,
+            result_view: self.result_view,
+        };
+        self.benches[self.work().index()] = bench;
+    }
+
+    /// Takes up the work of the way of working shown, as it was left.
+    fn take_up(&mut self) {
+        let work = self.work();
+        let b = std::mem::replace(&mut self.benches[work.index()], Bench::new(work));
+        self.pages = b.pages;
+        self.current = b.current;
+        self.redone = b.redone;
+        self.unsaved = b.unsaved;
+        self.undo = b.undo;
+        self.redo_stack = b.redo_stack;
+        self.tab = b.tab;
+        self.result_view = b.result_view;
+    }
+
+    /// The glass and the adapter's area change places.
+    fn swap_bed(&mut self) {
+        let other = std::mem::take(&mut self.other_bed);
+        self.other_bed = Bed {
+            preview: std::mem::replace(&mut self.preview, other.preview),
+            preview_view: std::mem::replace(&mut self.preview_view, other.preview_view),
+            selection: std::mem::replace(&mut self.selection, other.selection),
+            found: std::mem::replace(&mut self.found, other.found),
+            film_preview: std::mem::replace(&mut self.film_preview, other.film_preview),
+            negative: std::mem::replace(&mut self.negative, other.negative),
+        };
+        self.mm_draft = None;
     }
 
     /// Where the scans come from.
@@ -2559,78 +2746,39 @@ impl App {
     }
 
     /// Switches to `kind`, with films in the adapter or not (only Foto has
-    /// them).
+    /// them). Each way of working keeps its own work: the one left is put
+    /// aside as it is, nothing thrown away and nothing made to look
+    /// otherwise, and the other's taken up as it was left.
     fn set_mode(&mut self, kind: Kind, film: bool) -> Task<Message> {
         let film = film && kind == Kind::Photo;
         // Not during a scan: its pages go where the mode says.
         if (self.kind == kind && self.film == film) || self.busy.is_some() {
             return Task::none();
         }
+        self.close_editor(true);
         // The limit typed belongs to the other way of working.
         self.limit_draft = None;
-        let dropped = self.pages.len().saturating_sub(1);
-        let again = if film {
-            Message::Film
-        } else {
-            Message::Kind(kind)
-        };
-        if kind == Kind::Photo
-            && self.kind == Kind::Document
-            && dropped > 0
-            && self.unsaved
-            && self.ask(
-                again,
-                tr("Passare a Foto?").into(),
-                trf(
-                    "In Foto resta solo l'ultima scansione. {lost}",
-                    &[(
-                        "lost",
-                        &if dropped == 1 {
-                            tr("L'altra pagina del documento non è salvata e andrà persa.")
-                                .to_string()
-                        } else {
-                            trf(
-                                "Le altre {dropped} pagine del documento non sono \
-                                 salvate e andranno perse.",
-                                &[("dropped", &dropped)],
-                            )
-                        },
-                    )],
-                ),
-                tr("Passa a Foto"),
-            )
-        {
-            return Task::none();
-        }
-        let from_document = self.kind == Kind::Document;
-        self.kind = kind;
+        self.park();
         if self.film != film {
-            self.film = film;
-            // The glass and the adapter's area: the preview, the area
-            // chosen and the originals found belong to the other.
-            self.preview = None;
-            self.selection = None;
-            self.found.clear();
-            self.film_preview = None;
-            self.negative = None;
-            if film {
-                self.tab = Tab::Result;
-            }
+            // The glass and the adapter's area: each its own preview, area
+            // chosen and originals found.
+            self.swap_bed();
         }
-        self.redone = None;
-        if kind == Kind::Photo && from_document {
-            // A photo at a time: keep the last scan only.
-            let last = self.pages.pop();
-            self.pages.clear();
-            self.pages.extend(last);
-            self.current = (!self.pages.is_empty()).then_some(0);
-        }
-        self.pages_changed();
-        // Ctrl+Z restores the settings of the mode it was in.
-        self.undo.clear();
-        self.redo_stack.clear();
+        self.kind = kind;
+        self.film = film;
+        self.take_up();
+        self.redo = None;
+        self.redo_auto = false;
+        self.drag = None;
+        self.draft = None;
         self.last_edit = None;
-        // The pages that follow the shared look take this mode's one.
+        // Renders running and pages waiting to be drawn were of the other
+        // work (its Ctrl+Z went with it).
+        self.epoch = self.epoch.wrapping_add(1);
+        self.pdf_rev += 1;
+        self.dirty_page = true;
+        // The preview and the pages that follow the shared look are drawn
+        // with this mode's.
         self.shared_changed();
         Task::none()
     }
@@ -3225,6 +3373,18 @@ impl App {
             // next scan.
             self.redo = None;
             self.redo_auto = false;
+            return;
+        }
+        // The frames of a film kept from a scanner with the adapter, shown
+        // with one without it: there to save, not to scan.
+        if self.filming() && !self.caps.offers(Source::Negative) {
+            self.redo = None;
+            self.redo_auto = false;
+            self.note = tr(
+                "Questo scanner non ha l'adattatore per pellicole: le foto della \
+                            pellicola restano qui da salvare",
+            )
+            .into();
             return;
         }
         // In Foto a new scan takes the place of the photos there.
@@ -3987,6 +4147,9 @@ impl App {
                     // picture may be of another page. Draw again.
                     Target::Page if epoch != self.epoch => self.dirty_page = true,
                     Target::Index(_) if epoch != self.epoch => self.restale(),
+                    // The glass and the adapter changed places meanwhile:
+                    // the picture may be of the other's preview.
+                    Target::Preview if epoch != self.epoch => self.dirty_preview = true,
                     Target::Preview => {
                         if let Some((_, old_shown, old)) = &mut self.preview {
                             *old = picture.replacing(old);
@@ -4025,6 +4188,17 @@ impl App {
             }
             Message::Kind(kind) => return self.set_mode(kind, false),
             Message::Film if self.adapter_plugged() => return self.set_mode(Kind::Photo, true),
+            // Frames scanned already: they are there to see and save, with
+            // the adapter unplugged too.
+            Message::Film if self.has_work(Work::Film) => {
+                let task = self.set_mode(Kind::Photo, true);
+                if matches!(&self.status, Some(Ok(s)) if s.adapter == Some(false)) {
+                    self.note = tr("L'adattatore per pellicole non è collegato: collega \
+                                    il suo cavo sul retro dello scanner")
+                    .into();
+                }
+                return task;
+            }
             Message::Film => {
                 // Plugged in since the state was read? Ask the scanner.
                 if let Some(w) = self.worker.as_ref().filter(|_| self.busy.is_none()) {
@@ -4598,9 +4772,13 @@ impl App {
                     Ok(what) => {
                         self.note = trf("Salvato: {what}", &[("what", &what)]);
                         self.unsaved = false;
-                        // "Salva…" in the question: now what was asked.
-                        if let Some(then) = then {
-                            return self.run_confirmed(then);
+                        // "Salva…" in the question: now what was asked. Closing
+                        // asks again while another way of working has work
+                        // not saved.
+                        match then {
+                            Some(then @ Message::CloseRequested(_)) => return self.handle(then),
+                            Some(then) => return self.run_confirmed(then),
+                            None => {}
                         }
                     }
                     Err(e) => self.note = trf("Salvataggio non riuscito: {e}", &[("e", &e)]),
@@ -4618,13 +4796,28 @@ impl App {
             }
             Message::ConfirmSave => {
                 if let Some(confirm) = self.confirm.take() {
+                    // Closing, with nothing to save where the app is: the
+                    // first way of working with work not saved is shown and
+                    // saved.
+                    let here = self.unsaved && !self.pages.is_empty();
+                    if matches!(*confirm.then, Message::CloseRequested(_)) && !here {
+                        if let Some(&(work, _)) = self.unsaved_work().first() {
+                            let _ = self.set_mode(
+                                match work {
+                                    Work::Document => Kind::Document,
+                                    Work::Photo | Work::Film => Kind::Photo,
+                                },
+                                work == Work::Film,
+                            );
+                        }
+                    }
                     self.after_save = Some(*confirm.then);
                     return self.handle(Message::Save);
                 }
             }
             Message::CloseRequested(id) => {
-                let n = self.pages.len();
-                let lost = (n > 0 && self.unsaved).then(|| self.lost_sentence(n));
+                // The work of every way of working, not only the one shown.
+                let lost = self.lost_closing();
                 let asked = if self.busy.is_some() {
                     let body = match &lost {
                         Some(lost) => trf(
@@ -5477,7 +5670,9 @@ impl App {
 
     fn view(&self) -> Element<'_, Message> {
         let mut body = row![].height(Length::Fill);
-        if self.kind == Kind::Document || self.pages.len() > 1 {
+        // In Foto from the first photo: its tools (Duplica, Rifai, Elimina)
+        // are there.
+        if self.kind == Kind::Document || !self.pages.is_empty() {
             body = body.push(self.strip());
         }
         body = body.push(self.stage()).push(self.inspector());
@@ -5587,8 +5782,8 @@ impl App {
         ]
         .spacing(2);
         // Films only for a scanner with an adapter for them (with its cable
-        // unplugged a press says so).
-        if self.caps.offers(Source::Negative) {
+        // unplugged a press says so), or while frames scanned are there.
+        if self.caps.offers(Source::Negative) || self.filming() || self.has_work(Work::Film) {
             segments = segments.push(segment(
                 tr("Pellicola"),
                 Some(Message::Film),

@@ -61,6 +61,16 @@ GitHub; here they are in English.
 ### Changed
 - The scanner contract: a scan says where it comes from, the glass or a film in the adapter,
   and a scanner its adapter's area and the films it takes.
+- **Each mode keeps its own work.** Document, Photo and Film each keep their pages, their
+  Ctrl+Z history and what was shown; going from one to the other throws nothing away and
+  changes nothing, and coming back finds it as it was left. Before, going from Document to
+  Photo kept only the last page (photos cut from one scan were lost going to Document and
+  back), and photos took the adjustments of the mode they ended up in. The question "Switch
+  to Photo?" is gone. Closing asks about the work not saved in every mode, and **Save…**
+  saves each in turn. The glass's preview is shared by Document and Photo, so going to Film
+  and back no longer loses it; frames scanned stay reachable with the adapter unplugged.
+- In Photo and Film the column of the pages is there from the first photo, with **Edit**,
+  **Redo**, **Duplicate** and **Delete**.
 
 ## [0.4.0] - 2026-11-08
 
