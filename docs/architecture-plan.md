@@ -537,6 +537,14 @@ It needs no new hardware, only slides and negatives to put in the holder.
      and never without a guard in `session::scan` first;
   6. a **release** with the Film mode (the `release` skill: tag, CI publishes), when Matteo
      wants it.
+- **Done on 9 November 2026, app only** (no new move of the scanner): without a preview the
+  frames are found in the scan itself (`film::frames` on the scan brought to the preview's
+  resolution), and **Separa** cuts the originals out of a photo scanned whole (glass or
+  film), without scanning again. A page scanned whole keeps its area and, for films, the scan
+  before it became the positive (`Whole`), so the originals found sit on the glass where the
+  preview would put them and "Rifai" on each scans just that one. Three e2e on the made-up
+  scanner; **tried by Matteo on the real scanner** the same evening (Film at 1200 dpi,
+  without a preview, and "Separa i fotogrammi" on a strip scanned whole): it works.
 - **Done when:** the adapter's start-up and calibration match the captures; a slide and a
   negative come out comparable to the HP driver's (or better for negatives); smoke tests on
   the real scanner with a slide in the holder.

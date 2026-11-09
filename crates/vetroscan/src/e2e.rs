@@ -11,6 +11,7 @@ use crate::worker::{fake, Event};
 use crate::{App, Kind, Message};
 use iced::futures::StreamExt;
 use iced::{Size, Task};
+use scan_imaging::detect::Found;
 use scanner_api::fake::FakeScanner;
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
@@ -1406,6 +1407,111 @@ fn a_strip_of_negatives_becomes_a_picture_per_frame() {
     ui.click("Foto");
     assert!(ui.app.preview.is_none() && ui.app.found.is_empty());
     assert!(ui.app.negative.is_none());
+}
+
+/// Whether every original in `a` has one in `b` with its centre within
+/// `px` pixels of the preview, and as many.
+fn same_places(a: &[Found], b: &[Found], px: f32) -> bool {
+    a.len() == b.len()
+        && a.iter().all(|f| {
+            b.iter()
+                .any(|g| (f.cx - g.cx).abs() < px && (f.cy - g.cy).abs() < px)
+        })
+}
+
+/// Where the preview finds the originals, in the mode the app is in.
+fn found_by_the_preview(ui: &mut Ui) -> Vec<Found> {
+    ui.send(Message::Preview);
+    ui.settle();
+    let found = ui.app.found.clone();
+    assert!(!found.is_empty(), "{}", ui.app.note);
+    found
+}
+
+#[test]
+fn without_a_preview_the_frames_are_found_in_the_scan() {
+    let (mut ui, _) = with_adapter();
+    ui.click("Pellicola");
+    ui.send(Message::Dpi(200));
+    let frames = found_by_the_preview(&mut ui);
+    // No preview: straight to Scansiona, the frames found in the scan.
+    ui.app.preview = None;
+    ui.app.found.clear();
+    ui.app.film_preview = None;
+    ui.app.negative = None;
+    ui.click("Scansiona foto");
+    assert_eq!(ui.app.pages.len(), 2, "{}", ui.app.note);
+    let origins: Vec<Found> = ui.app.pages.iter().filter_map(|p| p.origin).collect();
+    assert!(
+        same_places(&origins, &frames, 3.0),
+        "{origins:?} {frames:?}"
+    );
+    for page in &ui.app.pages {
+        assert!(page.whole.is_none());
+        assert_eq!(page.raw.tone, scan_imaging::film::TONE);
+        assert!(page.raw16.is_some());
+        let full = &page.raw.full;
+        assert!(full.height > full.width, "{} x {}", full.width, full.height);
+    }
+    // "Rifai" on a frame scans that frame only.
+    ui.send(Message::PageRedo(1));
+    ui.settle();
+    assert_eq!(ui.app.pages.len(), 2);
+}
+
+#[test]
+fn separa_cuts_the_frames_out_of_a_film_scanned_whole() {
+    let (mut ui, _) = with_adapter();
+    ui.click("Pellicola");
+    ui.send(Message::Dpi(200));
+    let frames = found_by_the_preview(&mut ui);
+    // The automatic crop off: one picture, the whole adapter's area.
+    ui.send(Message::AutoCrop(false));
+    ui.click("Scansiona foto");
+    assert_eq!(ui.app.pages.len(), 1);
+    assert!(ui.app.pages[0].whole.is_some());
+    // Cut afterwards, without scanning again.
+    ui.click("Separa i fotogrammi");
+    assert_eq!(ui.app.pages.len(), 2, "{}", ui.app.note);
+    assert!(ui.app.note.contains("2 immagini"), "{}", ui.app.note);
+    let origins: Vec<Found> = ui.app.pages.iter().filter_map(|p| p.origin).collect();
+    assert!(
+        same_places(&origins, &frames, 3.0),
+        "{origins:?} {frames:?}"
+    );
+    for page in &ui.app.pages {
+        assert_eq!(page.raw.tone, scan_imaging::film::TONE);
+        assert!(page.raw16.is_some());
+        let full = &page.raw.full;
+        assert!(full.height > full.width, "{} x {}", full.width, full.height);
+    }
+    // Cut once: nothing more to separate.
+    assert!(!ui.shows("Separa i fotogrammi"));
+}
+
+#[test]
+fn separa_finds_the_photos_of_an_area_scanned_whole() {
+    use crate::MmField;
+    let mut ui = Ui::new();
+    ui.send(Message::Kind(Kind::Photo));
+    let originals = found_by_the_preview(&mut ui);
+    // An area chosen by hand: no automatic crop, a single picture.
+    for (field, mm) in [(0, "10"), (1, "10"), (2, "200"), (3, "240")] {
+        ui.send(Message::MmInput(MmField::Area(field), mm.into()));
+    }
+    ui.send(Message::MmSubmit);
+    assert!(ui.app.selection.is_some());
+    ui.click("Scansiona foto");
+    assert_eq!(ui.app.pages.len(), 1);
+    ui.click("Separa le foto");
+    assert_eq!(ui.app.pages.len(), 3, "{}", ui.app.note);
+    // Found where the preview found them on the glass, though the scan
+    // started 10 mm in: "Rifai" on each finds its place.
+    let origins: Vec<Found> = ui.app.pages.iter().filter_map(|p| p.origin).collect();
+    assert!(
+        same_places(&origins, &originals, 3.0),
+        "{origins:?} {originals:?}"
+    );
 }
 
 #[test]

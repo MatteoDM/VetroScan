@@ -1321,6 +1321,9 @@ struct Page {
     /// Where it was found on the glass (pixels of the preview), when it
     /// was cut out by the automatic crop: "Rifai" scans just that again.
     origin: Option<Found>,
+    /// A scan kept whole: what "Separa" needs to find its originals in it,
+    /// without scanning again.
+    whole: Option<Whole>,
     /// The chip's 16-bit samples (same size as `raw.full`), when the scan
     /// was made for a RAW file.
     raw16: Option<Arc<Vec<u16>>>,
@@ -1357,6 +1360,7 @@ impl Page {
             own: None,
             shown,
             origin: None,
+            whole: None,
             raw16: None,
             transform: Transform::default(),
             scanned_colour: settings.colour,
@@ -1887,6 +1891,9 @@ enum Message {
     /// A copy of the page right after it: the same scan, cut, turned and
     /// adjusted on its own (several photos from one scan).
     PageDuplicate(usize),
+    /// "Separa": the originals found in a page scanned whole, each cut out
+    /// as a page of its own, without scanning again.
+    PageSplit(usize),
     /// The mouse went down on a page of the strip: shown, and maybe
     /// dragged to another place.
     PagePress(usize),
@@ -1994,6 +2001,18 @@ struct Job {
     crops: Vec<Found>,
     /// The area asked of the scanner (pixels at the resolution).
     area: Option<Area>,
+}
+
+/// A scan kept whole, as "Separa" needs it to cut its originals out
+/// afterwards.
+#[derive(Debug, Clone)]
+struct Whole {
+    /// The area it covered (pixels at its resolution): where the
+    /// originals were, for "Rifai" on each.
+    area: Area,
+    /// Films: the scan as the scanner saw it, before it became the
+    /// positive, at [`PREVIEW_DPI`]; the frames are found on that.
+    transmission: Option<Arc<Image>>,
 }
 
 /// Largest single pass for several originals; beyond it each is scanned
@@ -3097,7 +3116,15 @@ impl App {
             request
         } else {
             self.batch = (0, 1);
-            self.request()
+            let request = self.request();
+            // A whole scan: nothing to cut yet, but its area is kept (the
+            // frames of a film may be found in it, and "Separa" later).
+            self.job = Some(Job {
+                bounds: [0.0; 4],
+                crops: Vec::new(),
+                area: Some(request.area),
+            });
+            request
         };
         if let (Some(worker), None) = (&self.worker, &self.busy) {
             worker.send(Command::Scan(purpose, request));
@@ -3138,6 +3165,93 @@ impl App {
         Some(first)
     }
 
+    /// Originals found in a scan (pixels at [`PREVIEW_DPI`] of the scan)
+    /// put on the bed (pixels of the preview), from the area the scan
+    /// covered at `dpi`.
+    fn on_bed(found: Vec<Found>, area: Option<Area>, dpi: u16) -> Vec<Found> {
+        let k = f32::from(PREVIEW_DPI) / f32::from(dpi.max(1));
+        let (dx, dy) = area.map_or((0.0, 0.0), |a| (a.x as f32 * k, a.y as f32 * k));
+        found.into_iter().map(|f| f.scaled(1.0, dx, dy)).collect()
+    }
+
+    /// Whether "Separa" can look for originals in a page: a scan kept
+    /// whole, in colour, in Foto.
+    fn splittable(&self, page: &Page) -> bool {
+        self.kind == Kind::Photo && page.whole.is_some() && page.raw.full.format == Format::Rgb
+    }
+
+    /// "Separa": the originals of a page scanned whole found in it (the
+    /// frames of a film, the photos on the glass) and cut out, each a page
+    /// of its own in its place, without scanning again.
+    fn split(&mut self, i: usize) {
+        let Some(page) = self.pages.get(i).filter(|p| self.splittable(p)) else {
+            return;
+        };
+        let Some(whole) = page.whole.clone() else {
+            return;
+        };
+        let full = Arc::clone(&page.raw.full);
+        let film = whole.transmission.is_some();
+        let found = match &whole.transmission {
+            Some(t) => film::frames(t, Film::Negative),
+            None => detect::objects(&at_dpi((*full).clone(), PREVIEW_DPI)),
+        };
+        if found.is_empty() {
+            self.note = if film {
+                tr("Nessun fotogramma riconosciuto in questa scansione")
+            } else {
+                tr("Nessun originale riconosciuto in questa scansione")
+            }
+            .into();
+            return;
+        }
+        let job = Job {
+            bounds: [0.0; 4],
+            crops: Self::on_bed(found, Some(whole.area), full.dpi),
+            area: Some(whole.area),
+        };
+        let samples = page.raw16.as_ref().map(|s| s.to_vec());
+        let (tone, scanner, settings, own) = (
+            page.raw.tone,
+            Arc::clone(&page.raw.scanner),
+            page.settings,
+            page.own,
+        );
+        let title = self.page_title(i);
+        let parts: Vec<Page> = Self::cut((*full).clone(), samples, Some(&job))
+            .into_iter()
+            .map(|(image, origin, samples)| {
+                let (w, h) = (image.width, image.height);
+                let mut raw = Raw::new(image, &self.caps);
+                raw.tone = tone;
+                raw.scanner = Arc::clone(&scanner);
+                let mut part = Page::new(raw, settings);
+                part.own = own;
+                part.origin = origin;
+                part.raw16 = samples.filter(|s| s.len() == w * h * 3).map(Arc::new);
+                part
+            })
+            .collect();
+        let n = parts.len();
+        self.close_editor(true);
+        self.pages.splice(i..=i, parts);
+        self.redone = None;
+        self.current = Some(i);
+        self.unsaved = true;
+        self.pdf_rev += 1;
+        self.tab = Tab::Result;
+        self.result_view = View::default();
+        self.pages_changed();
+        self.note = if n == 1 {
+            trf("{title} ritagliata sull'originale", &[("title", &title)])
+        } else {
+            trf(
+                "{title} separata in {n} immagini",
+                &[("title", &title), ("n", &n)],
+            )
+        };
+    }
+
     /// The images of a scan: the originals cut out and straightened, or
     /// the whole scan.
     fn cut(
@@ -3145,7 +3259,10 @@ impl App {
         samples16: Option<Vec<u16>>,
         job: Option<&Job>,
     ) -> Vec<(Image, Option<Found>, Option<Vec<u16>>)> {
-        let Some((job, area)) = job.and_then(|j| Some((j, j.area?))) else {
+        let Some((job, area)) = job
+            .filter(|j| !j.crops.is_empty())
+            .and_then(|j| Some((j, j.area?)))
+        else {
             return vec![(image, None, samples16)];
         };
         let factor = f32::from(image.dpi) / f32::from(PREVIEW_DPI);
@@ -4430,6 +4547,11 @@ impl App {
                     self.note = trf("{title} eliminata", &[("title", &title)]);
                 }
             }
+            Message::PageSplit(i) => {
+                if self.busy.is_none() && self.redone.is_none() {
+                    self.split(i);
+                }
+            }
             Message::PageRedo(i) => {
                 if self.busy.is_none() && i < self.pages.len() {
                     self.redo = Some(i);
@@ -4764,15 +4886,36 @@ impl App {
                 };
             }
             Purpose::Page => {
-                let job = self.job.take();
-                let (image, samples16) = if self.filming() {
+                let mut job = self.job.take();
+                let film = self.filming();
+                let whole = job.as_ref().is_some_and(|j| j.crops.is_empty());
+                // A film scanned whole: the frames are found on it as the
+                // scanner saw it, now (without a preview) or with "Separa".
+                let transmission =
+                    (film && whole).then(|| Arc::new(at_dpi(image.clone(), PREVIEW_DPI)));
+                if let (Some(j), Some(t)) = (job.as_mut(), &transmission) {
+                    if self.settings().auto_crop && self.selection.is_none() && self.redo.is_none()
+                    {
+                        j.crops = Self::on_bed(film::frames(t, Film::Negative), j.area, image.dpi);
+                        self.batch.1 = j.crops.len().max(1);
+                    }
+                }
+                let kept = job
+                    .as_ref()
+                    .filter(|j| j.crops.is_empty())
+                    .and_then(|j| j.area)
+                    .map(|area| Whole {
+                        area,
+                        transmission: transmission.clone(),
+                    });
+                let (image, samples16) = if film {
                     let (picture, deep, _) = Self::develop(image, samples16, self.negative);
                     (picture, deep)
                 } else {
                     (image, samples16)
                 };
                 for (image, origin, samples) in Self::cut(image, samples16, job.as_ref()) {
-                    self.add_page(image, origin, samples);
+                    self.add_page(image, origin, samples, kept.clone());
                 }
                 self.result_view = View::default();
                 self.tab = Tab::Result;
@@ -4787,12 +4930,19 @@ impl App {
 
     /// A page (or photo) scanned: added, or put in place of the one being
     /// redone.
-    fn add_page(&mut self, image: Image, origin: Option<Found>, samples16: Option<Vec<u16>>) {
+    fn add_page(
+        &mut self,
+        image: Image,
+        origin: Option<Found>,
+        samples16: Option<Vec<u16>>,
+        whole: Option<Whole>,
+    ) {
         self.close_editor(true);
         self.unsaved = true;
         self.pdf_rev += 1;
         let (w, h, dpi) = (image.width, image.height, image.dpi);
         let mut page = Page::new(self.raw(image), *self.settings());
+        page.whole = whole.filter(|_| origin.is_none());
         // "Solo questa pagina" from the start: every page keeps the look it
         // was scanned with, and changing one does not change the others.
         if self.kind == Kind::Document {
@@ -5673,18 +5823,39 @@ impl App {
             && self.shown().is_some())
         .then(|| self.current.map(|i| EditMsg::Open(i).into()))
         .flatten();
+        // The photo shown, scanned whole: its originals cut out of it
+        // without scanning again.
+        let split = (self.tab == Tab::Result && self.busy.is_none() && self.redone.is_none())
+            .then_some(self.current)
+            .flatten()
+            .and_then(|i| self.pages.get(i).map(|p| (i, p)))
+            .filter(|(_, p)| self.splittable(p));
+        let mut tools = column![small(tr("Modifica…"), edit, false)].spacing(2);
+        if let Some((i, page)) = split {
+            let label = if page
+                .whole
+                .as_ref()
+                .is_some_and(|w| w.transmission.is_some())
+            {
+                tr("Separa i fotogrammi")
+            } else {
+                tr("Separa le foto")
+            };
+            tools = tools.push(small(label, Some(Message::PageSplit(i)), false));
+        }
         let tools = card(
-            column![
-                small(tr("Modifica…"), edit, false),
-                small(tr("Contagocce"), Some(Message::Eyedropper), self.eyedropper),
-                small(
+            tools
+                .push(small(
+                    tr("Contagocce"),
+                    Some(Message::Eyedropper),
+                    self.eyedropper,
+                ))
+                .push(small(
                     tr("Togli selezione"),
                     (self.tab == Tab::Preview && self.selection.is_some())
                         .then_some(Message::Select(None)),
-                    false
-                ),
-            ]
-            .spacing(2),
+                    false,
+                )),
         );
         let compare = card(
             row![

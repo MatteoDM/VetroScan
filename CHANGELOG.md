@@ -28,6 +28,12 @@ GitHub; here they are in English.
 - `hp3770 tma-scan` (experimental) scans the adapter's area, with `--film negative` (or
   `slide`) also its positive; `hp3770 develop` makes the positive again from a saved 16-bit
   scan, without the scanner; `hp3770 lamp on|off --tma` switches the adapter's light.
+- **Film frames without a preview**: straight to Scan, the frames are found in the scan
+  itself and each becomes its own picture, as after a preview (one lamp warm-up less).
+- **Split a scan already made**, without scanning again: a photo scanned whole (automatic
+  crop off, or an area drawn by hand) gets **Split the photos** (on the glass) or **Split the
+  frames** (films) next to *Edit…*; each original found becomes its own picture, and **Redo**
+  on it scans just that one again.
 
 ### Changed
 - The scanner contract: a scan says where it comes from, the glass or a film in the adapter,
