@@ -1688,6 +1688,28 @@ fn a_scanner_without_a_lamp_and_16_bits_shows_neither() {
     assert!(!ui.app.note.contains("lampada"), "{}", ui.app.note);
 }
 
+/// A made-up Epson Perfection 4490, with the provisional capabilities its
+/// backend declares (phase 12): no lamp to switch, its four buttons, 16
+/// bits, no film until its adapter is driven.
+#[test]
+fn the_epson_4490_shows_what_its_backend_declares() {
+    let caps = epson_gt_x750::capabilities();
+    let mut ui = Ui::with_scanners(vec![FakeScanner::with(caps.clone())]);
+    assert_eq!(ui.app.caps, caps);
+    assert!(ui.shows("Pronto"));
+    assert!(!ui.shows("Pronto · lampada accesa"));
+    assert!(!ui.shows("Pellicola"));
+    ui.send(Message::Pane(crate::Pane::Scan));
+    assert!(ui.shows("Profondità"));
+    assert!(ui.shows("Tasti dello scanner"));
+    ui.send(Message::Pane(crate::Pane::Prefs));
+    assert!(!ui.shows("Lampada"));
+    for label in ["Start", "Scan to PDF", "Scan to E-mail", "Copy"] {
+        assert!(ui.shows(label), "{label}");
+    }
+    assert!(!ui.shows("Instant Share"));
+}
+
 #[test]
 fn resolutions_and_glass_are_the_scanners() {
     let mut ui = Ui::with_scanners(vec![FakeScanner::a3()]);

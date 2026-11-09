@@ -1,0 +1,5 @@
+# Epson Perfection 4490 Photo (USB 04b8:0119): lets the user logged in at the
+# seat open the scanner without root (VetroScan's epson-gt-x750 backend; no
+# iscan or SANE needed). Install in /etc/udev/rules.d, then reload the rules
+# (udevadm control --reload) and plug the scanner in again.
+SUBSYSTEM=="usb", ATTR{idVendor}=="04b8", ATTR{idProduct}=="0119", MODE="0660", TAG+="uaccess"

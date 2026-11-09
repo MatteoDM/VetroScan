@@ -44,6 +44,8 @@ contents:
       mode: 0755
   - src: packaging/linux/70-hp3770.rules
     dst: /usr/lib/udev/rules.d/70-hp3770.rules
+  - src: packaging/linux/70-epson-4490.rules
+    dst: /usr/lib/udev/rules.d/70-epson-4490.rules
   - src: packaging/linux/vetroscan.desktop
     dst: /usr/share/applications/vetroscan.desktop
   - src: packaging/linux/vetroscan.svg

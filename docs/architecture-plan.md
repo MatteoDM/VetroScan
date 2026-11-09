@@ -4,8 +4,9 @@ Status: **phases 0–7 done and published (v0.1.2, v0.2.0, v0.3.0), with the dou
 check; phases 8–9 postponed until there is hardware; phases 10–11 (films on the 3770,
 precise moves from the keyboard) planned** (plan written on 8 November 2026, after v0.1.1;
 updated the same day with the languages, the new name, the postponed phases and phases
-10–11). Each phase ends with a commit, green tests and a version; what is done is marked
-here.
+10–11; on 9 November phase 12, the Epson Perfection 4490 Photo, researched before it arrives,
+and the code of its milestone 1 written without it: see "Where it stands" there).
+Each phase ends with a commit, green tests and a version; what is done is marked here.
 
 Order: first the refactoring (phases 1–4), then languages, the project in English and the
 new name (phases 5–7), which need no hardware; the other scanners (phases 8–9) are
@@ -652,6 +653,344 @@ coloured lines (blue, green, red) the same distance apart.
   worked after one scan at 600 dpi, with this version and with the one of 8 November alike.
   Not reproduced since; open.
 
+## Phase 12 · the Epson Perfection 4490 Photo · waiting for the scanner
+
+Added on 9 November 2026: Matteo is getting an Epson Perfection 4490 Photo, the first scanner
+besides the HP 3770 (phases 8–9 were postponed only for lack of hardware). Researched before
+it arrives, on the web only: nothing below has been tried on the device yet.
+
+### What is known, with sources
+
+- **Identity**: USB id `04b8:0119` (`lsusb` in user reports); in Japan the GT-X750; Epson
+  product code B11B176011. Epson's open `iscan` sources know it as GT-X750, firmware code
+  `0x54` (`backend/get-infofile.c`) and treat product `0x0119` as a special case
+  (`backend/epkowa.c`).
+- **It does not speak ESC/I**. Olaf Meeuwissen of EPSON AVASYS on sane-devel, 25 and 29 August
+  2005: it "does not speak the ESC/I protocol", works neither with the `epson` nor with the
+  `snapscan` backend, and its support in `epkowa` "will require a closed source library". The
+  SANE `epson`/`epson2` backends do not support it (true still today: sane-backends 1.0.18
+  moved it off the unsupported list only as "supported by epkowa").
+- **How Epson drives it on Linux** (the open `iscan` sources, e.g. the mirror
+  `github.com/ip1981/iscan`): the `epkowa` backend speaks ESC/I to an "Interpreter", the closed
+  library `libesint54` of the plugin `iscan-plugin-gt-x750`, through the small API of
+  `backend/epkowa_ip_api.h` ("for scanners that don't speak EPSON ESC/I natively"): `int_init`
+  / `int_init_with_ctrl` get USB read, write and control callbacks, `int_read`/`int_write`
+  carry ESC/I, `function_s_0`/`function_s_1` build and apply a shading table on the host.
+  The firmware file's path is passed to the library (`interpreter usb 0x04b8 0x0119
+  <plugin> <firmware>` in `epkowa.conf`), and **the library uploads it**: no open code knows
+  how the upload works nor the native protocol after it. The header carries a GPL exception
+  for modules that talk to `epkowa` only through that interface.
+- **No open implementation** of the native protocol was found, for this model or its family
+  (the esfw firmwares of `iscan-firmware`: Perfection 2480/2580, 3170, 3490/3590, 4180, 4490,
+  V10/V100, V200, V30/V300, V350, V500; note that SANE `snapscan` does drive the 2480/2580 and
+  3490/3590 with their esfw41/esfw52 firmware, but Meeuwissen says the 4490 is not like them).
+  VueScan drives it with its own closed driver. The controller chip is not known: the
+  service manual (SESC05004, main board B81334) or a look at the board would say.
+- **Hardware** (Epson's user guide, the PhotoReview review): flatbed, "MatrixCCD" colour CCD
+  (six lines, two per colour), 4800 dpi across, 9600 dpi along with "Micro Step Drive"; 48
+  bits in colour (16 per channel), 16 in grey; glass 216 × 297 mm (8.5 × 11.7 in); in the lid
+  a **transparency unit with its own moving lamp** (it has its own transport lock, besides the
+  carriage's at the back) and holders for two 35 mm strips of six frames, four mounted
+  slides or one 6 × 12 cm medium-format frame, film area 68 × 236 mm (2.7 × 9.3 in); **Digital
+  ICE** for film with an infrared light (the review: an infrared LED), so a fourth channel the
+  host uses for dust; four buttons (Start, Scan to PDF, Scan to E-mail, Copy); a port for an
+  optional document feeder (B12B813391); about 3.8 ms a line at 600 dpi, 16.9 ms at 4800.
+  The lamp's kind and warm-up are not stated.
+- **Windows**: Epson's US support page for B11B176011 lists "Scanner Driver and EPSON Scan
+  Utility v3.24" (`epson13552.exe`, 18 November 2009, 10.8 MB, TWAIN) as compatible with
+  Windows 11, plus Epson Event Manager 3.11.77 for the buttons; the product is "End of
+  Support". **Installed by Matteo on 9 November 2026** (scanner not plugged in yet): it is
+  `es54.inf` (published as `oem344.inf`, 3.2.4.1 of 21 October 2009, signed by SEIKO EPSON,
+  "Legacy"), for `USB\VID_04B8&PID_0119`. On 64-bit Windows it is a **WIA** driver
+  (`esxwia54.dll`, `Capabilities=0x13`) over **`usbscan.sys`** (`NTMPDriver`), like HP's for
+  the 3770: so `wia1scan` can drive it, and our backend can open the scanner through
+  `usbscan.sys` with Epson's driver installed, as `hp3770-usb` does. The interpreter is there
+  too, `esint54.dll` (32-bit, in `SysWOW64`, the Windows twin of `libesint54`), with the TWAIN
+  source in `TWAIN_32\ESCNDV`. The firmware is **`C:\Windows\System32\esfw54.bin`**, 65,793
+  bytes, SHA-256 `B01384A9EC89F62183054A2826789498C7666C646BE7E5CFDE16CEDF012EF0F9` (the same
+  in the DriverStore); this copy is under Epson's EULA.
+
+### The firmware and its licence
+
+The scanner needs `esfw54.bin` sent at every power-on, before anything else.
+
+- Fedora/EPEL ship it in **`iscan-firmware`** (`/usr/lib/firmware/epson/esfw54.bin`), taken
+  unmodified from Epson's `iscan-plugin-gt-x750-2.1.2-1` (the Fedora spec,
+  `src.fedoraproject.org/rpms/iscan-firmware`). That plugin carries the **AVASYS Public
+  License** (2008-04-01; `AVASYSPL.en.txt`, which the AUR package installs from the plugin's
+  own documentation). Fedora's licence tag is `LicenseRef-Fedora-Firmware` (firmware that may be
+  redistributed, not modified; fedora-license-data issues 608 and 610); the package also holds
+  `LICENSE.EPSON` (SEIKO EPSON Software License Agreement, 2001) and `EAPL` for the other
+  plugins.
+- What the AVASYS Public License says: verbatim copies may be reproduced and distributed freely
+  in any medium, as long as the recipients get the licence (clause 2); modified versions too,
+  under the same licence (3); the parts given only as executable or object code are
+  "proprietary and confidential" (4) and may not be reverse engineered, decompiled,
+  disassembled "nor otherwise" analysed, except where the LGPL requires it (5); no warranty, no
+  liability (6, 7). No restriction to Epson hardware, no termination, no governing law.
+- Not the same for every copy: Epson's newer `iscan-gt-x750-bundle` and Epson Scan for Windows
+  come under the **EPSON END USER SOFTWARE LICENSE AGREEMENT** (the text is in `iscan`'s
+  `non-free/COPYING.EPSON.en.txt`): use only with the Epson hardware, no distribution to third
+  parties, no reverse engineering. So a copy taken from the Windows driver must never be
+  shipped by us.
+- **With our GPL-2.0-or-later code**: the firmware is not linked into our program, it is data
+  sent to the device, like the files of `linux-firmware` next to the kernel; a separate,
+  unmodified file with its own licence next to it is "mere aggregation" for the GPL.
+- **What we do** (decided with Matteo on 9 November 2026: **the firmware goes inside the
+  program**, the scanner is twenty years old and supported by nothing else):
+  1. **embedded in the binary** at build time: the backend crate's `build.rs` reads the file
+     named by `VETROSCAN_ESFW54` (on Matteo's PC `C:\Windows\System32\esfw54.bin`), checks its
+     SHA-256 (`B01384A9…EF0F9`, the Windows driver's copy) and includes it
+     (`include_bytes!`); the bytes are never changed;
+  2. still **never in the git repository**: the build takes it from the disk of whoever builds,
+     so no clone and no public CI build carries the copy under Epson's EULA. A build without it
+     looks for the file at run time (a path in the Preferences, `System32\esfw54.bin`,
+     `/usr/lib/firmware/epson/esfw54.bin` of `iscan-firmware`), with the same SHA-256 check;
+     without any, the scanner is listed with a note saying what is missing and nothing is sent
+     to it;
+  3. **public packages with the firmware inside**, if ever: only with the AVASYS-licensed copy
+     (to be fetched from Fedora's `iscan-plugin-gt-x750-2.1.2-1` and compared with the
+     Windows one), `AVASYSPL.en.txt` shipped with the package and named in the README's
+     licences, and a note of ours in the licence allowing that blob inside the GPL program
+     (Matteo is the copyright holder). Builds kept by Matteo alone need none of this: the
+     licences bind who distributes.
+- **The captures are not reverse engineering of the firmware**: the file is never disassembled
+  nor examined, only sent; what is studied is what passes on the USB cable while Epson's own
+  driver is used normally, as for the HP 3770. In the EU the lawful user of a program may
+  "observe, study or test" how it works while running it (Directive 2009/24/EC, art. 5(3);
+  Italy, law 633/1941 art. 64-ter), and a contract cannot take that away (art. 8). Not legal
+  advice: if the project ever ships the file or something derived from the captures goes
+  beyond the protocol, read the licences again.
+- **If the captures are not enough**, looking inside Epson's interpreter (`esint54.dll`) for the
+  protocol is the fallback, under the EU's **decompilation for interoperability** (Directive
+  2009/24/EC, art. 6; Italy, art. 64-quater; art. 8: a contract cannot forbid it). Its
+  conditions, which Matteo confirmed on 9 November 2026: done by a lawful user (his scanner,
+  Epson's driver installed from Epson's site); the information is not available elsewhere (no
+  published protocol, no open driver, the model unsupported since 2009); only the parts needed
+  for our independent backend to talk to the scanner; the information used only for that,
+  never given to others for other ends nor used to make a program like Epson's. Into our code
+  goes only the protocol (commands, values, order), written by us: no code, tables or text
+  copied from Epson's library. The captures were meant to come first, but with no scanner
+  yet Matteo chose to start reading Epson's driver now (9 November 2026).
+- **Read so far** (notes in `captures/epson4490/`, outside the repository, to be confirmed by
+  the first capture): Epson's WIA driver `esxwia54.dll` talks to the scanner only with bulk
+  reads and writes through `usbscan.sys` (no control transfers) and uploads the firmware
+  itself: `1B 03` asks the state (bit 4 of the first byte of the 2-byte answer: firmware
+  running); otherwise `1B 06` (ACK `06`), the length in 4 bytes, the 65,536 bytes after the
+  file's 256-byte header (`EDLA`) in writes of at most 65,520, an 8-bit checksum, ACK, then
+  `1B 16` and `80`, each answered by `06`. The interpreter (`esxuin54.dll`, ESC/I to the
+  native commands) has no I/O of its own: `INTInit(read, write)` gets two callbacks. First
+  pass the same night: the native protocol is two-byte commands `1B xx` / `1E xx` with data
+  blocks and an ACK `06`; about forty of them catalogued with their sizes (`1E 47` reads the
+  image, `1E 84` writes tables of up to 64 KB, `1E 42` takes 18 bytes of set-up, ...); ESC/I
+  arrives in a state machine, `ESC G` runs the native scan sequence. Meanings still to be
+  worked out (`captures/epson4490/02-interpreter.md`). The scan sequence for `ESC G` is in
+  order (calibration and tables first, then the set-up blocks `1E 11`, `21`, `41`, `01`, `42`,
+  `43`, then `1E 48` and `1E 47` for the data); `1E 41` (start line, end line, a step code
+  chosen by speed) is the first candidate for the carriage's move.
+- **The Linux plugin** (`iscan-plugin-gt-x750-2.1.2-1`, downloaded from Fedora on 9 November
+  2026, `captures/epson4490/03-linux-plugin.md`): its function names are deliberately
+  obfuscated (`esint54_SYMBOL_157`), only argument types and a few struct names survive. Its
+  `esfw54.bin` (the AVASYS copy) is **a different build** from the Windows driver's (same size
+  and header, SHA-256 `9A4171AB…`, about 49,800 bytes differ): the backend must accept both,
+  and both must be tried on the scanner before public packages carry the AVASYS one.
+- **What moves the carriage** (third pass, `captures/epson4490/04-carriage.md`): a move is a
+  ramp loaded with `1E 84`, its parameters with `1E 01` (12 bytes: steps at full speed, ramp
+  length, direction bit `0x20`) and `1E 05` to start it, then `1B 03` polled while bit `0x40`
+  is set; `1E F4` is a simpler move; `1E 47` / `1E 48` start a scan. `1E 86` reads two
+  positions (the carriage's and, likely, the transparency unit's), `1E 25` selects what
+  moves, and Epson parks the carriage at 1994. These are the commands the backend guards
+  first: never sent before a capture shows the same sequence, targets kept within Epson's
+  own range (0–7106).
+
+### Two ways to drive it
+
+1. **Through Epson's own drivers**, the backends of phase 9 with a real scanner to try them on:
+   SANE (Linux, with Epson's `iscan` and the gt-x750 plugin installed: `epkowa` does the
+   firmware and the protocol) and WIA (Windows, if Epson Scan 3.24 offers WIA). Low risk, no
+   protocol to learn, but only what those drivers give (likely no infrared channel, perhaps no
+   16 bits through WIA, no lamp or buttons through SANE). Linux x86 and x86-64 only for SANE:
+   Epson's plugin exists for nothing else.
+2. **A native backend** (a new crate, say `epson-gt-x750`, next to `hp3770-core`), from USB
+   captures of Epson Scan on Windows, the method of the HP 3770: the firmware upload, the
+   commands after it, calibration, the transparency unit and its lamp, the infrared channel,
+   the buttons. Full control, on every system, but months of work and the risk of a motor
+   moved wrongly.
+
+**The goal is the second** (Matteo, 9 November 2026): the 4490 **plug and play like the 3770**,
+with our own driver on Windows, Linux and macOS. So no work goes into the first way for the
+4490: the WIA and SANE backends stay in phase 9, for any scanner, and Epson's own software is
+the fallback for Matteo if the native backend stops somewhere. A third way, `dlopen` of
+Epson's `libesint54` from Rust speaking ESC/I to it, is left out: Linux only.
+
+**Plug and play, as for the 3770** (`hp3770-usb`: `usbscan.sys` first, then `nusb`):
+
+- **Windows**: Epson's driver binds `usbscan.sys` (above), so the backend opens the scanner
+  through it, next to Epson Scan, as the 3770 next to HP's driver; without Epson's driver, WinUSB
+  with Zadig as in `docs/install.md`. The firmware is inside the program, so nothing else is
+  needed;
+- **Linux**: `nusb`, a udev rule for `04b8:0119` in the packages (as `70-hp3770.rules`), the
+  firmware inside the program: no `iscan`, no SANE;
+- **macOS**: `nusb`, as the 3770;
+- **at every start**: the backend asks the scanner whether the firmware is already running (on
+  Windows Epson's driver may have sent it), sends it if not, waits for the scanner to come back
+  (if it re-enumerates, the `Registry` sees it again), and only then reports it ready. The user
+  sees only "connecting…".
+
+**Milestones**, each one usable on its own and none moving anything before it is understood:
+
+1. **Talking**: the firmware upload and the status (ready, busy, lamp, adapter, buttons),
+   replayed from the captures; `probe` and `status` of a CLI command of the backend. Nothing
+   moves.
+2. **One scan of the glass** at one resolution (300 dpi, 8 bits), the sequence of the captures,
+   with the carriage's travel and return checked against them; every other resolution refused.
+3. **The glass complete**: our calibration (the shading Epson does on the host,
+   `function_s_0`/`_s_1`), every native resolution tried and added to the guard one at a time,
+   16 bits, the `Tone`, the stripes measured; the app scans with it (e2e on a made-up 4490).
+4. **Buttons and lamp** in the `Capabilities` and the app.
+5. **Films**: the transparency unit's lamp and carriage, its calibration, strips and slides
+   (`film`, as on the 3770), medium format.
+6. **Digital ICE**: the infrared channel in the contract and the dust removal in
+   `scan-imaging`.
+7. **Release**: packages with the udev rule, the install guide, CHANGELOG.
+
+### Where it stands (9 November 2026, the scanner not arrived yet)
+
+**Written without the scanner** (branch `epson-4490-milestone1`, not merged into `main` nor
+pushed): the crate **`crates/epson-gt-x750`**, in the app's `Registry` after the HP 3770's.
+- It finds the scanner by `04b8:0119` (`usbscan.sys` first on Windows, then `nusb`, bulk only);
+  without it, it lists nothing and sends nothing.
+- Opening it reads the state (`1B 03`) and sends the firmware if bit `0x10` is clear (when that
+  is allowed: below), exactly as read from `esxwia54.dll`; `status()` reads `1B 03` again;
+  `scan()` answers "not implemented yet"; `poll_buttons()` answers none.
+- **A guard on every write** (`guard.rs`): only `1B 03`, `1E 86` and the firmware upload go out;
+  every other command, and the moves of `04-carriage.md` by name (`1E 01`, `05`, `25`, `47`,
+  `48`, `84`, `F4`), are refused before USB. A command is added there only after a capture
+  shows it.
+- The firmware: `build.rs` embeds it when `VETROSCAN_ESFW54` names a copy with one of the two
+  known SHA-256 (any other file stops the build); otherwise it is looked for at run time
+  (`epson_firmware` in `impostazioni.json`, then System32 or the Linux `iscan` places), with the
+  same check. `esfw54.bin` is in `.gitignore`.
+- Provisional `Capabilities`: glass 8.5 × 11.7 in, 8/16 bits, colour and grey, the four buttons,
+  no lamp, no adapter.
+- 24 unit tests with a mock transport (the upload's exact bytes, any answer but `06` refused, no
+  upload when the firmware runs, every move refused); the real System32 copy checked (sum `D9`,
+  last byte `F8`).
+- The capture tools (`captures/tools`, outside the repository) take `-Device` (a name or
+  `VID:PID`) on any USBPcap root hub, and `Start-CapNew`/`Stop-CapNew` capture the devices that
+  connect from then on (the power-on upload).
+
+- **The upload waits for the capture**: `UPLOAD_CONFIRMED` is `false`, so opening the 4490
+  (VetroScan does it by itself, to read the buttons) sends nothing but `1B 03`: with the
+  firmware running (sent by Epson's driver) it opens, otherwise it answers an error saying
+  how to send it. It is sent only with `VETROSCAN_EPSON_UPLOAD=1` or **`epson4490 upload`**.
+  Once the capture shows the same bytes, `UPLOAD_CONFIRMED` becomes `true` and the 4490 is
+  plug and play.
+- A command **`epson4490`** (a binary of the crate, not in the packages): `list`, `firmware`
+  (which copy would be sent, no scanner needed), `probe` (list, firmware, state; nothing sent
+  but `1B 03`), `upload [--firmware FILE]`.
+- A made-up 4490 in the e2e (`FakeScanner::with(epson_gt_x750::capabilities())`): the app shows
+  its four buttons and 16 bits, no lamp, no film.
+- The udev rule `packaging/linux/70-epson-4490.rules` in the deb, rpm and AUR packages, and the
+  post-install trigger for a scanner already plugged in.
+
+**Still open in milestone 1** (all of it needs the scanner):
+- the power-on capture confirms the upload's bytes (the checksum in place of the last byte),
+  says whether Epson's driver sends the firmware at plug-in, and whether the scanner leaves the
+  bus and comes back after `80` (the backend does not wait for that yet); then
+  `UPLOAD_CONFIRMED`;
+- both copies (Windows driver and AVASYS) tried on the scanner (`epson4490 upload --firmware`);
+- what `1B 03`'s second byte, the lamp, the adapter and the buttons look like (the status shows
+  only ready/busy).
+
+**Left for after the capture, on purpose**: "firmware missing" shown by the app as a state of
+its own, and the firmware's path in the Preferences window (today an error at opening that
+lists every place tried, and `epson_firmware` in `impostazioni.json`). Showing them only for a
+scanner that needs a firmware is a new field of `Capabilities` (the capabilities rule), better
+designed once it is known how the scanner behaves around the upload; on Windows the firmware
+is found in System32 anyway.
+
+### When it arrives, in order
+
+0. **Before switching it on**: release both transport locks (the carriage's at the back and the
+   transparency unit's), as Epson's guide asks. Nothing moves the carriage before that.
+1. **Read only, no Epson driver yet**: USB ids and descriptors (USB Device Tree Viewer or the
+   descriptors USBPcap injects), on Linux `lsusb -v -d 04b8:0119`; whether the id or the
+   descriptors change after the firmware (seen later, with the driver). No control or bulk
+   transfer of our own.
+2. **Epson's driver on Windows 11** (installed, see above): with the scanner plugged in, check
+   that it binds `usbscan.sys` (`pnputil /enum-devices /connected /drivers`) and shows in WIA
+   (`wiaprops`); whether Epson's driver sends the firmware at plug-in or only when a program
+   opens the scanner (the backend must know whether it is already loaded).
+3. **Captures**, with the tools of `captures/tools` (made general on 9 November: `Start-Cap name
+   -Device '04b8:0119'`, `winrt_scan.ps1 -Device '04b8:0119'`):
+   - the **power-on with the firmware upload**: `Start-CapNew 'name'` (USBPcap
+     `--capture-from-new-devices` on every root hub), then the scanner is switched on, then
+     `Stop-CapNew 'name'`; the bytes sent are
+     compared with `esfw54.bin`;
+   - Epson Scan's start and idle, a preview and scans of the glass at 300, 600, 1200, 2400 and
+     4800 dpi, 8 and 16 bits, small areas at the high ones (4800 dpi on the whole glass at 16
+     bits would be about 14 GB), by hand in Professional mode or through WIA;
+   - the transparency unit: a strip of negatives, a slide, with and without Digital ICE;
+   - the four buttons with Event Manager, a cancelled scan, the lamp switching off after idle.
+4. **Our first commands** only once they are understood in the captures, and first the ones that
+   do not move anything (status, the firmware upload); the carriage and the transparency
+   unit's lamp only by replaying sequences seen, with guards like the 3770's
+   (`NEGATIVE_RESOLUTIONS`: what was never tried is refused before anything moves).
+
+### Behind `trait Scanner`
+
+- A **new backend crate** with its own `Backend` for the `Registry` (`name()` "epson-gt-x750";
+  its USB layer like `hp3770-usb`'s, shared if it fits), `list()` by VID/PID, `models()` with the 4490's
+  `Capabilities`, so the app shows it before it answers. App, imaging and export do not change.
+- The 4490's `Capabilities`, to be confirmed on the device: glass 8.5 × 11.7 in; the
+  resolutions the native modes give (no interpolated 6400/9600/12800); depths 8 and 16;
+  `transparency` an `Adapter` of 68 × 236 mm with `Slide` and `Negative` and its own
+  `resolutions`; the four buttons (with suggested actions); `lamp` only if the host switches it;
+  its `Tone` measured; `stripes` measured with "Misura le righe".
+- **Capabilities rule**: the app shows only what these declare, as for the 3770 and the made-up
+  scanners: no lamp timer if `lamp` is `None`, only these buttons, film only with the adapter.
+  New functions come with the field in `Capabilities`, the branch of the app and two e2e
+  (a made-up scanner with it, one without):
+  - **infrared** (Digital ICE): a fourth channel in `ScanResult` and its use in `scan-imaging`
+    (dust found where the infrared is dark); until then the 4490's films scan without it;
+  - **medium format**: an `Adapter` whose film is not only 35 mm (`film::frames` knows 35 mm
+    strips and slides only);
+  - **firmware missing**: a `DeviceStatus` state (or an error at open) the app shows as "needs
+    its firmware" with where to get it.
+- A **made-up 4490** (`scanner_api::fake`) with these capabilities for the e2e, before the
+  hardware.
+
+### Risks
+
+- **Licences**: the firmware's (above); the copy from Epson's Windows driver only in builds
+  kept by Matteo, never in git nor in public packages.
+- **The Windows driver** is from 2009: it may not install or not scan on Windows 11 (Epson
+  says it does); without it the captures cannot be made, and the SANE way on Linux is left.
+- **Two carriages**: the transparency unit has its own moving lamp, which must follow the
+  scanner's carriage; a wrong command could strain either motor. Nothing moves before it is
+  understood.
+- **Sizes**: 4800 dpi at 16 bits gives files of gigabytes; the app keeps whole scans in memory
+  today, so the largest areas need a limit or a different path.
+- **A used scanner**: lamp age, the locks, the state of the glass and of the transparency
+  unit's light; the first scans are a check of the scanner too.
+- **It may not get to the end**: the protocol is learnt only from the cable (and, if that is not
+  enough, from Epson's library), with no open map like `hp3900` for the 3770. VueScan's own
+  driver shows it can be done; how long it takes is not known before the first captures. The
+  milestones are ordered so that each one left behind is still useful.
+- **Done when**: plugged into Windows (with or without Epson's driver), Linux or macOS, the
+  4490 is found by VetroScan, takes its firmware by itself and scans the glass at every native
+  resolution, 8 and 16 bits, and a strip of negatives; smoke tests on the real scanner like
+  the 3770's; Digital ICE is a later step, not part of this.
+
+Sources: sane-devel, August 2005 (Meeuwissen, `alioth-lists.debian.net/pipermail/sane-devel/
+2005-August/014432.html`, `014444`, `014475`); Fedora's `iscan-firmware` spec and review (bug
+483868); fedora-license-data issues 608 (AVASYS) and 610 (LICENSE.EPSON); the AVASYS Public
+License (mirrored in ChromiumOS' `portage/licenses/AVASYS`); `iscan` sources
+(`github.com/ip1981/iscan`: `backend/epkowa_ip_api.h`, `backend/get-infofile.c`,
+`non-free/COPYING.EPSON.en.txt`); Epson's support page for B11B176011; the Epson Perfection 4490
+user's guide (specifications, transport locks); PhotoReview's review of the 4490.
+
 ## Summary
 
 | Phase | Version | Risk | Without new hardware? |
@@ -665,3 +1004,4 @@ coloured lines (blue, green, red) the same distance apart.
 | 9 · other brands (postponed) | to be decided | medium | eSCL yes, with a network scanner |
 | 10 · slides and negatives on the 3770 (negatives done, slides open) | to be decided | medium | yes: the 3770's own adapter |
 | 11 · precise moves from the keyboard (done) | to be decided | low | yes |
+| 12 · Epson Perfection 4490 Photo, native, plug and play (waiting for the scanner) | to be decided | high: protocol unknown, two carriages | no: the scanner (firmware inside the program) |

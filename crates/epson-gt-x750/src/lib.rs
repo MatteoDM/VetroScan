@@ -52,6 +52,18 @@ pub const BACKEND: &str = "epson-gt-x750";
 /// Timeout of a bulk transfer.
 pub const BULK_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Whether a capture of Epson's driver has confirmed the firmware upload's
+/// bytes. Until it has, the backend sends the firmware only when asked
+/// ([`UPLOAD_VAR`], or `epson4490 upload`): VetroScan opens the first
+/// scanner it finds by itself, and must not send it bytes never seen on the
+/// cable. A scanner whose firmware already runs (sent by Epson's driver)
+/// opens either way.
+pub const UPLOAD_CONFIRMED: bool = false;
+
+/// Set to `1` to let the backend send the firmware before
+/// [`UPLOAD_CONFIRMED`].
+pub const UPLOAD_VAR: &str = "VETROSCAN_EPSON_UPLOAD";
+
 /// The two bulk endpoints of the scanner: all the backend needs (Epson's
 /// driver sends no control transfers).
 pub trait Transport: Send + fmt::Debug {
@@ -162,14 +174,26 @@ pub fn capabilities() -> Capabilities {
 }
 
 /// The Epson 4490 on USB, as a backend of the [`scanner_api::Registry`].
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct EpsonBackend {
     /// A copy of `esfw54.bin` the user chose, tried before the others.
     firmware_path: Option<PathBuf>,
+    /// Whether opening a scanner may send it the firmware.
+    upload: bool,
+}
+
+impl Default for EpsonBackend {
+    fn default() -> Self {
+        Self {
+            firmware_path: None,
+            upload: UPLOAD_CONFIRMED || std::env::var_os(UPLOAD_VAR).is_some_and(|v| v == "1"),
+        }
+    }
 }
 
 impl EpsonBackend {
-    /// Finds the firmware as [`firmware::find`] does.
+    /// Finds the firmware as [`firmware::find`] does; sends it as
+    /// [`UPLOAD_CONFIRMED`] and [`UPLOAD_VAR`] say.
     pub fn new() -> Self {
         Self::default()
     }
@@ -178,6 +202,30 @@ impl EpsonBackend {
     pub fn with_firmware_path(mut self, path: Option<PathBuf>) -> Self {
         self.firmware_path = path;
         self
+    }
+
+    /// Whether opening a scanner may send it the firmware.
+    pub fn with_upload(mut self, upload: bool) -> Self {
+        self.upload = upload;
+        self
+    }
+}
+
+/// What gives [`Gt4490::start`] the firmware: none when `upload` is not
+/// allowed (an error saying so), else [`firmware::find`].
+pub fn firmware_loader(
+    upload: bool,
+    path: Option<PathBuf>,
+) -> impl FnOnce() -> Result<firmware::Firmware> {
+    move || {
+        if !upload {
+            return Err(Error::Other(format!(
+                "the Epson 4490's firmware is not running, and sending it is not confirmed by a \
+                 capture of Epson's driver yet: switch the scanner on with Epson's driver, or \
+                 set {UPLOAD_VAR}=1 (or run `epson4490 upload`) to send it"
+            )));
+        }
+        firmware::find(path.as_deref()).map_err(Error::Other)
     }
 }
 
@@ -204,13 +252,12 @@ impl scanner_api::Backend for EpsonBackend {
         vec![capabilities()]
     }
 
-    /// Opens the scanner and sends its firmware if it is not running.
+    /// Opens the scanner and sends its firmware if it is not running (and
+    /// that is allowed: [`UPLOAD_CONFIRMED`]).
     fn open(&self, device: &scanner_api::DeviceInfo) -> Result<Box<dyn scanner_api::Scanner>> {
         let transport = open(&device.id)?;
-        let path = self.firmware_path.clone();
-        Ok(Box::new(Gt4490::start(transport, move || {
-            firmware::find(path.as_deref()).map_err(Error::Other)
-        })?))
+        let load = firmware_loader(self.upload, self.firmware_path.clone());
+        Ok(Box::new(Gt4490::start(transport, load)?))
     }
 }
 
@@ -358,6 +405,20 @@ mod tests {
         assert!(matches!(s.firmware(), FirmwareOutcome::Uploaded { .. }));
         // The answers were read in order: state, four ACKs, then the state.
         assert!(s.status().unwrap().ready);
+    }
+
+    #[test]
+    fn without_leave_the_firmware_is_not_sent() {
+        assert!(!UPLOAD_CONFIRMED || EpsonBackend::new().upload);
+        assert!(!EpsonBackend::new().with_upload(false).upload);
+        // Firmware stopped, upload not allowed: only 1B 03 goes out (an
+        // upload would have read an ACK the mock does not have).
+        let t = Mock::answering(&[&[0x00, 0x00]]);
+        let e = Gt4490::start(Box::new(t), firmware_loader(false, None)).unwrap_err();
+        assert!(e.to_string().contains("not confirmed by a capture"), "{e}");
+        // Running: it opens anyway.
+        let t = Mock::answering(&[&[0x10, 0x00]]);
+        assert!(Gt4490::start(Box::new(t), firmware_loader(false, None)).is_ok());
     }
 
     #[test]

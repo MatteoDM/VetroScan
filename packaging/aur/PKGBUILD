@@ -58,6 +58,7 @@ package() {
   install -Dm755 target/release/vetroscan "$pkgdir/usr/bin/vetroscan"
   install -Dm755 target/release/hp3770 "$pkgdir/usr/bin/hp3770"
   install -Dm644 packaging/linux/70-hp3770.rules "$pkgdir/usr/lib/udev/rules.d/70-hp3770.rules"
+  install -Dm644 packaging/linux/70-epson-4490.rules "$pkgdir/usr/lib/udev/rules.d/70-epson-4490.rules"
   install -Dm644 packaging/linux/vetroscan.desktop "$pkgdir/usr/share/applications/vetroscan.desktop"
   install -Dm644 packaging/linux/vetroscan.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/vetroscan.svg"
   install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
