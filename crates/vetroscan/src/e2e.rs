@@ -87,8 +87,10 @@ impl Ui {
     /// Hands the app what the scanner sent until it has finished.
     fn settle(&mut self) {
         loop {
+            // Long enough for a large made-up scan on a slow machine; only a
+            // scan that really hangs waits that long.
             let wait = if self.app.busy.is_some() {
-                Duration::from_secs(20)
+                Duration::from_secs(60)
             } else {
                 Duration::from_millis(50)
             };
@@ -1705,8 +1707,11 @@ fn resolutions_and_glass_are_the_scanners() {
         (2340, 3300),
         "11.7 × 16.5 inches at 200 dpi"
     );
-    // A page scanned on it keeps its tone curve.
+    // A page scanned on it keeps its tone curve (at its lowest resolution:
+    // a whole page at 600 dpi made up in a debug build took longer than a
+    // slow CI machine waits).
     ui.send(Message::Kind(Kind::Document));
+    ui.send(Message::Dpi(150));
     ui.scan(1);
     assert_eq!(ui.app.pages[0].raw.tone.white, [230.0; 3]);
 }
