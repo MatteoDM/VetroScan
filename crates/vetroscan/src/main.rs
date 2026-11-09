@@ -2568,7 +2568,6 @@ impl App {
                 | Message::AutoThreshold
                 | Message::Picked(_)
                 | Message::ResetGroup(_)
-                | Message::Colour(_)
                 | Message::PageRotate(..)
                 | Message::PageMove(..)
                 | Message::PageDelete(_)
@@ -2914,6 +2913,16 @@ impl App {
             (Target::Preview, *self.settings())
         };
         self.undo.push(entry);
+        if self.undo.len() > 100 {
+            self.undo.remove(0);
+        }
+        self.redo_stack.clear();
+    }
+
+    /// Saves the shared settings for Ctrl+Z, whatever the panel shows.
+    fn remember_shared(&mut self) {
+        self.last_edit = None;
+        self.undo.push((Target::Preview, *self.settings()));
         if self.undo.len() > 100 {
             self.undo.remove(0);
         }
@@ -4311,14 +4320,18 @@ impl App {
                     s.output = outputs(kind, s.colour, s.depth)[0];
                 }
             }
+            // The colour of the next scans, as the resolution beside it,
+            // whatever the viewer shows (a page's own is changed in its
+            // editor: EditMsg::Colour). The pages keep theirs.
             Message::Colour(colour) => {
+                self.remember_shared();
                 let kind = self.kind;
-                self.change(|s| {
-                    s.colour = colour;
-                    if !outputs(kind, colour, s.depth).contains(&s.output) {
-                        s.output = outputs(kind, colour, s.depth)[0];
-                    }
-                });
+                let s = self.settings_mut();
+                s.colour = colour;
+                if !outputs(kind, colour, s.depth).contains(&s.output) {
+                    s.output = outputs(kind, colour, s.depth)[0];
+                }
+                self.dirty_preview = true;
             }
             Message::Output(output) => self.settings_mut().output = output,
             Message::PdfSize(size) => self.settings_mut().pdf_size = size,
@@ -6600,7 +6613,8 @@ impl App {
     }
 
     fn scan_pane(&self) -> Element<'_, Message> {
-        let s = self.active();
+        // How the next scans are made, whatever the viewer shows.
+        let s = *self.settings();
         let request = self.request();
         let (w, h) = (request.area.width, request.area.height);
         let (x, y, wmm, hmm) = self.area_mm();
@@ -6626,6 +6640,17 @@ impl App {
             ),
         ]
         .spacing(10);
+        // A page shown: what it is in is changed in its editor.
+        if let Some(i) = self.shown_key().filter(|_| self.editing_page()) {
+            pane = pane.push(
+                text(trf(
+                    "Valgono per le prossime scansioni: il colore della {name} si cambia in \
+                     «Modifica…».",
+                    &[("name", &self.page_name(i))],
+                ))
+                .size(11),
+            );
+        }
         // The depth only for a scanner that gives 16 bits.
         if self.offers_16bit() {
             pane = pane
@@ -7482,7 +7507,8 @@ impl App {
     }
 
     fn output_pane(&self) -> Element<'_, Message> {
-        let s = self.active();
+        // The formats of the colour of the scans, as in the panel Scansione.
+        let s = *self.settings();
         let options = outputs(self.kind, s.colour, self.depth());
         let mut pane = column![
             heading(tr("Formato")),

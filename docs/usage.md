@@ -225,6 +225,10 @@ The scanner always reads in colour: the colour chosen is applied afterwards. Tha
 even on a scan already made, the [editor](#editing-a-scan-already-made) can go from grey to
 colour and back.
 
+**Colour** in the **Scan** tab, like the resolution next to it, is always for the next scans,
+even while the viewer shows a page: the pages keep theirs. The colour of a page already
+scanned is changed in its editor (**Edit…** → **Colour** → **Mode**).
+
 ### Depth: 8 or 16 bits
 
 Only for scanners that give 16 bits, like the HP 3770.

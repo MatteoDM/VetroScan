@@ -1102,6 +1102,34 @@ fn ctrl_z_takes_a_setting_back_and_ctrl_y_puts_it_again() {
 }
 
 #[test]
+fn colour_in_the_scan_settings_is_for_the_next_scans_a_page_changes_it_in_its_editor() {
+    use crate::{Colour, EditMsg};
+    let mut ui = document(1);
+    ui.send(Message::Save);
+    ui.send(Message::PageShow(0));
+    ui.send(Message::Pane(crate::Pane::Scan));
+    assert!(ui.shows(
+        "Valgono per le prossime scansioni: il colore della pagina 1 si cambia in «Modifica…»."
+    ));
+    // Chosen with the page shown: the next scans, as the resolution beside it.
+    ui.send(Message::Colour(Colour::Grey));
+    assert_eq!(ui.app.settings().colour, Colour::Grey);
+    assert_eq!(ui.app.pages[0].settings.colour, Colour::Rgb);
+    assert!(!ui.app.unsaved, "the page did not change");
+    ui.send(Message::Undo);
+    assert_eq!(ui.app.settings().colour, Colour::Rgb);
+    // The page's own, in its editor.
+    ui.send(Message::Edit(EditMsg::Open(0)));
+    ui.send(Message::Edit(EditMsg::Colour(Colour::Lineart)));
+    ui.send(Message::Edit(EditMsg::Apply));
+    assert_eq!(ui.app.pages[0].settings.colour, Colour::Lineart);
+    assert_eq!(ui.app.settings().colour, Colour::Rgb);
+    assert!(ui.app.unsaved);
+    ui.scan(1);
+    assert_eq!(ui.app.pages[1].settings.colour, Colour::Rgb);
+}
+
+#[test]
 fn the_editor_turns_a_page_and_its_ctrl_z_takes_it_back() {
     use crate::EditMsg;
     let mut ui = document(1);

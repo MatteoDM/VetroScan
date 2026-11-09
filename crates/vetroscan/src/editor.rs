@@ -298,6 +298,8 @@ pub enum EditMsg {
     Open(usize),
     Apply,
     Discard,
+    /// The colour mode of the page edited (the next scans keep theirs).
+    Colour(Colour),
     Section(Section),
     Undo,
     Redo,
@@ -459,6 +461,9 @@ impl App {
             EditMsg::Open(i) => self.open_editor(i),
             EditMsg::Apply => self.close_editor(true),
             EditMsg::Discard => self.close_editor(false),
+            // Through the panel's changes: with the editor open they are
+            // the page's (its own look from now on).
+            EditMsg::Colour(colour) => self.change(|s| s.colour = colour),
             EditMsg::Section(section) => {
                 if let Some(e) = self.editor.as_mut() {
                     if e.section != section {
@@ -779,7 +784,7 @@ impl App {
         let top = column![
             labelled(
                 tr("Modo"),
-                pick_list(ALL_COLOURS, Some(s.colour), Message::Colour)
+                pick_list(ALL_COLOURS, Some(s.colour), |c| EditMsg::Colour(c).into())
                     .width(Length::Fill)
                     .text_size(13)
                     .into(),

@@ -416,6 +416,7 @@
   "Usa i tasti dello scanner solo con questa app": "Use the scanner buttons with this app only",
   "Uscita": "Output",
   "Valgono anche con l'app in secondo piano; ignorati durante una scansione.": "They work with the app in the background too; ignored during a scan.",
+  "Valgono per le prossime scansioni: il colore della {name} si cambia in «Modifica…».": "They apply to the next scans: the colour of the {name} is changed in «Edit…».",
   "Verticale": "Portrait",
   "Verticale · passa a orizzontale": "Portrait · switch to landscape",
   "Vista intera": "Whole view",

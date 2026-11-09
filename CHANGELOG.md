@@ -72,6 +72,11 @@ GitHub; here they are in English.
 - In Photo and Film the column of the pages is there from the first photo, with **Edit**,
   **Redo**, **Duplicate** and **Delete**.
 
+### Fixed
+- **Colour** in the Scan tab is always for the next scans, as the resolution next to it:
+  with a page shown it used to change that page instead, and the status bar and the formats
+  offered in Output did not agree with it. A page's own colour is changed in its editor.
+
 ## [0.4.0] - 2026-11-08
 
 ### Added
