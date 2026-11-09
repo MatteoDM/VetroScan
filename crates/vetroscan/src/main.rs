@@ -2609,6 +2609,9 @@ impl App {
             self.found.clear();
             self.film_preview = None;
             self.negative = None;
+            if film {
+                self.tab = Tab::Result;
+            }
         }
         self.redone = None;
         if kind == Kind::Photo && from_document {
@@ -4532,7 +4535,18 @@ impl App {
                     w.send(Command::Status);
                 }
             }
-            Message::Preview => self.start(Purpose::Preview),
+            Message::Preview => {
+                // Films: the adapter's area is small and full of frames, and
+                // a scan finds them itself; a preview would only add a lamp
+                // warm-up (9 November 2026, with Matteo).
+                if self.filming() {
+                    self.note =
+                        tr("Per le pellicole l'anteprima non serve: Scansiona trova i fotogrammi")
+                            .into();
+                } else {
+                    self.start(Purpose::Preview);
+                }
+            }
             Message::Scan => {
                 self.redone = None;
                 self.start(Purpose::Page);
@@ -5653,6 +5667,13 @@ impl App {
         ]
         .spacing(3)
         .align_y(Alignment::Start);
+        // Films have no preview (Message::Preview).
+        let preview = (!self.filming()).then(|| {
+            button(text(tr("Anteprima")).size(13))
+                .style(button::secondary)
+                .padding([7, 12])
+                .on_press_maybe(self.idle().then_some(Message::Preview))
+        });
         let bar = row![
             name,
             modes,
@@ -5661,20 +5682,23 @@ impl App {
                 .padding(0)
                 .style(button::text)
                 .on_press_maybe(self.idle().then_some(Message::RefreshStatus)),
-            button(text(tr("Anteprima")).size(13))
-                .style(button::secondary)
-                .padding([7, 12])
-                .on_press_maybe(self.idle().then_some(Message::Preview)),
-            button(text(next).size(13))
-                .padding([7, 16])
-                .on_press_maybe(self.idle().then_some(Message::Scan)),
-            pick_list(
-                [ThemeChoice::System, ThemeChoice::Light, ThemeChoice::Dark],
-                Some(self.theme),
-                Message::Theme
-            )
-            .text_size(12),
         ]
+        .push(preview)
+        .push(
+            row![
+                button(text(next).size(13))
+                    .padding([7, 16])
+                    .on_press_maybe(self.idle().then_some(Message::Scan)),
+                pick_list(
+                    [ThemeChoice::System, ThemeChoice::Light, ThemeChoice::Dark],
+                    Some(self.theme),
+                    Message::Theme
+                )
+                .text_size(12),
+            ]
+            .spacing(12)
+            .align_y(Alignment::Center),
+        )
         .spacing(12)
         .align_y(Alignment::Center);
         container(bar)
@@ -6067,19 +6091,20 @@ impl App {
             Kind::Photo => tr("Foto"),
         };
         let views = card(
-            row![
-                small(
-                    tr("Anteprima"),
-                    Some(Message::Tab(Tab::Preview)),
-                    self.tab == Tab::Preview
-                ),
-                small(
+            row![]
+                .push((!self.filming()).then(|| {
+                    small(
+                        tr("Anteprima"),
+                        Some(Message::Tab(Tab::Preview)),
+                        self.tab == Tab::Preview,
+                    )
+                }))
+                .push(small(
                     result_label,
                     Some(Message::Tab(Tab::Result)),
-                    self.tab == Tab::Result
-                ),
-            ]
-            .spacing(2),
+                    self.tab == Tab::Result,
+                ))
+                .spacing(2),
         );
         let edit = (self.tab == Tab::Result
             && self.editor().is_none()
@@ -6549,7 +6574,12 @@ impl App {
             }
             pane = pane
                 .push(
-                    text(if self.selection.is_none() {
+                    text(if self.selection.is_none() && self.filming() {
+                        tr(
+                            "Tutto il supporto della pellicola. Senza anteprima: con il ritaglio \
+                             automatico Scansiona trova i fotogrammi da sé, ognuno un'immagine.",
+                        )
+                    } else if self.selection.is_none() {
                         tr(
                             "Tutto il formato A4. Trascina sull'anteprima per scegliere un'area, \
                             o scrivila qui sotto.",

@@ -524,8 +524,10 @@ It needs no new hardware, only slides and negatives to put in the holder.
   The driver of HP cannot scan with the adapter on Windows 11 (above): the comparison with its
   images in **Done when** cannot be made; the reference are our own scans.
 - **Next** (where to start again), in order:
-  1. a **preview at 600 dpi** watched on the real scanner (hand on the switch): the film
-     preview is always at 600 dpi, it may not have run yet; then a scan at 600 dpi;
+  1. ~~a preview at 600 dpi~~: **no preview for films** since 9 November 2026 (with Matteo:
+     the adapter's area is small and full of frames, the scan finds them itself, a preview
+     only added a lamp warm-up and the only resolution never tried); **a scan at 600 dpi
+     tried by Matteo** the same day, it works;
   2. **blue on a negative's base**, the lowest signal: try HP's exposure per colour again
      (`NEGATIVE_EXPOSURES`, how the chip uses `EXPT`/`MEXPT`) or a longer line for blue only;
   3. the **light along the strip**: a correction measured once on the empty holder, only if

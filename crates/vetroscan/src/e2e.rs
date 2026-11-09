@@ -1372,19 +1372,15 @@ fn a_strip_of_negatives_becomes_a_picture_per_frame() {
     let (mut ui, _) = with_adapter();
     ui.click("Pellicola");
     ui.send(Message::Dpi(200));
-    // The preview: the adapter's area, the negatives turned into their
-    // picture, the two frames found.
+    // No preview for films: not offered, and asked for anyway (the P key)
+    // only a note.
+    assert!(!ui.shows("Anteprima"));
     ui.send(Message::Preview);
-    ui.settle();
-    let (raw, ..) = ui.app.preview.as_ref().expect("a preview");
-    assert_eq!((raw.full.width, raw.full.height), (346, 751));
-    assert_eq!(raw.tone, scan_imaging::film::TONE);
-    assert!(ui.app.negative.is_some(), "{}", ui.app.note);
-    assert_eq!(ui.app.found.len(), 2, "{:?}", ui.app.found);
-    assert!(ui.app.note.contains("2 fotogrammi"), "{}", ui.app.note);
+    assert!(ui.app.busy.is_none() && ui.app.preview.is_none());
+    assert!(ui.app.note.contains("non serve"), "{}", ui.app.note);
     // One scan, one picture for each frame, standing up as on the strip.
-    ui.click("Scansiona 2 foto");
-    assert_eq!(ui.app.pages.len(), 2);
+    ui.click("Scansiona foto");
+    assert_eq!(ui.app.pages.len(), 2, "{}", ui.app.note);
     for page in &ui.app.pages {
         let full = &page.raw.full;
         assert_eq!(page.raw.tone, scan_imaging::film::TONE);
@@ -1403,10 +1399,10 @@ fn a_strip_of_negatives_becomes_a_picture_per_frame() {
             grey(full.width * 4 / 5)
         );
     }
-    // Back to the glass: the adapter's preview does not fit it.
+    // Back to the glass: its preview again.
     ui.click("Foto");
-    assert!(ui.app.preview.is_none() && ui.app.found.is_empty());
-    assert!(ui.app.negative.is_none());
+    assert!(ui.shows("Anteprima"));
+    assert!(ui.app.found.is_empty() && ui.app.negative.is_none());
 }
 
 /// Whether every original in `a` has one in `b` with its centre within
@@ -1433,19 +1429,8 @@ fn without_a_preview_the_frames_are_found_in_the_scan() {
     let (mut ui, _) = with_adapter();
     ui.click("Pellicola");
     ui.send(Message::Dpi(200));
-    let frames = found_by_the_preview(&mut ui);
-    // No preview: straight to Scansiona, the frames found in the scan.
-    ui.app.preview = None;
-    ui.app.found.clear();
-    ui.app.film_preview = None;
-    ui.app.negative = None;
     ui.click("Scansiona foto");
     assert_eq!(ui.app.pages.len(), 2, "{}", ui.app.note);
-    let origins: Vec<Found> = ui.app.pages.iter().filter_map(|p| p.origin).collect();
-    assert!(
-        same_places(&origins, &frames, 3.0),
-        "{origins:?} {frames:?}"
-    );
     for page in &ui.app.pages {
         assert!(page.whole.is_none());
         assert_eq!(page.raw.tone, scan_imaging::film::TONE);
@@ -1461,10 +1446,18 @@ fn without_a_preview_the_frames_are_found_in_the_scan() {
 
 #[test]
 fn separa_cuts_the_frames_out_of_a_film_scanned_whole() {
+    // Where the scan with the automatic crop finds the frames.
+    let frames: Vec<Found> = {
+        let (mut ui, _) = with_adapter();
+        ui.click("Pellicola");
+        ui.send(Message::Dpi(200));
+        ui.click("Scansiona foto");
+        ui.app.pages.iter().filter_map(|p| p.origin).collect()
+    };
+    assert_eq!(frames.len(), 2);
     let (mut ui, _) = with_adapter();
     ui.click("Pellicola");
     ui.send(Message::Dpi(200));
-    let frames = found_by_the_preview(&mut ui);
     // The automatic crop off: one picture, the whole adapter's area.
     ui.send(Message::AutoCrop(false));
     ui.click("Scansiona foto");
