@@ -110,9 +110,18 @@ pub fn registry() -> Registry {
             scanner_api::fake::FakeScanner::flatbed().paced(Duration::from_millis(400)),
         ]));
     }
+    // The Epson 4490's firmware: the file named in the preferences, else
+    // `esfw54.bin` in the settings folder, the same place on every system
+    // (the backend then tries the embedded copy and where Epson's drivers
+    // put it).
     let epson_firmware = Some(crate::prefs::Prefs::load().epson_firmware)
         .filter(|p| !p.trim().is_empty())
-        .map(std::path::PathBuf::from);
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            crate::prefs::config_dir()
+                .map(|d| d.join(epson_gt_x750::firmware::FILE_NAME))
+                .filter(|p| p.exists())
+        });
     Registry::new()
         .with(hp3770_usb::UsbBackend)
         .with(epson_gt_x750::EpsonBackend::new().with_firmware_path(epson_firmware))

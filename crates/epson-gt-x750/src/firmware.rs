@@ -176,21 +176,29 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 /// Where Epson's drivers install the file on this system, in the order
-/// they are tried after a path the user named and the embedded copy.
+/// they are tried after a path the user named and the embedded copy:
+/// on Windows, where Epson's driver puts it.
+#[cfg(windows)]
 pub fn search_paths() -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    #[cfg(windows)]
-    {
-        let root = std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
-        paths.push(PathBuf::from(root).join("System32").join(FILE_NAME));
-    }
-    #[cfg(not(windows))]
-    {
-        // Fedora's `iscan-firmware`, then Epson's own `iscan` plugin.
-        paths.push(PathBuf::from("/usr/lib/firmware/epson").join(FILE_NAME));
-        paths.push(PathBuf::from("/usr/share/iscan").join(FILE_NAME));
-    }
-    paths
+    let root = std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
+    vec![PathBuf::from(root).join("System32").join(FILE_NAME)]
+}
+
+/// On Linux: Fedora's `iscan-firmware`, then Epson's own `iscan` plugin.
+#[cfg(target_os = "linux")]
+pub fn search_paths() -> Vec<PathBuf> {
+    vec![
+        PathBuf::from("/usr/lib/firmware/epson").join(FILE_NAME),
+        PathBuf::from("/usr/share/iscan").join(FILE_NAME),
+    ]
+}
+
+/// Elsewhere (macOS): no place is known where a driver installs it; the
+/// firmware comes from the program (embedded) or from a path the user
+/// named (the application also looks in its own settings folder).
+#[cfg(not(any(windows, target_os = "linux")))]
+pub fn search_paths() -> Vec<PathBuf> {
+    Vec::new()
 }
 
 /// The firmware to send: from `preferred` (a path the user chose), else

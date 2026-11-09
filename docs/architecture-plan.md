@@ -869,8 +869,12 @@ pushed): the crate **`crates/epson-gt-x750`**, in the app's `Registry` after the
   shows it.
 - The firmware: `build.rs` embeds it when `VETROSCAN_ESFW54` names a copy with one of the two
   known SHA-256 (any other file stops the build); otherwise it is looked for at run time
-  (`epson_firmware` in `impostazioni.json`, then System32 or the Linux `iscan` places), with the
-  same check. `esfw54.bin` is in `.gitignore`.
+  (`epson_firmware` in `impostazioni.json`, else `esfw54.bin` in the app's settings folder, the
+  same place on every system; then System32 on Windows, the `iscan` places on Linux; on macOS
+  no driver place is known), with the same check. `esfw54.bin` is in `.gitignore`.
+- Tried on: Windows (tests, clippy, the command); Linux in WSL (tests, clippy, the command);
+  **macOS only compiled** (clippy for `aarch64-apple-darwin` from Windows, not linked nor run):
+  the CI's macOS job is the first real run there.
 - Provisional `Capabilities`: glass 8.5 × 11.7 in, 8/16 bits, colour and grey, the four buttons,
   no lamp, no adapter.
 - 24 unit tests with a mock transport (the upload's exact bytes, any answer but `06` refused, no
