@@ -10,3 +10,7 @@
 
 # Packages written by scripts/package.sh and scripts/package.ps1.
 /dist/
+
+# The Epson 4490 firmware is never versioned (see crates/epson-gt-x750).
+esfw54.bin
+ESFW54.BIN

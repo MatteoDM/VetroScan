@@ -1046,6 +1046,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "epson-gt-x750"
+version = "0.4.0"
+dependencies = [
+ "nusb",
+ "scanner-api",
+ "sha2",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "equator"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4356,6 +4366,7 @@ version = "0.4.0"
 dependencies = [
  "chrono",
  "dirs",
+ "epson-gt-x750",
  "hp3770-core",
  "hp3770-usb",
  "iced",

@@ -100,7 +100,9 @@ impl Handle {
     }
 }
 
-/// The scanners the app looks for: on USB, the RTS8822 driver.
+/// The scanners the app looks for: on USB, the RTS8822 driver, then the
+/// Epson Perfection 4490 (phase 12, milestone 1: firmware and state, no
+/// scanning yet; it lists nothing and sends nothing without the scanner).
 pub fn registry() -> Registry {
     if std::env::var_os("VETROSCAN_FAKE_SCANNER").is_some() {
         // A made-up scanner, to try the interface with no scanner.
@@ -108,7 +110,12 @@ pub fn registry() -> Registry {
             scanner_api::fake::FakeScanner::flatbed().paced(Duration::from_millis(400)),
         ]));
     }
-    Registry::new().with(hp3770_usb::UsbBackend)
+    let epson_firmware = Some(crate::prefs::Prefs::load().epson_firmware)
+        .filter(|p| !p.trim().is_empty())
+        .map(std::path::PathBuf::from);
+    Registry::new()
+        .with(hp3770_usb::UsbBackend)
+        .with(epson_gt_x750::EpsonBackend::new().with_firmware_path(epson_firmware))
 }
 
 /// The subscription stream of the thread's events.

@@ -188,6 +188,10 @@ pub struct Prefs {
     /// The stripes measured on each scanner ("HP Scanjet 3770"), in place
     /// of what its model declares.
     pub stripes: BTreeMap<String, Vec<StoredStripes>>,
+    /// A copy of `esfw54.bin`, the Epson Perfection 4490's firmware, tried
+    /// before the embedded one and the places Epson's drivers use; empty:
+    /// none. Not in the interface yet: edited in the file.
+    pub epson_firmware: String,
 }
 
 impl Default for Prefs {
@@ -224,6 +228,7 @@ impl Default for Prefs {
             lamp_off_minutes: 2,
             language: "automatica".into(),
             stripes: BTreeMap::new(),
+            epson_firmware: String::new(),
         }
     }
 }

@@ -1,0 +1,36 @@
+[package]
+name = "epson-gt-x750"
+description = "Backend for the Epson Perfection 4490 Photo (GT-X750): firmware upload and state over USB; scanning not yet"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+build = "build.rs"
+
+[dependencies]
+scanner-api.workspace = true
+nusb = "0.2"
+sha2 = "0.10"
+
+[build-dependencies]
+sha2 = "0.10"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+] }
+
+# Same lints as the workspace, except that `unsafe` is denied instead of
+# forbidden: the Windows usbscan.sys transport needs FFI and opts in locally.
+[lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(esfw54_embedded)"] }
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

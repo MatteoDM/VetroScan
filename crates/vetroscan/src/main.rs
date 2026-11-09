@@ -2116,6 +2116,9 @@ struct App {
     measured: std::collections::BTreeMap<String, Vec<prefs::StoredStripes>>,
     /// "Misura le righe" running.
     measuring: Option<Measuring>,
+    /// The Epson 4490's firmware chosen in the preferences file (not in the
+    /// interface yet: kept as it is when the preferences are saved).
+    epson_firmware: String,
     /// Print the next photo when it arrives (photocopy).
     print_next: bool,
     /// Whether Windows leaves the buttons alone (None: nothing to set).
@@ -2263,6 +2266,7 @@ impl App {
                 button_actions: stored.buttons.clone(),
                 measured: stored.stripes.clone(),
                 measuring: None,
+                epson_firmware: stored.epson_firmware.clone(),
                 print_next: false,
                 wia_quiet: wia::quiet(),
                 saved: stored.clone(),
@@ -3528,6 +3532,7 @@ impl App {
             film: self.film_settings.to_stored(),
             lamp_off_minutes: self.lamp_off,
             language: self.language.key().into(),
+            epson_firmware: self.epson_firmware.clone(),
         }
     }
 
