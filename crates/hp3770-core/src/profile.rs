@@ -75,6 +75,9 @@ pub struct DeviceModel {
     pub resolutions: &'static [u16],
     /// The front-panel buttons, left to right.
     pub buttons: &'static [Button],
+    /// The stripes across its scans of the glass: resolution (dpi) and the
+    /// lines after which their pattern repeats.
+    pub stripes: &'static [(u16, u16)],
 }
 
 impl DeviceModel {
@@ -223,6 +226,10 @@ pub const HP3770: Profile = Profile {
         glass: (850, 1170),
         resolutions: &geometry::RESOLUTIONS,
         buttons: &[Button::Scan, Button::Copy, Button::InstantShare],
+        // Measured on 9 November 2026 on a white sheet (the HP driver's
+        // scans have them too): 3.2 % at 200 dpi, 2.4 % at 300, 0.2-0.6 %
+        // at 600, 0.6 % at 1200 (row to row). Not measured at 2400 dpi.
+        stripes: &[(200, 5), (300, 10), (600, 5), (1200, 5)],
     },
     // [SCAN_PARAM] SSCGEnable=1, SSCGMode=1, SSCGClockControl=0 (same in
     // every configuration of the file).

@@ -14,6 +14,7 @@ pub mod convert;
 pub mod detect;
 pub mod film;
 mod image;
+pub mod stripes;
 pub mod transform;
 
 pub use image::{Format, Image, Mode};

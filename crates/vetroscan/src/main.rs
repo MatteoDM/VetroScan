@@ -43,7 +43,8 @@ use scan_imaging::adjust::{self, Adjustments};
 use scan_imaging::convert;
 use scan_imaging::detect::{self, Found};
 use scan_imaging::film::{self, Film, Negative};
-use scan_imaging::transform::Transform;
+use scan_imaging::stripes;
+use scan_imaging::transform::{self, Transform};
 use scan_imaging::{Format, Image, Mode};
 use scanner_api::{
     Area, Capabilities, DeviceInfo, DeviceStatus, LampState, Progress, ScanRequest, Source,
@@ -627,6 +628,12 @@ struct Settings {
     auto_crop: bool,
     /// Bits per sample asked of the scanner: 8 or 16.
     depth: u8,
+    /// Take away the stripes the scanner leaves across its scans of the
+    /// glass, where it declares them (`Capabilities::stripes`).
+    destripe: bool,
+    /// Scan the glass at twice the resolution chosen and bring it back to
+    /// it: finer, less noise and fainter stripes, in about twice the time.
+    double: bool,
 }
 
 impl Settings {
@@ -646,6 +653,8 @@ impl Settings {
             auto_save: false,
             auto_crop: false,
             depth: 8,
+            destripe: false,
+            double: false,
         }
     }
 
@@ -744,6 +753,8 @@ impl Settings {
             auto_save: self.auto_save,
             auto_crop: Some(self.auto_crop),
             depth: Some(self.depth),
+            destripe: Some(self.destripe),
+            double: Some(self.double),
             adjust: prefs::StoredAdjust {
                 temperature: a.temperature,
                 tint: a.tint,
@@ -888,6 +899,8 @@ impl Settings {
             auto_save: m.auto_save,
             auto_crop: m.auto_crop.unwrap_or(base.auto_crop),
             depth,
+            destripe: m.destripe.unwrap_or(base.destripe),
+            double: m.double.unwrap_or(base.double),
         }
     }
 }
@@ -1862,6 +1875,14 @@ enum Message {
     PageFocus([f32; 2]),
     AutoSave(bool),
     AutoCrop(bool),
+    /// "Togli le righe dello scanner".
+    Destripe(bool),
+    /// "Scansiona a ... dpi e riduci".
+    Double(bool),
+    /// "Misura le righe": a strip of a white sheet at each resolution.
+    MeasureStripes,
+    /// Back to the stripes the scanner's model declares.
+    ForgetStripes,
     /// Find the originals on the preview again.
     Detect,
     /// Leave out one of the originals found.
@@ -2003,6 +2024,26 @@ struct Job {
     area: Option<Area>,
 }
 
+/// The highest resolution "Misura le righe" scans at: above it a strip
+/// of the glass is large and slow, and no stripes were measured there.
+const MEASURE_MAX_DPI: u16 = 1200;
+
+/// The height of the strip "Misura le righe" scans, millimetres.
+const MEASURE_STRIP_MM: f64 = 25.0;
+
+/// "Misura le righe" running: a strip at each resolution in turn.
+#[derive(Debug, Clone)]
+struct Measuring {
+    /// The resolutions still to scan, the next last.
+    left: Vec<u16>,
+    /// The one being scanned.
+    current: u16,
+    /// How many in all.
+    total: usize,
+    /// What was found so far.
+    done: Vec<prefs::StoredStripes>,
+}
+
 /// A scan kept whole, as "Separa" needs it to cut its originals out
 /// afterwards.
 #[derive(Debug, Clone)]
@@ -2051,6 +2092,9 @@ struct App {
     /// The preview of films as the scanner gave it (their transmission,
     /// pixels of the preview), where the frames are found.
     film_preview: Option<Image>,
+    /// The scan running was asked at twice the resolution chosen
+    /// (`Settings::double`): it is halved when it comes.
+    doubled: bool,
     /// How the negatives of the preview become their picture: the full
     /// scans take the same measures, for the same picture.
     negative: Option<Negative>,
@@ -2068,6 +2112,10 @@ struct App {
     /// What the buttons do, by scanner model and way of working (button
     /// id → action key); a button not there does its default.
     button_actions: std::collections::BTreeMap<String, prefs::StoredButtons>,
+    /// The stripes measured on each scanner ("Misura le righe").
+    measured: std::collections::BTreeMap<String, Vec<prefs::StoredStripes>>,
+    /// "Misura le righe" running.
+    measuring: Option<Measuring>,
     /// Print the next photo when it arrives (photocopy).
     print_next: bool,
     /// Whether Windows leaves the buttons alone (None: nothing to set).
@@ -2203,6 +2251,7 @@ impl App {
                 )
                 .fresh_look(),
                 film_preview: None,
+                doubled: false,
                 negative: None,
                 film_wanted: false,
                 tab: Tab::Preview,
@@ -2212,6 +2261,8 @@ impl App {
                 document_name: stored.document_name.clone(),
                 photo_name: stored.photo_name.clone(),
                 button_actions: stored.buttons.clone(),
+                measured: stored.stripes.clone(),
+                measuring: None,
                 print_next: false,
                 wia_quiet: wia::quiet(),
                 saved: stored.clone(),
@@ -3036,7 +3087,110 @@ impl App {
     }
 
     fn job_memory(&self, job: &Job) -> f64 {
-        Self::bytes(&self.job_request(job), self.dpi())
+        Self::bytes(&self.job_request(job), self.dpi()) * self.doubling_factor()
+    }
+
+    /// Lines after which the stripes of a scan of the glass at `dpi`
+    /// repeat: as measured on this scanner ("Misura le righe"), or as its
+    /// model declares them.
+    fn stripes_at(&self, dpi: u16) -> Option<usize> {
+        let measured = self
+            .measured
+            .get(&self.caps.name())
+            .and_then(|m| m.iter().find(|s| s.dpi == dpi));
+        match measured {
+            Some(s) => (s.repeat > 0).then_some(usize::from(s.repeat)),
+            None => self.caps.stripes_at(dpi),
+        }
+    }
+
+    /// "Misura le righe": the resolutions it scans at, smallest first.
+    fn measure_resolutions(&self) -> Vec<u16> {
+        self.caps
+            .resolutions_for(Source::Glass)
+            .iter()
+            .copied()
+            .filter(|&d| d <= MEASURE_MAX_DPI)
+            .collect()
+    }
+
+    /// Scans the next strip of "Misura le righe", or ends it: what was
+    /// found is kept for this scanner and said.
+    fn next_measure(&mut self) {
+        let Some(measuring) = &mut self.measuring else {
+            return;
+        };
+        let Some(dpi) = measuring.left.pop() else {
+            let done = self.measuring.take().map(|m| m.done).unwrap_or_default();
+            let said: Vec<String> = done
+                .iter()
+                .map(|s| {
+                    if s.repeat == 0 {
+                        trf("{dpi} dpi nessuna", &[("dpi", &s.dpi)])
+                    } else {
+                        trf(
+                            "{dpi} dpi ogni {n} righe ({pct} %)",
+                            &[
+                                ("dpi", &s.dpi),
+                                ("n", &s.repeat),
+                                ("pct", &i18n::decimal(format!("{:.1}", s.percent))),
+                            ],
+                        )
+                    }
+                })
+                .collect();
+            self.measured.insert(self.caps.name(), done);
+            self.note = trf("Righe misurate: {list}", &[("list", &said.join(", "))]);
+            return;
+        };
+        measuring.current = dpi;
+        let (gw, gh) = self.caps.glass_inches;
+        let (width, height) = self
+            .caps
+            .bed_pixels(Source::Glass, dpi)
+            .unwrap_or_else(|| self.caps.glass_pixels(dpi));
+        // Low on the glass: inside an A4 sheet laid at the top, away from
+        // anything else left on the glass.
+        let top = gh * 25.4 * 0.8;
+        let area = within(
+            area_mm(dpi, 0.0, top, gw * 25.4, MEASURE_STRIP_MM),
+            (width, height),
+        );
+        let request = ScanRequest {
+            dpi,
+            source: Source::Glass,
+            area,
+            depth: if self.offers_16bit() { 16 } else { 8 },
+        };
+        if let (Some(worker), None) = (&self.worker, &self.busy) {
+            worker.send(Command::Scan(Purpose::Measure, request));
+            self.busy = Some((Purpose::Measure, None));
+        }
+    }
+
+    /// Whether the scans of pages are asked at twice the resolution chosen
+    /// and halved: "Scansiona a ... dpi e riduci", on the glass, where the
+    /// scanner offers twice it.
+    fn doubles(&self) -> bool {
+        self.settings().double && !self.filming() && self.double_dpi().is_some()
+    }
+
+    /// Twice the resolution chosen, if the scanner offers it on the glass.
+    fn double_dpi(&self) -> Option<u16> {
+        let double = self.dpi().checked_mul(2)?;
+        self.caps
+            .resolutions_for(Source::Glass)
+            .contains(&double)
+            .then_some(double)
+    }
+
+    /// How much more memory a scan at twice the resolution takes.
+    fn doubling_factor(&self) -> f64 {
+        if self.doubles() {
+            4.0
+        } else {
+            1.0
+        }
     }
 
     fn bytes(request: &ScanRequest, dpi: u16) -> f64 {
@@ -3055,7 +3209,7 @@ impl App {
         if !plan.is_empty() {
             return plan.iter().map(|j| self.job_memory(j)).fold(0.0, f64::max);
         }
-        Self::bytes(&self.request(), self.dpi())
+        Self::bytes(&self.request(), self.dpi()) * self.doubling_factor()
     }
 
     fn start(&mut self, purpose: Purpose) {
@@ -3126,6 +3280,27 @@ impl App {
             });
             request
         };
+        // Twice the resolution: the same area, twice the pixels each way;
+        // halved when it comes (the job keeps the area at the resolution
+        // chosen).
+        let mut request = request;
+        self.doubled = false;
+        if purpose == Purpose::Page && self.doubles() {
+            if let Some(dpi) = self.double_dpi() {
+                let a = request.area;
+                request.area = within(
+                    Area {
+                        x: a.x * 2,
+                        y: a.y * 2,
+                        width: a.width * 2,
+                        height: a.height * 2,
+                    },
+                    self.bed_pixels(dpi),
+                );
+                request.dpi = dpi;
+                self.doubled = true;
+            }
+        }
         if let (Some(worker), None) = (&self.worker, &self.busy) {
             worker.send(Command::Scan(purpose, request));
             self.busy = Some((purpose, None));
@@ -3344,6 +3519,7 @@ impl App {
             document_buttons: self.legacy_button_keys(Kind::Document),
             photo_buttons: self.legacy_button_keys(Kind::Photo),
             buttons: self.button_actions.clone(),
+            stripes: self.measured.clone(),
             document: self.document.to_stored(),
             photo: self.photo.to_stored(),
             film: self.film_settings.to_stored(),
@@ -4036,6 +4212,38 @@ impl App {
             Message::MmSubmit => self.mm_draft = None,
             Message::AutoSave(on) => self.settings_mut().auto_save = on,
             Message::AutoCrop(on) => self.settings_mut().auto_crop = on,
+            Message::Destripe(on) => self.settings_mut().destripe = on,
+            Message::Double(on) => self.settings_mut().double = on,
+            Message::MeasureStripes => {
+                if self.busy.is_none()
+                    && self.worker.is_some()
+                    && !self.ask(
+                        Message::MeasureStripes,
+                        tr("Misurare le righe dello scanner?").into(),
+                        trf(
+                            "Metti un foglio bianco liscio sul vetro, o lascialo vuoto, e chiudi \
+                             il coperchio. Lo scanner fa una striscia per ogni risoluzione fino \
+                             a {max} dpi: qualche minuto.",
+                            &[("max", &MEASURE_MAX_DPI)],
+                        ),
+                        tr("Misura"),
+                    )
+                {
+                    let mut left = self.measure_resolutions();
+                    left.reverse();
+                    self.measuring = Some(Measuring {
+                        total: left.len(),
+                        left,
+                        current: 0,
+                        done: Vec::new(),
+                    });
+                    self.next_measure();
+                }
+            }
+            Message::ForgetStripes => {
+                self.measured.remove(&self.caps.name());
+                self.note = tr("Righe dello scanner: di nuovo quelle del modello").into();
+            }
             Message::Detect => {
                 if let Some(transmission) = &self.film_preview {
                     self.found = film::frames(transmission, Film::Negative);
@@ -4119,6 +4327,9 @@ impl App {
                     // The output folder behaviour stays the user's.
                     new.auto_save = self.settings().auto_save;
                     new.auto_crop = self.settings().auto_crop;
+                    // How the scanner is driven, not a look.
+                    new.destripe = self.settings().destripe;
+                    new.double = self.settings().double;
                     self.change(|s| *s = new);
                     self.note = trf(
                         "Preset «{name}» applicato (Ctrl+Z per tornare indietro)",
@@ -4793,11 +5004,13 @@ impl App {
                         self.print_next = false;
                         self.job = None;
                         self.jobs.clear();
+                        self.measuring = None;
                         if e == worker::CANCELLED {
                             // Stopped with "Annulla": nothing went wrong.
                             self.note = match purpose {
                                 Purpose::Preview => tr("Anteprima annullata").into(),
                                 Purpose::Page => tr("Scansione annullata").into(),
+                                Purpose::Measure => tr("Misura delle righe annullata").into(),
                             };
                         } else {
                             self.note = trf("Errore: {e}", &[("e", &e)]);
@@ -4828,6 +5041,45 @@ impl App {
         }
     }
 
+    /// A scan of the glass as the settings want it before anything else:
+    /// the scanner's stripes taken away (at the resolution scanned, where
+    /// they were measured), then a scan at twice the resolution brought
+    /// back to the one chosen.
+    fn cleaned(
+        &mut self,
+        purpose: Purpose,
+        mut image: Image,
+        mut samples16: Option<Vec<u16>>,
+    ) -> (Image, Option<Vec<u16>>) {
+        let doubled = std::mem::take(&mut self.doubled) && purpose == Purpose::Page;
+        if self.filming() || purpose == Purpose::Measure {
+            return (image, samples16);
+        }
+        if self.settings().destripe {
+            if let Some(repeat) = self.stripes_at(image.dpi) {
+                stripes::remove(&mut image, samples16.as_deref_mut(), repeat);
+            }
+        }
+        if doubled && image.format == Format::Rgb {
+            let (w, h) = (image.width, image.height);
+            let (data, nw, nh) = transform::halved(&image.data, w, h, 3);
+            let deep = samples16
+                .filter(|s| s.len() == w * h * 3)
+                .map(|s| transform::halved(&s, w, h, 3).0);
+            return (
+                Image {
+                    width: nw,
+                    height: nh,
+                    dpi: image.dpi / 2,
+                    format: Format::Rgb,
+                    data,
+                },
+                deep,
+            );
+        }
+        (image, samples16)
+    }
+
     /// The note on the preview of films: the frames found, or no film.
     fn frames_note(n: usize) -> String {
         match n {
@@ -4845,6 +5097,7 @@ impl App {
     }
 
     fn on_scan(&mut self, purpose: Purpose, image: Image, samples16: Option<Vec<u16>>) {
+        let (image, samples16) = self.cleaned(purpose, image, samples16);
         match purpose {
             Purpose::Preview => {
                 self.close_editor(true);
@@ -4884,6 +5137,17 @@ impl App {
                     (true, Some(_)) => Self::frames_note(n),
                     (false, _) => Self::found_note(n),
                 };
+            }
+            Purpose::Measure => {
+                let found = stripes::measure(&image, samples16.as_deref());
+                if let Some(measuring) = &mut self.measuring {
+                    measuring.done.push(prefs::StoredStripes {
+                        dpi: measuring.current,
+                        repeat: found.map_or(0, |f| f.repeat as u16),
+                        percent: found.map_or(0.0, |f| f.strength * 100.0),
+                    });
+                }
+                self.next_measure();
             }
             Purpose::Page => {
                 let mut job = self.job.take();
@@ -5968,6 +6232,16 @@ impl App {
         let (purpose, stage) = self.busy.as_ref()?;
         let what = match purpose {
             Purpose::Preview => tr("Anteprima").to_string(),
+            Purpose::Measure => {
+                let (i, n, dpi) = self
+                    .measuring
+                    .as_ref()
+                    .map_or((0, 0, 0), |m| (m.total - m.left.len(), m.total, m.current));
+                trf(
+                    "Misura delle righe a {dpi} dpi ({i} di {n})",
+                    &[("dpi", &dpi), ("i", &i), ("n", &n)],
+                )
+            }
             Purpose::Page => match self.kind {
                 // "Rifai": the page done again, not the next one.
                 _ if self.redo.is_some() => trf(
@@ -6151,6 +6425,47 @@ impl App {
                     })
                     .size(11),
                 );
+        }
+        // On the glass only: the scanner's stripes, where it declares them,
+        // and twice the resolution, where it offers it.
+        if !self.filming() {
+            let scanned = if self.doubles() {
+                self.double_dpi().unwrap_or(self.dpi())
+            } else {
+                self.dpi()
+            };
+            if self.stripes_at(scanned).is_some() {
+                pane = pane
+                    .push(
+                        checkbox(self.settings().destripe)
+                            .label(tr("Togli le righe dello scanner"))
+                            .on_toggle(Message::Destripe)
+                            .text_size(13),
+                    )
+                    .push(
+                        text(tr(
+                            "Le righe chiare e scure che lo scanner lascia in ogni scansione: \
+                             tolte dopo, senza tempo in più.",
+                        ))
+                        .size(11),
+                    );
+            }
+            if let Some(double) = self.double_dpi() {
+                pane = pane
+                    .push(
+                        checkbox(self.settings().double)
+                            .label(trf("Scansiona a {dpi} dpi e riduci", &[("dpi", &double)]))
+                            .on_toggle(Message::Double)
+                            .text_size(13),
+                    )
+                    .push(
+                        text(tr(
+                            "Più fine, meno rumore e righe più deboli; circa il doppio del \
+                             tempo e quattro volte la memoria durante la scansione.",
+                        ))
+                        .size(11),
+                    );
+            }
         }
         pane = pane.push(heading(tr("Area"))).push(
             checkbox(self.settings().auto_crop)
@@ -6875,6 +7190,7 @@ impl App {
             ))
             .size(12),
             self.scanner_prefs(),
+            self.stripes_prefs(),
             heading(tr("Impostazioni")),
             text(trf("Salvate in {path}", &[("path", &path)])).size(11),
             button(text(tr("Ripristina impostazioni di fabbrica")).size(13))
@@ -6883,6 +7199,56 @@ impl App {
         ]
         .spacing(10)
         .into()
+    }
+
+    /// "Righe dello scanner": the stripes known for the scanner in use, at
+    /// each resolution, and "Misura le righe".
+    fn stripes_prefs(&self) -> Element<'_, Message> {
+        let mut pane = column![
+            heading(tr("Righe dello scanner")),
+            text(tr(
+                "Righe chiare e scure che alcuni scanner lasciano in ogni scansione, sempre \
+                 uguali: misurate una volta su un foglio bianco, «Togli le righe dello \
+                 scanner» le toglie.",
+            ))
+            .size(11),
+        ]
+        .spacing(6);
+        let measured = self.measured.get(&self.caps.name());
+        for dpi in self.measure_resolutions() {
+            let line = match measured.and_then(|m| m.iter().find(|s| s.dpi == dpi)) {
+                Some(s) if s.repeat == 0 => trf("{dpi} dpi: nessuna (misurate)", &[("dpi", &dpi)]),
+                Some(s) => trf(
+                    "{dpi} dpi: ogni {n} righe, {pct} % (misurate)",
+                    &[
+                        ("dpi", &dpi),
+                        ("n", &s.repeat),
+                        ("pct", &i18n::decimal(format!("{:.1}", s.percent))),
+                    ],
+                ),
+                None => match self.caps.stripes_at(dpi) {
+                    Some(n) => trf(
+                        "{dpi} dpi: ogni {n} righe (dal modello)",
+                        &[("dpi", &dpi), ("n", &n)],
+                    ),
+                    None => trf("{dpi} dpi: non misurate", &[("dpi", &dpi)]),
+                },
+            };
+            pane = pane.push(text(line).size(12));
+        }
+        let idle = self.busy.is_none() && self.worker.is_some();
+        let mut buttons = row![button(text(tr("Misura le righe…")).size(13))
+            .style(button::secondary)
+            .on_press_maybe(idle.then_some(Message::MeasureStripes))]
+        .spacing(6);
+        if measured.is_some() {
+            buttons = buttons.push(
+                button(text(tr("Quelle del modello")).size(13))
+                    .style(button::secondary)
+                    .on_press_maybe(idle.then_some(Message::ForgetStripes)),
+            );
+        }
+        pane.push(buttons).into()
     }
 
     fn output_pane(&self) -> Element<'_, Message> {

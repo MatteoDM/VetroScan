@@ -180,6 +180,14 @@ enum Command {
         #[arg(long, value_delimiter = ',')]
         crop: Option<Vec<usize>>,
     },
+    /// Measure the stripes across a scan of something uniform (a white
+    /// sheet or the lid, as `scan --linear --sharpen 0`): every how many
+    /// lines they repeat and how strong they are, before and after
+    /// VetroScan takes them away.
+    Stripes {
+        /// The scan (PNG, 8-bit RGB).
+        input: PathBuf,
+    },
     /// Print the front-panel buttons as they are pressed.
     Buttons {
         /// Stop after this many presses (default: run until Ctrl+C).
@@ -265,6 +273,7 @@ fn main() -> ExitCode {
         } => read_png16(&input)
             .and_then(|(w, h, samples)| develop(samples, w, h, dpi, film, &output)),
         Command::Detect { input, crop } => detect(&input, crop.as_deref()),
+        Command::Stripes { input } => stripes(&input),
         Command::Buttons { count, method, raw } => {
             open(cli.backend).and_then(|s| buttons(s, count, method, raw))
         }
@@ -976,6 +985,36 @@ fn dump(out: &mut String, base: u16, data: &[u8]) {
         let address = usize::from(base) + i * 16;
         let _ = writeln!(out, "{address:04X}: {}", hex(line));
     }
+}
+
+/// Prints the stripes measured on a scan of something uniform.
+fn stripes(input: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    use scan_imaging::{Format, Image};
+    let decoder = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(input)?));
+    let mut reader = decoder.read_info()?;
+    let mut data = vec![0; reader.output_buffer_size().ok_or("image too large")?];
+    let info = reader.next_frame(&mut data)?;
+    data.truncate(info.buffer_size());
+    if (info.color_type, info.bit_depth) != (png::ColorType::Rgb, png::BitDepth::Eight) {
+        return Err("an 8-bit RGB PNG is needed".into());
+    }
+    let image = Image {
+        width: info.width as usize,
+        height: info.height as usize,
+        dpi: 0,
+        format: Format::Rgb,
+        data,
+    };
+    match scan_imaging::stripes::measure(&image, None) {
+        Some(m) => println!(
+            "stripes          repeat every {} lines, {:.2} % row to row, {:.2} % after removal",
+            m.repeat,
+            m.strength * 100.0,
+            m.left * 100.0
+        ),
+        None => println!("stripes          none worth removing"),
+    }
+    Ok(())
 }
 
 /// Prints the originals found on a preview.

@@ -20,7 +20,7 @@ use scan_imaging::adjust::Adjustments;
 use scan_imaging::Mode;
 use scanner_api::{
     Adapter, ButtonInfo, Capabilities, ColourMode, DeviceStatus, Error, LampInfo, LampState,
-    Progress, ScanRequest, ScanResult, Scanner, Source, SuggestedAction,
+    Progress, ScanRequest, ScanResult, Scanner, Source, Stripes, SuggestedAction,
 };
 
 /// Name of this backend in the [`scanner_api::Registry`].
@@ -48,6 +48,11 @@ pub fn capabilities(profile: &Profile) -> Capabilities {
             warm_up: scan::LAMP_WARMUP,
         }),
         tone: profile.tone(),
+        stripes: d
+            .stripes
+            .iter()
+            .map(|&(dpi, repeat)| Stripes { dpi, repeat })
+            .collect(),
     }
 }
 

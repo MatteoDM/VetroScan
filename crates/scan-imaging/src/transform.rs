@@ -443,6 +443,36 @@ fn weights(input: usize, output: usize) -> Vec<(usize, Vec<f32>)> {
         .collect()
 }
 
+/// Half the size: each sample the mean of the 2 × 2 under it (a last odd
+/// column or line is left out). For a scan made at twice the resolution
+/// wanted: finer than the scanner's own at half, with half the noise.
+/// Returns the samples and their width and height.
+pub fn halved<S: Sample>(
+    data: &[S],
+    width: usize,
+    height: usize,
+    channels: usize,
+) -> (Vec<S>, usize, usize) {
+    assert_eq!(data.len(), width * height * channels, "size of the samples");
+    let (nw, nh) = (width / 2, height / 2);
+    let mut out = Vec::with_capacity(nw * nh * channels);
+    for y in 0..nh {
+        let top = &data[2 * y * width * channels..][..width * channels];
+        let bottom = &data[(2 * y + 1) * width * channels..][..width * channels];
+        for x in 0..nw {
+            for c in 0..channels {
+                let i = 2 * x * channels + c;
+                let sum = top[i].to_f32()
+                    + top[i + channels].to_f32()
+                    + bottom[i].to_f32()
+                    + bottom[i + channels].to_f32();
+                out.push(S::from_f32(sum / 4.0));
+            }
+        }
+    }
+    (out, nw, nh)
+}
+
 /// The image resized to `nw` × `nh` with Lanczos (3 lobes), across then
 /// down.
 pub fn resize<S: Sample>(
@@ -530,6 +560,23 @@ mod tests {
     /// An RGB image whose pixels all differ.
     fn sample(w: usize, h: usize) -> Vec<u8> {
         (0..w * h * 3).map(|i| (i * 7 % 251) as u8).collect()
+    }
+
+    #[test]
+    fn halved_averages_each_square() {
+        // 5 × 3 grey: the last column and line are left out.
+        let data: Vec<u16> = (0..15).map(|i| i * 1000).collect();
+        let (out, w, h) = halved(&data, 5, 3, 1);
+        assert_eq!((w, h), (2, 1));
+        assert_eq!(out, vec![3000, 5000]);
+        let rgb = sample(4, 4);
+        let (out, w, h) = halved(&rgb, 4, 4, 3);
+        assert_eq!((w, h, out.len()), (2, 2, 12));
+        let mean = |x: usize, y: usize, c: usize| -> u8 {
+            let at = |dx, dy| f32::from(rgb[((2 * y + dy) * 4 + 2 * x + dx) * 3 + c]);
+            ((at(0, 0) + at(1, 0) + at(0, 1) + at(1, 1)) / 4.0).round() as u8
+        };
+        assert_eq!(out[(2 + 1) * 3 + 2], mean(1, 1, 2));
     }
 
     #[test]

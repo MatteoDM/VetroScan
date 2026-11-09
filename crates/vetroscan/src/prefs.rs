@@ -18,6 +18,18 @@ pub const LEGACY_MODEL: &str = "HP Scanjet 3770"; // not translated: a model nam
 pub const LEGACY_BUTTONS: [&str; 3] = ["scan", "copy", "instant-share"];
 
 /// What the buttons of one scanner model do in each way of working:
+/// The stripes measured on a scanner at one resolution ("Misura le
+/// righe").
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StoredStripes {
+    pub dpi: u16,
+    /// Lines after which they repeat; 0: none worth taking away.
+    pub repeat: u16,
+    /// How strong they are, percent, row to row.
+    pub percent: f32,
+}
+
 /// button id → name of the action.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -111,6 +123,10 @@ pub struct StoredMode {
     /// Bits per sample asked of the scanner, 8 or 16 (absent: the default
     /// of the way of working).
     pub depth: Option<u8>,
+    /// Take away the scanner's stripes (absent: no).
+    pub destripe: Option<bool>,
+    /// Scan at twice the resolution and halve (absent: no).
+    pub double: Option<bool>,
     pub adjust: StoredAdjust,
 }
 
@@ -130,6 +146,8 @@ impl Default for StoredMode {
             auto_save: false,
             auto_crop: None,
             depth: None,
+            destripe: None,
+            double: None,
             adjust: StoredAdjust::default(),
         }
     }
@@ -167,6 +185,9 @@ pub struct Prefs {
     pub lamp_off_minutes: u8,
     /// "automatica" (the system's), "italiano" or "english".
     pub language: String,
+    /// The stripes measured on each scanner ("HP Scanjet 3770"), in place
+    /// of what its model declares.
+    pub stripes: BTreeMap<String, Vec<StoredStripes>>,
 }
 
 impl Default for Prefs {
@@ -202,6 +223,7 @@ impl Default for Prefs {
             },
             lamp_off_minutes: 2,
             language: "automatica".into(),
+            stripes: BTreeMap::new(),
         }
     }
 }

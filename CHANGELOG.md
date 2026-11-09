@@ -34,6 +34,21 @@ GitHub; here they are in English.
   crop off, or an area drawn by hand) gets **Split the photos** (on the glass) or **Split the
   frames** (films) next to *Edit…*; each original found becomes its own picture, and **Redo**
   on it scans just that one again.
+- **Remove the scanner's stripes**, a tick in the scan settings (off by default): the HP 3770
+  leaves faint light and dark lines across every scan of the glass, the same with the HP
+  driver (about 3 % at 200 and 300 dpi, below 1 % at 600 and 1200); VetroScan finds them in
+  the scan itself and takes them away afterwards, without touching the subject. Only on the
+  glass, at the resolutions where they were measured.
+- **Scan at twice the resolution and reduce**, a tick in the scan settings (off by default):
+  for example 300 dpi made from a scan at 600, finer, with less noise and fainter stripes, in
+  about twice the time. Only on the glass, where the scanner offers twice the resolution.
+- **Measure the stripes**, in the Preferences: with a white sheet on the glass (or the glass
+  empty), the scanner scans a strip at each resolution up to 1200 dpi and VetroScan finds
+  every how many lines its stripes repeat and how strong they are. The result is kept for that
+  scanner and used in place of what its model declares, so the stripes can be taken away on
+  any scanner that has them; **The model's** goes back.
+- `hp3770 stripes FILE.png` measures the stripes on a scan of something uniform, without the
+  scanner.
 
 ### Changed
 - The scanner contract: a scan says where it comes from, the glass or a film in the adapter,

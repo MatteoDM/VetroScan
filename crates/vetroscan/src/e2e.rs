@@ -1514,6 +1514,161 @@ fn separa_finds_the_photos_of_an_area_scanned_whole() {
     );
 }
 
+/// The made-up flatbed with stripes on its glass (3 %), in Documento at
+/// 300 dpi on a stretch of the lid with nothing on it.
+fn striped_lid() -> Ui {
+    use crate::MmField;
+    let scanner = FakeScanner::flatbed();
+    scanner.controls().stripes(30);
+    let mut ui = Ui::with_scanners(vec![scanner]);
+    ui.send(Message::Dpi(300));
+    for (field, mm) in [(0, "10"), (1, "235"), (2, "190"), (3, "50")] {
+        ui.send(Message::MmInput(MmField::Area(field), mm.into()));
+    }
+    ui.send(Message::MmSubmit);
+    ui
+}
+
+/// How much the lines of the last page differ from their neighbours, as a
+/// fraction (on a uniform lid: the stripes).
+fn stripes_of_last_page(ui: &Ui) -> f32 {
+    let full = &ui.app.pages.last().expect("a page").raw.full;
+    let w = full.width;
+    let means: Vec<f32> = (0..full.height)
+        .map(|y| {
+            let row = &full.data[y * w * 3..(y + 1) * w * 3];
+            row.iter().map(|&v| f32::from(v)).sum::<f32>() / row.len() as f32
+        })
+        .collect();
+    let k = 7;
+    let n = means.len() - 2 * k;
+    let sum: f32 = (k..means.len() - k)
+        .map(|y| {
+            let smooth = means[y - k..=y + k].iter().sum::<f32>() / (2 * k + 1) as f32;
+            (means[y] / smooth - 1.0).powi(2)
+        })
+        .sum();
+    (sum / n as f32).sqrt()
+}
+
+#[test]
+fn the_scanners_stripes_go_with_a_tick() {
+    let mut ui = striped_lid();
+    assert!(ui.shows("Togli le righe dello scanner"));
+    ui.send(Message::Scan);
+    ui.settle();
+    let with = stripes_of_last_page(&ui);
+    assert!(with > 0.015, "{with}");
+    ui.click("Togli le righe dello scanner");
+    assert!(ui.app.settings().destripe);
+    ui.send(Message::Scan);
+    ui.settle();
+    let without = stripes_of_last_page(&ui);
+    assert!(without < with / 5.0, "{with} then {without}");
+    // Remembered with the way of working.
+    assert_eq!(ui.app.prefs().document.destripe, Some(true));
+    // 2400 dpi: none measured there, no tick.
+    ui.send(Message::Dpi(2400));
+    assert!(!ui.shows("Togli le righe dello scanner"));
+}
+
+#[test]
+fn twice_the_resolution_then_halved() {
+    let mut ui = striped_lid();
+    ui.send(Message::Scan);
+    ui.settle();
+    let plain = &ui.app.pages[0].raw.full;
+    let (w, h) = (plain.width, plain.height);
+    assert_eq!(plain.dpi, 300);
+    assert!(ui.shows("Scansiona a 600 dpi e riduci"));
+    ui.click("Scansiona a 600 dpi e riduci");
+    ui.send(Message::Scan);
+    ui.settle();
+    let page = &ui.app.pages[1];
+    let full = &page.raw.full;
+    assert_eq!(full.dpi, 300, "brought back to the resolution chosen");
+    assert!(
+        full.width.abs_diff(w) <= 1 && full.height.abs_diff(h) <= 1,
+        "{w} x {h} then {} x {}",
+        full.width,
+        full.height
+    );
+    assert!(!ui.app.doubled);
+    // The 16-bit samples halved with it (Foto keeps them).
+    ui.send(Message::Kind(Kind::Photo));
+    ui.send(Message::Dpi(300));
+    ui.send(Message::Depth(crate::Depth(16)));
+    ui.send(Message::Double(true));
+    ui.send(Message::Scan);
+    ui.settle();
+    let page = ui.app.pages.last().unwrap();
+    let full = &page.raw.full;
+    assert_eq!(full.dpi, 300);
+    assert_eq!(
+        page.raw16.as_ref().map(|s| s.len()),
+        Some(full.width * full.height * 3)
+    );
+    // 2400 dpi: nothing twice as fine to ask for.
+    ui.send(Message::Dpi(2400));
+    assert!(!ui.shows("e riduci"));
+}
+
+#[test]
+fn misura_le_righe_finds_them_on_a_white_sheet_and_keeps_them() {
+    let scanner = FakeScanner::flatbed();
+    let controls = scanner.controls();
+    controls.stripes(30);
+    let mut ui = Ui::with_scanners(vec![scanner]);
+    ui.send(Message::Pane(crate::Pane::Prefs));
+    assert!(ui.shows("300 dpi: ogni 10 righe (dal modello)"));
+    // Asked first (a white sheet on the glass), then a strip at each
+    // resolution up to 1200 dpi.
+    ui.send(Message::MeasureStripes);
+    assert!(ui.app.confirm.is_some() && ui.app.busy.is_none());
+    ui.click("Misura");
+    let name = ui.app.caps.name();
+    let found: Vec<(u16, u16)> = ui.app.measured[&name]
+        .iter()
+        .map(|s| (s.dpi, s.repeat))
+        .collect();
+    assert_eq!(found, [(200, 5), (300, 10), (600, 5), (1200, 5)]);
+    assert!(ui.app.note.contains("Righe misurate"), "{}", ui.app.note);
+    let at300 = &ui.app.measured[&name][1];
+    assert!(at300.percent > 1.0, "{at300:?}");
+    assert!(ui.shows(&format!(
+        "300 dpi: ogni 10 righe, {} % (misurate)",
+        crate::i18n::decimal(format!("{:.1}", at300.percent))
+    )));
+    assert_eq!(ui.app.prefs().stripes[&name].len(), 4);
+    // A scanner without stripes: measured, none; the tick goes.
+    controls.stripes(0);
+    ui.send(Message::MeasureStripes);
+    ui.click("Misura");
+    assert!(ui.app.measured[&name].iter().all(|s| s.repeat == 0));
+    assert!(ui.shows("300 dpi: nessuna (misurate)"));
+    ui.send(Message::Kind(Kind::Document));
+    ui.send(Message::Dpi(300));
+    ui.send(Message::Pane(crate::Pane::Scan));
+    assert!(!ui.shows("Togli le righe dello scanner"));
+    // Back to the model's.
+    ui.send(Message::ForgetStripes);
+    assert!(!ui.app.measured.contains_key(&name));
+    assert!(ui.shows("Togli le righe dello scanner"));
+}
+
+#[test]
+fn films_have_neither_tick() {
+    let (mut ui, _) = with_adapter();
+    ui.click("Pellicola");
+    ui.send(Message::Pane(crate::Pane::Scan));
+    assert!(!ui.shows("Togli le righe dello scanner"));
+    assert!(!ui.shows("Scansiona a 2400 dpi e riduci"));
+    // Ticked on the glass, they still leave films alone.
+    ui.send(Message::Destripe(true));
+    ui.send(Message::Double(true));
+    assert!(!ui.app.doubles());
+}
+
 #[test]
 fn a_scanner_without_a_lamp_and_16_bits_shows_neither() {
     let mut ui = Ui::with_scanners(vec![FakeScanner::a3()]);

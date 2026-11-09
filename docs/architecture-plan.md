@@ -611,6 +611,45 @@ to the sheet" it is always centred. Nothing moves with the arrows: `App::on_key`
     straighten); the area on the preview and the page on its sheet have none, with the mouse
     nor with the keys, as before.
 
+## Stripes across the scans of the glass · 9 November 2026 · done
+
+Matteo saw faint horizontal lines on scans of a white sheet, mostly at 300 dpi, and once three
+coloured lines (blue, green, red) the same distance apart.
+
+- **Measured** on a white sheet with `hp3770 scan --linear --sharpen 0`, as the mean of each
+  line: a pattern of lighter and darker lines that repeats every 5 lines at 200, 600 and 1200
+  dpi and every 10 at 300 dpi (3.33 lines a period), 3.2 % at 200 dpi, 2.4 % at 300, 0.2-0.6 %
+  at 600, 0.6 % at 1200 (row to row). **The HP driver's own scan at 300 dpi has the same
+  period**: it is the scanner, not our driver. It drifts slowly (5.02 lines at 200 dpi, 4.993
+  at 1200); from 1200 dpi the even and odd pixels see it on different lines. A white sheet
+  does not show the carriage's position, so it comes from the light (the lamp is driven in
+  PWM, as the HP driver sets it) or the electronics, not from uneven steps.
+- **Taken away on the host** (`scan_imaging::stripes`): each line against the 2 × `repeat`
+  lines around it as the median over the columns, then the median over the lines at the same
+  place of the pattern within 30 repetitions, for even and odd columns and each colour; only
+  what repeats is taken away. On the white sheets 2.4 % → 0.2 % at 300 dpi, 3.2 % → 0.4 % at
+  200, 0.6 % → 0.15 % at 1200. The periods are in `Capabilities::stripes` (none at 2400 dpi,
+  not measured). In the app a tick, off by default; another tick scans at twice the
+  resolution and halves (300 from 600), also off. Neither applies to films.
+- **For any scanner**: the filter knows nothing of the 3770 but the repeat at each
+  resolution. `stripes::measure` finds it on a scan of something uniform: for each length
+  from 2 to 16 lines it works out what the filter would take away, and keeps the shortest
+  that takes away nearly as much as the best (on the white sheets: 5, 10, 5 and 5, as
+  measured by hand; `hp3770 stripes FILE.png`). In the app **Misura le righe** (Preferenze)
+  scans a 25 mm strip low on the glass at each resolution up to 1200 dpi (the glass's usual
+  modes, 16 bits where offered) and keeps the result for that scanner in the preferences, in
+  place of `Capabilities::stripes`; an e2e on the made-up scanner with stripes switched on.
+  **Tried by Matteo on the real scanner** the same evening (the measurement with a white
+  sheet, and a scan with the tick): it works.
+- **The three coloured lines** are one moment of the scan seen by the three rows of the
+  sensor (12 lines apart at 600 dpi): the carriage stopping and starting, or a flicker of the
+  lamp. Not seen again in four white sheets; the chip never held more than 0.1 MB waiting,
+  so the host kept up. Open: catch it again (which resolution, depth, how long the scan).
+- **Right after a power cycle** (the scanner had stopped answering on a USB hub), the
+  calibration at 300 dpi failed twice with "offsets still too dark after 20 checks", then
+  worked after one scan at 600 dpi, with this version and with the one of 8 November alike.
+  Not reproduced since; open.
+
 ## Summary
 
 | Phase | Version | Risk | Without new hardware? |

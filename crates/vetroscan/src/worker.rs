@@ -54,6 +54,9 @@ pub enum Purpose {
     Preview,
     /// A page of the document.
     Page,
+    /// A strip of something uniform, to measure the scanner's stripes
+    /// ("Misura le righe").
+    Measure,
 }
 
 /// What the thread tells the interface.

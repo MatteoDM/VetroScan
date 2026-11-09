@@ -12,7 +12,7 @@
 
 use crate::{
     check, Adapter, Backend, ButtonInfo, Capabilities, ColourMode, DeviceInfo, DeviceStatus, Error,
-    LampInfo, LampState, Progress, Result, ScanRequest, ScanResult, Scanner, Source,
+    LampInfo, LampState, Progress, Result, ScanRequest, ScanResult, Scanner, Source, Stripes,
     SuggestedAction, Tone,
 };
 use scan_imaging::{Format, Image};
@@ -120,6 +120,8 @@ pub struct Controls {
     lamp_on: Arc<AtomicBool>,
     unplugged: Arc<AtomicBool>,
     adapter_out: Arc<AtomicBool>,
+    /// Stripes on the scans of the glass, thousandths (0: none).
+    stripes: Arc<AtomicU32>,
 }
 
 impl Controls {
@@ -142,6 +144,14 @@ impl Controls {
     /// with one.
     pub fn unplug_adapter(&self, unplugged: bool) {
         self.adapter_out.store(unplugged, Ordering::SeqCst);
+    }
+
+    /// Puts stripes on the scans of the glass, at the resolutions the
+    /// scanner declares them ([`Capabilities::stripes`]): each line
+    /// lighter or darker by up to `thousandths`, the pattern repeating as
+    /// declared. 0 takes them away.
+    pub fn stripes(&self, thousandths: u32) {
+        self.stripes.store(thousandths, Ordering::SeqCst);
     }
 
     /// Whether the lamp is on.
@@ -185,6 +195,11 @@ impl FakeScanner {
                 grey_white: 196.0,
                 gamma: 2.2,
             },
+            // As the HP 3770's; the glass has them only when a test asks
+            // (Controls::stripes).
+            stripes: [(200, 5), (300, 10), (600, 5), (1200, 5)]
+                .map(|(dpi, repeat)| Stripes { dpi, repeat })
+                .to_vec(),
         })
     }
 
@@ -209,6 +224,7 @@ impl FakeScanner {
                 grey_white: 230.0,
                 gamma: 2.2,
             },
+            stripes: Vec::new(),
         })
     }
 
@@ -319,7 +335,20 @@ impl Scanner for FakeScanner {
         if self.caps.lamp.is_some() {
             self.controls.lamp_on.store(true, Ordering::SeqCst);
         }
-        let deep = samples16(request);
+        let mut deep = samples16(request);
+        let amplitude = f64::from(self.controls.stripes.load(Ordering::SeqCst)) / 1000.0;
+        if let Some(repeat) = self.caps.stripes_at(request.dpi) {
+            if amplitude > 0.0 && !request.source.is_film() {
+                let stride = request.area.width as usize * 3;
+                for (y, line) in deep.chunks_mut(stride.max(1)).enumerate() {
+                    let phase = std::f64::consts::TAU * (y % repeat) as f64 / repeat as f64;
+                    let k = 1.0 + amplitude * phase.sin();
+                    for v in line {
+                        *v = (f64::from(*v) * k).round().min(65535.0) as u16;
+                    }
+                }
+            }
+        }
         let rgb = deep.iter().map(|&v| (v >> 8) as u8).collect();
         let samples16 = (request.depth == 16).then_some(deep);
         Ok(ScanResult {

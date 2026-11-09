@@ -89,6 +89,20 @@ pub struct Capabilities {
     /// The tone curve its linear samples need on the host; its white
     /// levels are also the paper white of the samples.
     pub tone: Tone,
+    /// The stripes it leaves across its scans of the glass, at the
+    /// resolutions where they were measured (the host can take them away:
+    /// `scan_imaging::stripes`).
+    pub stripes: Vec<Stripes>,
+}
+
+/// Stripes across the scans of a scanner at one resolution: a pattern of
+/// lighter and darker lines that repeats after the same number of lines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Stripes {
+    /// The resolution, dpi.
+    pub dpi: u16,
+    /// Lines after which the pattern repeats.
+    pub repeat: u16,
 }
 
 impl Capabilities {
@@ -110,7 +124,17 @@ impl Capabilities {
                 grey_white: 255.0,
                 gamma: 2.2,
             },
+            stripes: Vec::new(),
         }
+    }
+
+    /// Lines after which the stripes of a scan of the glass at `dpi`
+    /// repeat, if it leaves some there.
+    pub fn stripes_at(&self, dpi: u16) -> Option<usize> {
+        self.stripes
+            .iter()
+            .find(|s| s.dpi == dpi)
+            .map(|s| usize::from(s.repeat))
     }
 
     /// Manufacturer and model, as one name ("HP Scanjet 3770").
