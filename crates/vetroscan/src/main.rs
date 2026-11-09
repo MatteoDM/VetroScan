@@ -25,6 +25,7 @@ mod histogram;
 mod i18n;
 mod keys;
 mod prefs;
+mod separa;
 mod sheet;
 mod testing;
 mod viewer;
@@ -50,6 +51,7 @@ use scanner_api::{
     Area, Capabilities, DeviceInfo, DeviceStatus, LampState, Progress, ScanRequest, Source,
     SuggestedAction, Tone,
 };
+use separa::{Separating, SplitMsg};
 use std::borrow::Cow;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -1954,9 +1956,12 @@ enum Message {
     /// A copy of the page right after it: the same scan, cut, turned and
     /// adjusted on its own (several photos from one scan).
     PageDuplicate(usize),
-    /// "Separa": the originals found in a page scanned whole, each cut out
-    /// as a page of its own, without scanning again.
+    /// "Separa": the originals found in a page scanned whole shown on it,
+    /// to correct before each is cut out as a page of its own, without
+    /// scanning again.
     PageSplit(usize),
+    /// "Separa" open: its areas, cutting them out or leaving the scan whole.
+    Split(SplitMsg),
     /// The mouse went down on a page of the strip: shown, and maybe
     /// dragged to another place.
     PagePress(usize),
@@ -2274,6 +2279,8 @@ struct App {
     /// Changes each time pages move, go or are replaced: a render
     /// started before is of a page that may not be at its place any more.
     epoch: u64,
+    /// "Separa" open on a page scanned whole.
+    separating: Option<Separating>,
     /// The editor of a scan, when open.
     editor: Option<Editor>,
     /// The part of the editor last used.
@@ -2403,6 +2410,7 @@ impl App {
                 dirty_page: false,
                 stale: Vec::new(),
                 epoch: 0,
+                separating: None,
                 editor: None,
                 edit_section: Section::Colour,
                 unsaved: false,
@@ -2578,6 +2586,7 @@ impl App {
                 | Message::PageFocusToAll
                 | Message::MmInput(MmField::Offset(_), _)
                 | Message::AcceptRedo
+                | Message::Split(SplitMsg::Apply)
         )
     }
 
@@ -3531,31 +3540,29 @@ impl App {
         self.kind == Kind::Photo && page.whole.is_some() && page.raw.full.format == Format::Rgb
     }
 
-    /// "Separa": the originals of a page scanned whole found in it (the
-    /// frames of a film, the photos on the glass) and cut out, each a page
-    /// of its own in its place, without scanning again.
-    fn split(&mut self, i: usize) {
+    /// The originals of a page scanned whole (the frames of a film, the
+    /// photos on the glass), in pixels of the scan at [`PREVIEW_DPI`].
+    fn originals(page: &Page) -> Vec<Found> {
+        match page.whole.as_ref().and_then(|w| w.transmission.as_ref()) {
+            Some(t) => film::frames(t, Film::Negative),
+            None => detect::objects(&at_dpi((*page.raw.full).clone(), PREVIEW_DPI)),
+        }
+    }
+
+    /// "Separa", once the originals are as wanted: each of `found` (pixels
+    /// of the scan at [`PREVIEW_DPI`]) cut out of page `i`, a page of its
+    /// own in its place, without scanning again.
+    fn split_into(&mut self, i: usize, found: Vec<Found>) {
         let Some(page) = self.pages.get(i).filter(|p| self.splittable(p)) else {
             return;
         };
         let Some(whole) = page.whole.clone() else {
             return;
         };
-        let full = Arc::clone(&page.raw.full);
-        let film = whole.transmission.is_some();
-        let found = match &whole.transmission {
-            Some(t) => film::frames(t, Film::Negative),
-            None => detect::objects(&at_dpi((*full).clone(), PREVIEW_DPI)),
-        };
         if found.is_empty() {
-            self.note = if film {
-                tr("Nessun fotogramma riconosciuto in questa scansione")
-            } else {
-                tr("Nessun originale riconosciuto in questa scansione")
-            }
-            .into();
             return;
         }
+        let full = Arc::clone(&page.raw.full);
         let job = Job {
             bounds: [0.0; 4],
             crops: Self::on_bed(found, Some(whole.area), full.dpi),
@@ -4134,6 +4141,28 @@ impl App {
             )
         {
             self.close_editor(true);
+        }
+        // Doing something else with the pages leaves the scan whole.
+        if self.separating.is_some()
+            && matches!(
+                message,
+                Message::Kind(_)
+                    | Message::Film
+                    | Message::Tab(Tab::Preview)
+                    | Message::PageShow(_)
+                    | Message::PagePress(_)
+                    | Message::PageRotate(..)
+                    | Message::PageMove(..)
+                    | Message::PageDelete(_)
+                    | Message::PageDuplicate(_)
+                    | Message::PageRedo(_)
+                    | Message::NewDocument
+                    | Message::Scan
+                    | Message::Preview
+                    | Message::Edit(EditMsg::Open(_))
+            )
+        {
+            self.cancel_split();
         }
         match message {
             Message::Edit(m) => self.on_edit(m),
@@ -4985,9 +5014,10 @@ impl App {
             }
             Message::PageSplit(i) => {
                 if self.busy.is_none() && self.redone.is_none() {
-                    self.split(i);
+                    self.begin_split(i);
                 }
             }
+            Message::Split(m) => self.on_split(m),
             Message::PageRedo(i) => {
                 if self.busy.is_none() && i < self.pages.len() {
                     self.redo = Some(i);
@@ -5051,6 +5081,19 @@ impl App {
                 Key::Named(Named::Escape) => self.handle(Message::Confirm(false)),
                 _ => Task::none(),
             };
+        }
+        // "Separa": Enter cuts, Esc leaves the scan whole, Delete leaves
+        // out the area chosen.
+        if let Some(sep) = &self.separating {
+            let message = match key.as_ref() {
+                Key::Named(Named::Enter) => Some(SplitMsg::Apply),
+                Key::Named(Named::Escape) => Some(SplitMsg::Cancel),
+                Key::Named(Named::Delete | Named::Backspace) => sep.chosen.map(SplitMsg::Drop),
+                _ => None,
+            };
+            if let Some(m) = message {
+                return self.update(m.into());
+            }
         }
         // Arrows and Home move what is active ([`keys`]).
         if let Some(m) = keys::read(&key, modifiers) {
@@ -6212,7 +6255,8 @@ impl App {
                     tr("Premi «Anteprima» per vedere il vetro"),
                     self.preview_view,
                     self.selection,
-                    if self.settings().auto_crop {
+                    // The selection has the precedence over the originals.
+                    if self.settings().auto_crop && self.selection.is_none() {
                         self.found.iter().map(|f| f.corners()).collect()
                     } else {
                         Vec::new()
@@ -6220,11 +6264,15 @@ impl App {
                     Message::View,
                     Some(Message::Select),
                     pick,
+                    None,
                     25.4 / f32::from(PREVIEW_DPI),
                     false,
                 ),
                 self.preview_view.scale,
             ),
+            Tab::Result if self.separating.is_some() => {
+                (self.split_viewer(), self.result_view.scale)
+            }
             Tab::Result if self.print_preview() => {
                 let page = &self.pages[self.current.unwrap_or(0)];
                 let s = self.settings();
@@ -6274,6 +6322,7 @@ impl App {
                     self.cropping()
                         .then_some(editor::crop_message as fn(Option<Selection>) -> Message),
                     pick,
+                    None,
                     if self.cropping() {
                         self.shown()
                             .map_or(0.0, |p| 25.4 / f32::from(p.raw.full.dpi.max(1)))
@@ -6327,11 +6376,14 @@ impl App {
         .flatten();
         // The photo shown, scanned whole: its originals cut out of it
         // without scanning again.
-        let split = (self.tab == Tab::Result && self.busy.is_none() && self.redone.is_none())
-            .then_some(self.current)
-            .flatten()
-            .and_then(|i| self.pages.get(i).map(|p| (i, p)))
-            .filter(|(_, p)| self.splittable(p));
+        let split = (self.tab == Tab::Result
+            && self.busy.is_none()
+            && self.redone.is_none()
+            && self.separating.is_none())
+        .then_some(self.current)
+        .flatten()
+        .and_then(|i| self.pages.get(i).map(|p| (i, p)))
+        .filter(|(_, p)| self.splittable(p));
         let mut tools = column![small(tr("Modifica…"), edit, false)].spacing(2);
         if let Some((i, page)) = split {
             let label = if page
@@ -6560,6 +6612,20 @@ impl App {
             tab(tr("Preferenze"), Pane::Prefs),
         ]
         .spacing(2);
+        if self.separating.is_some() {
+            return container(
+                column![
+                    scrollable(container(self.split_pane()).padding([12, 16])).height(Length::Fill),
+                    rule::horizontal(1),
+                    container(self.split_footer()).padding(12),
+                ]
+                .height(Length::Fill),
+            )
+            .width(352)
+            .height(Length::Fill)
+            .style(surface)
+            .into();
+        }
         if self.editor().is_some() {
             return container(
                 column![

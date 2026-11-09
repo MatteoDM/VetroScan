@@ -162,6 +162,7 @@ pub fn viewer<'a, Message: Clone + 'a>(
     on_view: fn(View) -> Message,
     on_select: Option<fn(Option<Selection>) -> Message>,
     on_pick: Option<fn(Point) -> Message>,
+    on_mark: Option<fn(usize) -> Message>,
     mm_per_pixel: f32,
     grid: bool,
 ) -> Element<'a, Message> {
@@ -182,6 +183,7 @@ pub fn viewer<'a, Message: Clone + 'a>(
         on_view,
         on_select,
         on_pick,
+        on_mark,
         mm_per_pixel,
         grid,
     })
@@ -239,14 +241,16 @@ struct Overlay<Message> {
     size: Size,
     view: View,
     selection: Option<Selection>,
-    /// Originals found on the glass (corners in image pixels), numbered;
-    /// drawn while there is no selection.
+    /// Originals found on the glass (corners in image pixels), numbered.
     marks: Vec<[[f32; 2]; 4]>,
     on_view: fn(View) -> Message,
     on_select: Option<fn(Option<Selection>) -> Message>,
     /// When set, a left click picks the image point under the pointer (the
     /// eyedropper) instead of drawing a selection.
     on_pick: Option<fn(Point) -> Message>,
+    /// When set, a left click on a mark (outside the selection) chooses
+    /// it instead of starting a selection.
+    on_mark: Option<fn(usize) -> Message>,
     /// Millimetres per image pixel, for the size label (0: no label).
     mm_per_pixel: f32,
     /// Thirds drawn in the selection (cropping, straightening).
@@ -316,6 +320,21 @@ impl<Message> Overlay<Message> {
             }
         }
         r.contains(p).then_some(Grip::Move)
+    }
+
+    /// The mark under an image point, the last drawn first (it is on top).
+    fn mark_at(&self, p: Point) -> Option<usize> {
+        self.marks.iter().rposition(|corners| {
+            // Inside a convex outline: on the same side of each of its edges.
+            let sides: Vec<f32> = (0..4)
+                .map(|i| {
+                    let [ax, ay] = corners[i];
+                    let [bx, by] = corners[(i + 1) % 4];
+                    (bx - ax) * (p.y - ay) - (by - ay) * (p.x - ax)
+                })
+                .collect();
+            sides.iter().all(|&s| s >= 0.0) || sides.iter().all(|&s| s <= 0.0)
+        })
     }
 
     fn image_point(&self, bounds: Size, p: Point) -> Point {
@@ -390,6 +409,10 @@ impl<Message> canvas::Program<Message> for Overlay<Message> {
                         {
                             *drag = Drag::Edit(grip, selection, start);
                             return Some(Action::capture());
+                        }
+                        if let Some(i) = self.on_mark.and_then(|_| self.mark_at(start)) {
+                            let on_mark = self.on_mark?;
+                            return Some(Action::publish(on_mark(i)).and_capture());
                         }
                         let start = Point::new(
                             start.x.clamp(0.0, self.size.width),
@@ -484,7 +507,7 @@ impl<Message> canvas::Program<Message> for Overlay<Message> {
             &Path::rectangle(rect.position(), rect.size()),
             Stroke::default().with_color(theme.extended_palette().background.strong.color),
         );
-        if self.selection.is_none() {
+        {
             let primary = theme.palette().primary;
             for (i, corners) in self.marks.iter().enumerate() {
                 let at = corners.map(|[x, y]| Point::new(rect.x + x * scale, rect.y + y * scale));
@@ -643,6 +666,11 @@ impl<Message> canvas::Program<Message> for Overlay<Message> {
                             (true, false) => mouse::Interaction::ResizingHorizontally,
                             _ => mouse::Interaction::ResizingVertically,
                         },
+                        None if self.on_mark.is_some()
+                            && self.mark_at(self.image_point(bounds.size(), p)).is_some() =>
+                        {
+                            mouse::Interaction::Pointer
+                        }
                         None => mouse::Interaction::Crosshair,
                     }
                 }

@@ -1567,8 +1567,13 @@ fn separa_cuts_the_frames_out_of_a_film_scanned_whole() {
     ui.click("Scansiona foto");
     assert_eq!(ui.app.pages.len(), 1);
     assert!(ui.app.pages[0].whole.is_some());
-    // Cut afterwards, without scanning again.
+    // Cut afterwards, without scanning again: first the frames shown on
+    // the scan, then the cut.
     ui.click("Separa i fotogrammi");
+    assert_eq!(ui.app.pages.len(), 1);
+    assert_eq!(ui.app.separating.as_ref().map(|s| s.found.len()), Some(2));
+    ui.click("Separa in 2");
+    assert!(ui.app.separating.is_none());
     assert_eq!(ui.app.pages.len(), 2, "{}", ui.app.note);
     assert!(ui.app.note.contains("2 immagini"), "{}", ui.app.note);
     let origins: Vec<Found> = ui.app.pages.iter().filter_map(|p| p.origin).collect();
@@ -1601,6 +1606,7 @@ fn separa_finds_the_photos_of_an_area_scanned_whole() {
     ui.click("Scansiona foto");
     assert_eq!(ui.app.pages.len(), 1);
     ui.click("Separa le foto");
+    ui.key(iced::keyboard::key::Named::Enter);
     assert_eq!(ui.app.pages.len(), 3, "{}", ui.app.note);
     // Found where the preview found them on the glass, though the scan
     // started 10 mm in: "Rifai" on each finds its place.
@@ -1609,6 +1615,96 @@ fn separa_finds_the_photos_of_an_area_scanned_whole() {
         same_places(&origins, &originals, 3.0),
         "{origins:?} {originals:?}"
     );
+}
+
+#[test]
+fn separa_shows_the_areas_first_to_correct_and_cuts_on_ok() {
+    use crate::separa::SplitMsg;
+    let mut ui = Ui::new();
+    ui.send(Message::Kind(Kind::Photo));
+    ui.send(Message::AutoCrop(false));
+    ui.scan(1);
+    assert_eq!(ui.app.pages.len(), 1);
+    let whole = scans(&ui);
+    // Annulla: the scan stays whole, as Esc.
+    ui.click("Separa le foto");
+    let found = ui.app.separating.as_ref().map_or(0, |s| s.found.len());
+    assert_eq!(found, scanner_api::fake::ORIGINALS.len(), "{}", ui.app.note);
+    assert!(ui.shows(&format!("Separa in {found}")));
+    ui.key(iced::keyboard::key::Named::Escape);
+    assert!(ui.app.separating.is_none());
+    assert_eq!(scans(&ui), whole);
+    // One left out, one chosen and made smaller and upright, one drawn.
+    ui.click("Separa le foto");
+    ui.click("Escludi");
+    let sel = |x: f32, y: f32, w: f32, h: f32| crate::Selection {
+        x,
+        y,
+        width: w,
+        height: h,
+    };
+    ui.send(SplitMsg::Choose(0).into());
+    let side = ui.app.pages[0].raw.full.width as f32;
+    ui.send(SplitMsg::Area(Some(sel(0.1 * side, 0.1 * side, 0.15 * side, 0.1 * side))).into());
+    ui.send(SplitMsg::Tilt(1.0).into());
+    ui.send(SplitMsg::Upright.into());
+    ui.send(SplitMsg::Area(None).into());
+    ui.send(SplitMsg::Area(Some(sel(0.5 * side, 0.6 * side, 0.2 * side, 0.2 * side))).into());
+    let sep = ui.app.separating.as_ref().expect("still separating");
+    assert_eq!(sep.found.len(), found, "one out, one in");
+    assert_eq!(sep.chosen, Some(found - 1), "the area drawn is chosen");
+    assert_eq!(sep.found[0].angle, 0.0);
+    // A slip of the mouse is not an area.
+    ui.send(SplitMsg::Area(None).into());
+    ui.send(SplitMsg::Area(Some(sel(10.0, 10.0, 3.0, 3.0))).into());
+    assert_eq!(ui.app.separating.as_ref().unwrap().found.len(), found);
+    ui.click(&format!("Separa in {found}"));
+    assert_eq!(ui.app.pages.len(), found, "{}", ui.app.note);
+    assert!(ui.app.unsaved);
+    // The first one as it was made smaller, at the scale of the scan.
+    let first = &ui.app.pages[0].raw.full;
+    assert!(
+        (first.width as f32 - 0.15 * side).abs() < 0.03 * side,
+        "{} of {side}",
+        first.width
+    );
+}
+
+#[test]
+fn separa_with_nothing_found_lets_an_area_be_drawn() {
+    use crate::separa::SplitMsg;
+    let mut ui = Ui::new();
+    ui.send(Message::Kind(Kind::Photo));
+    ui.send(Message::AutoCrop(false));
+    ui.scan(1);
+    ui.click("Separa le foto");
+    // Everything found left out: nothing to cut, the button waits.
+    while ui
+        .app
+        .separating
+        .as_ref()
+        .is_some_and(|s| !s.found.is_empty())
+    {
+        ui.send(SplitMsg::Drop(0).into());
+    }
+    assert!(ui.shows("Nessuna area: trascina sull'immagine per aggiungerne una."));
+    ui.key(iced::keyboard::key::Named::Enter);
+    assert!(ui.app.separating.is_some(), "nothing cut");
+    assert_eq!(ui.app.pages.len(), 1);
+    let side = ui.app.pages[0].raw.full.width as f32;
+    ui.send(
+        SplitMsg::Area(Some(crate::Selection {
+            x: 0.2 * side,
+            y: 0.2 * side,
+            width: 0.3 * side,
+            height: 0.2 * side,
+        }))
+        .into(),
+    );
+    ui.click("Ritaglia");
+    assert_eq!(ui.app.pages.len(), 1);
+    assert!(ui.app.separating.is_none());
+    assert!(ui.app.pages[0].origin.is_some(), "cut out of the scan");
 }
 
 /// The made-up flatbed with stripes on its glass (3 %), in Documento at
@@ -2042,6 +2138,17 @@ fn tour() {
         shot(&mut ui, "photo-output");
         ui.send(Message::Pane(crate::Pane::Prefs));
         shot(&mut ui, "photo-prefs");
+        // "Separa" on a photo scanned whole, an area chosen.
+        ui.send(Message::AutoCrop(false));
+        ui.scan(1);
+        if ui.question().is_some() {
+            ui.send(Message::Confirm(true));
+            ui.settle();
+        }
+        ui.send(Message::PageSplit(0));
+        ui.send(crate::separa::SplitMsg::Choose(0).into());
+        shot(&mut ui, "photo-split");
+        ui.send(crate::separa::SplitMsg::Cancel.into());
     }
 }
 

@@ -71,6 +71,12 @@ GitHub; here they are in English.
   and back no longer loses it; frames scanned stay reachable with the adapter unplugged.
 - In Photo and Film the column of the pages is there from the first photo, with **Edit**,
   **Redo**, **Duplicate** and **Delete**.
+- **Split in steps**: *Split the photos* and *Split the frames* no longer cut at once. The
+  viewer shows the originals found on the scan, numbered, to correct first: click one to
+  choose it and move or resize it with the handles, drag on an empty spot to add one the app
+  did not see, leave one out, turn it by 0.1° or 1°, or find them again. **Split into N**
+  (Enter) cuts, **Cancel** (Esc) leaves the scan whole. With nothing found, an area can be
+  drawn by hand.
 
 ### Fixed
 - **Colour** in the Scan tab is always for the next scans, as the resolution next to it:

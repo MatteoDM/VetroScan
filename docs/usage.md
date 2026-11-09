@@ -122,7 +122,8 @@ VetroScan scans **negatives** with it (slides not yet):
    the photos in Photo. **Redo** on a frame scans that frame only.
 
 With the automatic crop off you get the whole strip as one image; **Split the frames**, on the
-viewer, cuts it into one image per frame afterwards, without scanning again. To scan only a
+viewer, shows the frames found on it, to correct, then cuts it into one image per frame,
+without scanning again (see [Several photos from a single scan](#several-photos-from-a-single-scan)). To scan only a
 part of the adapter's area, type it in millimetres in the **Scan** tab.
 
 Film keeps its own settings: by default 1200 dpi, colour, 16 bits, JPEG; the resolution is
@@ -383,6 +384,22 @@ To keep separate several photos acquired together (or several crops of the same 
 photo, then save in an image format: with several pages the app writes **one file per page**
 (`name-01.jpg`, `name-02.jpg`, …). In **Photo** mode, with the automatic crop, the app
 already does it by itself for the originals it finds on the glass.
+
+A photo scanned whole (automatic crop off, or an area drawn by hand) can be split afterwards,
+without scanning again: **Split the photos** (**Split the frames** for a film), on the viewer.
+Nothing is cut at once: the viewer shows the scan with the originals found on it, numbered,
+and the panel lists them, to correct first:
+
+- **click** an area to choose it, then drag it, or pull its sides by the handles;
+- **drag** on an empty spot to add an area the app did not see;
+- **Leave out** (or **Delete** on the area chosen) leaves one out;
+- **Tilt** turns the area chosen by 0.1° or 1° at a time, **Upright** puts it straight
+  (the handles move its sides as if it were upright; its outline shows the cut);
+- **Find again** goes back to the areas found by the app.
+
+**Split into N** (or **Enter**) cuts them out, each a picture of its own in the place of the
+scan; **Cancel** (or **Esc**) leaves the scan whole. Changing mode, scanning, or showing or
+moving another page cancels too.
 
 ### Redo and "Keep the new one"
 
