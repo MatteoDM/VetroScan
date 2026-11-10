@@ -59,9 +59,11 @@ on the hardware are in `docs/architecture-plan.md`; read the phase you work on f
   never run on it (a film preview at 200 dpi once ground the motor). Films only at 600 and
   1200 dpi. Say so before Matteo tries anything new, and guard it in the driver before
   anything moves.
-- **Measure before building**: a film or image feature starts from a measurement on real scans
-  (scripts and notes in `../captures/tma`, `note.txt`; scans in `../scansioni`), then the
-  feature.
+- **Measure before building**: a film or image feature, an exposure, a lamp or a calibration
+  starts from a measurement on real scans, then the feature: the `scanner-measuring` skill
+  (pairs of identical scans, the converter's ceiling, the pitfalls met) and its tools in
+  `tools/measure` (`noise.py`, `levels.py`; `--selftest` after changing them); the diary in
+  `../captures/<topic>/note.txt`, the scans in `../scansioni`.
 - Every change visible to the user goes into `CHANGELOG.md` under `[Unreleased]` in the same
   commit, and into `docs/usage.md` when it changes how the app is used.
 - App texts: Italian in the code through `tr()` / `trf()` (the key is the Italian text), English

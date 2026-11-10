@@ -1163,7 +1163,24 @@ what it measures. One gap: the stripes are declared per resolution, not per sour
       `with_slides` (two slides in the holder, `Controls::load` for the strip); e2e with and
       without the choice;
    3. **more than one exposure** (step 4): a normal and a longer pass merged, for the shadows
-      beyond density 2.5; only on line periods already run, measured before.
+      beyond density 2.5; only on line periods already run, measured before. **A longer single
+      pass measured on 10 November 2026, and left out**: the three times longer line the
+      negatives had on 8 November (`scan_modes::NEGATIVE_TRIPLE_1200`, 1200 dpi only), on the
+      two slides with `tma-scan --triple-line`, two scans with each line (notes in
+      `captures/tma/note.txt`, comparisons in `scansioni/tma/confronto_riga3x_*.png`):
+      - the shadows' signal/noise 1.2-1.35 times higher at density 2-2.5 and about 1.5
+        beyond, the scanner's black 1.4 times less noisy (`tools/measure/noise.py`), 151 s
+        instead of 120-129;
+      - **but a ceiling**: with the triple line the converter saturates on full light and the
+        shading brings it back to about 34-37 thousand, where the twice longer line puts the
+        same light (the holder's thin gap between the slides) at 53-60 thousand. The two
+        slides stayed just below it; the ceiling is at a density of about 0.23, where the
+        light parts of many slides lie (white skies, clouds). Used for slides on the same
+        evening (c620baa) and taken back (e662caf) when found. A negative's base (density
+        about 0.12) is above it as well, as the saturation of 8 November showed.
+      So a longer line is worth it only merged with a normal pass that keeps the light parts:
+      this step, the normal line for everything brighter than the longer pass's ceiling, the
+      longer one below it, scaled by the ratio measured between the two.
 6. **The colour of films, per source** (new, from HP's driver, 10 November 2026): HP's WIA
    driver (`hpxp3770.dll`, its resource `HPSJ3770`, Huffman-compressed, decoded in
    `captures/tma/driver_hp`) corrects every source with a 3x3 colour matrix: the glass's

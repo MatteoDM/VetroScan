@@ -102,7 +102,9 @@ enum Command {
         /// Experimental, for measuring: three times the glass's line
         /// instead of twice (with --film, at 1200 dpi only: the one
         /// resolution where it ran on the motor, on 8 November 2026). The
-        /// light parts of a film may saturate.
+        /// light parts of a film saturate below a density of about 0.23
+        /// (measured on slides: the converter's end comes back at about
+        /// 34-37 thousand).
         #[arg(long, requires = "film")]
         triple_line: bool,
     },
