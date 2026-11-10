@@ -22,6 +22,7 @@ pub const RULE_PATH_SHOWN: &str = "70-vetroscan.rules";
 
 /// The line that gives one scanner to the user at the seat, as the
 /// packages' rules write it.
+#[cfg(any(target_os = "linux", test))]
 fn rule_line(usb: UsbId) -> String {
     // not translated: a udev rule
     format!(
@@ -32,6 +33,7 @@ fn rule_line(usb: UsbId) -> String {
 }
 
 /// The whole rule for these scanners, ending with its own newline.
+#[cfg(any(target_os = "linux", test))]
 fn rule(ids: &[UsbId]) -> String {
     let mut text = String::from(
         // not translated: a udev rule's comment
@@ -138,7 +140,7 @@ mod tests {
     #[test]
     fn each_line_is_the_one_its_package_installs() {
         // The drivers' USB ids, so that the rule follows them.
-        let hp = hp3770_core::rts8822::capabilities(&hp3770_core::profile::PROFILES[0])
+        let hp = hp3770_core::rts8822::capabilities(hp3770_core::profile::PROFILES[0])
             .usb
             .unwrap();
         let epson = epson_gt_x750::capabilities().usb.unwrap();
