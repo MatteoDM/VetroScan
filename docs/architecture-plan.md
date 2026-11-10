@@ -457,6 +457,9 @@ It needs no new hardware, only slides and negatives to put in the holder.
   negatives' line is now twice the glass's. The calibration waits for the adapter's lamp to be
   steady (it gains about 18 % in its first 15 s): two scans in a row agree within 0.2 %. The
   final negatives at 1200 dpi: no channel saturated, natural colours, 114 s.
+  **Corrected on 10 November 2026**: the area above, 76.2-171.6 mm down, is the window of the
+  negatives' holder, not the end of the light: with the slides' holder the light reaches about
+  188-190 mm and the second slide ends at 176.8 mm (phase 13, step 5.1).
   Still open: the last few percent of light along the strip (a correction measured once on the
   empty holder, if it shows); blue's signal on a negative's base is the lowest (HP gives each
   colour its own exposure for that; not understood yet); slides not tried yet (their mode would be the glass's, the gains at their
@@ -1103,7 +1106,7 @@ what it measures. One gap: the stripes are declared per resolution, not per sour
    another scan's picture by 1-2.5 levels of 255 on average; a single frame without gaps,
    with its base guessed from its own film (`base_auto`), is off by -0.04 to +0.08 in density
    and shifts its picture by up to 12-16 levels in one channel (a cast). Stored with the
-   pages: left to step 6 (the raw scan kept with its base in the metadata). Was: measured
+   pages: left to step 7 (the raw scan kept with its base in the metadata). Was: measured
    once (on a strip's gaps or a blank leader) and used for every frame of the same roll, so
    frames of one roll come out alike; a new roll measures again. Stored with the pages and in
    the preferences of the Film mode, shown and resettable.
@@ -1116,13 +1119,60 @@ what it measures. One gap: the stripes are declared per resolution, not per sour
    anything moves. A scanner without it keeps step 1 alone.
 5. **Slides, and more than one exposure**: no orange mask, but a far larger range; the
    professional tool is a normal and a long pass merged (multi-exposure), which is step 4's
-   exposure used twice. Slides need slides at hand (none yet).
-6. **Later**: the raw linear scan always kept with its scanner, calibration and base in the
+   exposure used twice. **Measured on 10 November 2026** (two slides, 1200 dpi, three scans
+   without touching them; `captures/tma/misura_diapo.py`, notes in `captures/tma/note.txt`):
+   a quarter of a slide's pixels lie beyond density 2 in red and green, 3-4.5 % beyond 2.5;
+   with the glass's line (HP's `[ScanTAColorMode]` is the same) the signal/noise is 37-42 in
+   the light parts, 6 at density 1.5-2, 3 at 2-2.5 and 1.3 beyond (the scanner's black, about
+   120-220 samples with a noise of about 140 per pixel); the negatives' longer line (already
+   run at 600 and 1200 dpi) halves the noise in the shadows (6-7.5 at density 2-2.5) for 20 s
+   more, with nothing saturated. `film::frames` finds real slides in their mounts
+   (35.1 x 23.9 mm). In order:
+   1. **the adapter's area for slides** (driver, first: without it the second slide is cut by
+      5 mm): the profile's area, 76.2-171.6 mm from the glass's top, was the window of the
+      negatives' holder seen on 8 November, not the end of the light. With the slides' holder
+      the light reaches about 188-190 mm (`tma-scan --height 130`); HP's own area is 42.3 x
+      93.1 mm starting `TA_StripToScan` = 1060/2400 in (11.2 mm) below the calibration strip,
+      about 89.9-183.0 mm (read in `hpgt3770.dll`'s `GetXPACapabilities`; which of the three
+      `TA_StripToScan` values is the 3770's is inferred, 1800 or 1920 would cut the negatives'
+      window). The area becomes 76.2-183.0 mm (or HP's, without the slot), checked with both
+      holders; the frames' detection and the e2e follow;
+   2. **slides in the contract and the app**: `Source::Slide` among the 3770 adapter's
+      sources, scanned with the negatives' longer line (measured above, on lines already run),
+      `Slide` in `film` for the picture; Pellicola gets the choice Negativi / Diapositive only
+      where the adapter declares both; an e2e with and without;
+   3. **more than one exposure** (step 4): a normal and a longer pass merged, for the shadows
+      beyond density 2.5; only on line periods already run, measured before.
+6. **The colour of films, per source** (new, from HP's driver, 10 November 2026): HP's WIA
+   driver (`hpxp3770.dll`, its resource `HPSJ3770`, Huffman-compressed, decoded in
+   `captures/tma/driver_hp`) corrects every source with a 3x3 colour matrix: the glass's
+   (`FB`), the slides' (`SLIDE`, with offsets and gammas per channel in `SLIDECOEFFS`) and the
+   negatives' (`POST`: 2.632 -1.636 0.005 / -0.175 1.229 -0.054 / -0.211 0.069 1.142, with
+   `NEG6X3` and `NEGCOEFFS`: slopes and gammas per channel). For negatives it is the
+   correction of the dyes' crossed absorptions that a professional inversion does and ours
+   does not (our colours come only from the base and one level per channel). By the four
+   levels such numbers belong to the driver, as a colour profile per source in the contract
+   (`Capabilities`), the imaging applying whatever matrix it is given, none by default; the
+   way to measure them for any scanner is step 7's IT8 target. HP's matrices work on HP's own
+   pipeline (8 bits, after its inversion), so they are a hint, not numbers to copy: first a
+   try with `hp3770 develop` on the strips of 10 November, judged by Matteo, before anything
+   in the app.
+7. **Later**: the raw linear scan always kept with its scanner, calibration and base in the
    metadata (partly there: `-16bit.png`, `develop`, RAW), so a frame can be developed again;
    an ICC input profile per scanner from an IT8 target, outside the scanners' code; dust and
    hairs (many on the blue-sky strip of 10 November): with an infrared channel where the
    scanner has one (the 4490's Digital ICE, a capability in the contract), else found in
    software on the picture (white specks on a positive), generic in `scan-imaging`.
+   From HP's driver too (10 November 2026), to look into when useful: `TMAPwmDuty=36 40 48`
+   (perhaps the adapter lamp's brightness: more light is the only real gain for the
+   shadows, measured; to be measured on the slot, within HP's values, before any use);
+   `TA_FIND_EDGE` (HP aligns the area on the holder's edge; our frames are found on the film
+   anyway); HP's white for negatives on the slot, 142/155/144 against the slides' 81/83/70
+   (only a scale: measured that gain does not improve the signal/noise).
+8. **The measuring box of a film's levels** (proposed 10 November 2026, not done: Matteo said
+   "not now"): `film::inside` takes 0.9 of each frame and its densest pixels can lie on the
+   dark band by the holder's edge; on `pellicola2` two scans in a row gave highlights 0.91 and
+   1.12, with 0.85 0.03 apart, the other four strips unchanged (`captures/tma/misura_luci.py`).
 
 ## Summary
 
@@ -1138,4 +1188,4 @@ what it measures. One gap: the stripes are declared per resolution, not per sour
 | 10 · slides and negatives on the 3770 (negatives done, slides open) | to be decided | medium | yes: the 3770's own adapter |
 | 11 · precise moves from the keyboard (done) | to be decided | low | yes |
 | 12 · Epson Perfection 4490 Photo, native, plug and play (waiting for the scanner) | to be decided | high: protocol unknown, two carriages | no: the scanner (firmware inside the program) |
-| 13 · films done professionally, for every scanner (decided) | to be decided | low (steps 1-3), medium (4-5: the motor) | 1-3 yes; 4 needs the 3770's captures; 5 needs slides |
+| 13 · films done professionally, for every scanner (steps 1-3 done) | to be decided | low (1-3, 5.1-5.2, 6), medium (4, 5.3: the motor) | 1-3, 5.1-5.2, 6 yes; 4 needs the 3770's captures |

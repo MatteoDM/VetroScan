@@ -93,6 +93,11 @@ enum Command {
         /// film (with the holder empty, the middle of its window).
         #[arg(long)]
         calibrate_at: Option<f64>,
+        /// For measuring where the adapter's light ends: scan this many mm
+        /// down from the top of the adapter's area instead of its height
+        /// (at most 130: the glass, never past it).
+        #[arg(long, value_parser = parse_height)]
+        height: Option<f64>,
     },
     /// Turn a saved scan of the transparency adapter (the NAME-16bit.png of
     /// `tma-scan`) into its picture again, without the scanner.
@@ -277,7 +282,8 @@ fn main() -> ExitCode {
             dpi,
             film,
             calibrate_at,
-        } => open(cli.backend).and_then(|s| tma_scan(s, &output, dpi, film, calibrate_at)),
+            height,
+        } => open(cli.backend).and_then(|s| tma_scan(s, &output, dpi, film, calibrate_at, height)),
         Command::Develop {
             input,
             output,
@@ -804,12 +810,23 @@ enum FilmArg {
     Negative,
 }
 
+/// `--height` of `tma-scan`: 10-130 mm, so that the area stays on the glass.
+fn parse_height(text: &str) -> Result<f64, String> {
+    let mm: f64 = text.parse().map_err(|e| format!("{e}"))?;
+    if (10.0..=130.0).contains(&mm) {
+        Ok(mm)
+    } else {
+        Err("from 10 to 130 mm".into())
+    }
+}
+
 fn tma_scan(
     scanner: Scanner,
     output: &std::path::Path,
     dpi: u16,
     film: Option<FilmArg>,
     calibrate_at: Option<f64>,
+    height: Option<f64>,
 ) -> CliResult {
     use hp3770_core::geometry::Area;
     use hp3770_core::session::{self, Request, Stage, TMA_WARMUP};
@@ -835,8 +852,12 @@ fn tma_scan(
         return Err("the transparency adapter is not plugged in".into());
     }
     let mm = |tenths: u16| f64::from(tenths) / 10.0;
-    let [left, top, width, height] = adapter.area.map(mm);
-    let area = Area::from_mm(dpi, left, top, width, height);
+    let [left, top, width, area_height] = adapter.area.map(mm);
+    let area_height = height.unwrap_or(area_height);
+    if height.is_some() {
+        eprintln!("area             {top:.1}-{:.1} mm down", top + area_height);
+    }
+    let area = Area::from_mm(dpi, left, top, width, area_height);
     let request = Request {
         linear: true,
         transparency: true,

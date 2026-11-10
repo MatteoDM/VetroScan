@@ -33,6 +33,8 @@ GitHub; here they are in English.
   longer has to guess its base from its shadows (casts of up to 12-16 levels of 255 on real
   negatives). `hp3770 develop --base R G B` develops a saved scan with a base given, and
   prints the one between its frames.
+- `hp3770 tma-scan --height MM` scans further down the adapter (10-130 mm from the top of its
+  area), to measure where its light ends.
 
 ### Changed
 - **Remove the scanner's stripes** now also works in **Film**: the HP 3770 leaves the same
