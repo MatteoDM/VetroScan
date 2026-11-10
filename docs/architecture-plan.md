@@ -1101,7 +1101,10 @@ what it measures. One gap: the stripes are declared per resolution, not per sour
    exposure used twice. Slides need slides at hand (none yet).
 6. **Later**: the raw linear scan always kept with its scanner, calibration and base in the
    metadata (partly there: `-16bit.png`, `develop`, RAW), so a frame can be developed again;
-   an ICC input profile per scanner from an IT8 target, outside the scanners' code.
+   an ICC input profile per scanner from an IT8 target, outside the scanners' code; dust and
+   hairs (many on the blue-sky strip of 10 November): with an infrared channel where the
+   scanner has one (the 4490's Digital ICE, a capability in the contract), else found in
+   software on the picture (white specks on a positive), generic in `scan-imaging`.
 
 ## Summary
 
