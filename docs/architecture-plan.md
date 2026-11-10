@@ -1174,7 +1174,16 @@ what it measures. One gap: the stripes are declared per resolution, not per sour
    way to measure them for any scanner is step 7's IT8 target. HP's matrices work on HP's own
    pipeline (8 bits, after its inversion), so they are a hint, not numbers to copy: first a
    try with `hp3770 develop` on the strips of 10 November, judged by Matteo, before anything
-   in the app.
+   in the app. **Tried on 10 November 2026** (`develop --matrix`, nine numbers row by row,
+   `--matrix-gamma` 1 or 2.2, after the inversion and before the colour noise; comparisons in
+   `scansioni/tma/matrici`, notes in `captures/tma/note.txt`): `POST`'s rows add up to 1, so
+   grey stays grey on our positive (the chromogenic black and white strip stays grey); the
+   mean saturation inside the frames goes from 0.22-0.38 to 0.29-0.52, the pixels with a
+   channel clipped from 2 to 8 % on the flowers; greens and the blue T-shirt look truer, reds
+   pushed hard (an indoor frame turns orange); half of it (`I + (POST - I) / 2`) in between.
+   `SLIDE`'s rows add up to 0.87-0.94 (HP follows it with `SLIDECOEFFS`), tried with each row
+   scaled to 1: a slide's lavender sky turns blue, 2.8 % clipped (0.5 % at gamma 2.2). Linear
+   or gamma 2.2 nearly the same. Waiting for Matteo's judgement.
 7. **Later**: the raw linear scan always kept with its scanner, calibration and base in the
    metadata (partly there: `-16bit.png`, `develop`, RAW), so a frame can be developed again;
    an ICC input profile per scanner from an IT8 target, outside the scanners' code; dust and

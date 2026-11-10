@@ -126,6 +126,15 @@ enum Command {
         /// instead of the one between this strip's frames.
         #[arg(long, num_args = 3, value_delimiter = ',', value_names = ["R", "G", "B"])]
         base: Option<Vec<f32>>,
+        /// A 3x3 colour matrix applied to the picture, row by row (red out
+        /// from red green blue in, then green, then blue), before the
+        /// colour noise: a trial of a colour correction, nothing measured.
+        #[arg(long, num_args = 9, allow_negative_numbers = true)]
+        matrix: Option<Vec<f32>>,
+        /// The gamma of the values the matrix works on: 1 on the linear
+        /// picture, 2.2 on the picture as displayed.
+        #[arg(long, default_value_t = 1.0)]
+        matrix_gamma: f32,
     },
     /// Switch the flatbed lamp, or the transparency adapter's, on or off.
     ///
@@ -293,6 +302,8 @@ fn main() -> ExitCode {
             destripe,
             colour_noise,
             base,
+            matrix,
+            matrix_gamma,
         } => read_png16(&input).and_then(|(w, h, mut samples)| {
             if destripe {
                 destripe_samples(&mut samples, w, h, dpi)?;
@@ -304,7 +315,24 @@ fn main() -> ExitCode {
                 }
                 Some(_) => return Err("--base wants three transmissions from 0 to 1".into()),
             };
-            develop(samples, w, h, dpi, film, colour_noise, base, &output)
+            let matrix = match matrix.as_deref() {
+                None => None,
+                Some(m) if m.len() == 9 && matrix_gamma > 0.0 => {
+                    Some((std::array::from_fn(|i| m[i]), matrix_gamma))
+                }
+                Some(_) => return Err("--matrix wants nine numbers, --matrix-gamma above 0".into()),
+            };
+            develop(
+                samples,
+                w,
+                h,
+                dpi,
+                film,
+                colour_noise,
+                base,
+                matrix,
+                &output,
+            )
         }),
         Command::Detect { input, crop } => detect(&input, crop.as_deref()),
         Command::Stripes { input } => stripes(&input),
@@ -690,6 +718,7 @@ fn develop(
     film: Option<FilmArg>,
     colour_noise: bool,
     given: Option<[f32; 3]>,
+    matrix: Option<([f32; 9], f32)>,
     output: &std::path::Path,
 ) -> CliResult {
     use scan_imaging::adjust::{render_samples, Adjustments, Samples};
@@ -775,6 +804,10 @@ fn develop(
             s.positive(&samples)
         }
     };
+    if let Some((m, gamma)) = matrix {
+        apply_matrix(&mut picture, m, gamma);
+        eprintln!("colour matrix    {m:?} at gamma {gamma}");
+    }
     if colour_noise {
         let noise = scan_imaging::chroma::estimate(&picture, image.width);
         let radius = noise.and_then(scan_imaging::chroma::radius_for);
@@ -800,6 +833,23 @@ fn develop(
     println!("picture          {} x {} pixels", shown.width, shown.height);
     println!("saved            {}", output.display());
     Ok(())
+}
+
+/// `develop --matrix`: each pixel of the linear 16-bit `picture` raised to
+/// 1 / `gamma`, multiplied by the 3x3 matrix `m` (row by row), clipped and
+/// brought back to linear.
+fn apply_matrix(picture: &mut [u16], m: [f32; 9], gamma: f32) {
+    let full = f32::from(u16::MAX);
+    let encode: Vec<f32> = (0..=u16::MAX)
+        .map(|v| (f32::from(v) / full).powf(1.0 / gamma))
+        .collect();
+    for p in picture.chunks_exact_mut(3) {
+        let v = [0, 1, 2].map(|c| encode[usize::from(p[c])]);
+        for (c, out) in p.iter_mut().enumerate() {
+            let x = m[c * 3] * v[0] + m[c * 3 + 1] * v[1] + m[c * 3 + 2] * v[2];
+            *out = (x.clamp(0.0, 1.0).powf(gamma) * full).round() as u16;
+        }
+    }
 }
 
 /// What is in the adapter's holder (`tma-scan --film`).
@@ -910,6 +960,7 @@ fn tma_scan(
         dpi,
         film,
         false,
+        None,
         None,
         output,
     )?;
