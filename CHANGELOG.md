@@ -17,6 +17,8 @@ GitHub; here they are in English.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-10
+
 ### Added
 - **Reduce the colour noise**, for films, on by default: the coloured specks in the light and
   blue parts of a negative's picture (the orange base lets little blue light through), measured
@@ -350,7 +352,8 @@ First version.
 - Texts with a run of spaces in the middle (note on RAW, on 16 bits and on the buttons in
   Windows); the button of the default folder uses the system's separator.
 
-[Unreleased]: https://github.com/MatteoDM/scanner/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/MatteoDM/scanner/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/MatteoDM/scanner/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/MatteoDM/scanner/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/MatteoDM/scanner/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/MatteoDM/scanner/compare/v0.3.0...v0.3.1
