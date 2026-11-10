@@ -17,6 +17,11 @@ GitHub; here they are in English.
 
 ## [Unreleased]
 
+### Added
+- `hp3770 tma-scan --triple-line` (experimental, for measuring): films at 1200 dpi with three
+  times the glass's line instead of twice, as the HP 3770 first scanned negatives; refused at
+  any other resolution, before the scanner moves.
+
 ### Changed
 - **Lamp · Switch it off** follows the scanner in use: its longest choice is the time after
   which the scanner switches its lamp off by itself, where it does (*the scanner switches it

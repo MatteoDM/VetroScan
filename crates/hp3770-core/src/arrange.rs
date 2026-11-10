@@ -115,6 +115,7 @@ mod tests {
         // than the samples need).
         let params = ScanParams {
             negative: false,
+            triple_line: false,
             depth: 8,
             resolution_x: 1200,
             resolution_y: 2400,

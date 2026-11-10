@@ -74,6 +74,7 @@ fn run(seconds: u64, off_at: Option<u64>) -> Result<(), Box<dyn std::error::Erro
     )?;
     let params = ScanParams {
         negative: false,
+        triple_line: false,
         depth: 8,
         resolution_x: 200,
         resolution_y: 200,
@@ -186,6 +187,7 @@ fn brightness(
 ) -> Result<Vec<f64>, Box<dyn std::error::Error>> {
     let params = ScanParams {
         negative: false,
+        triple_line: false,
         depth: 8,
         resolution_x: 200,
         resolution_y: 200,

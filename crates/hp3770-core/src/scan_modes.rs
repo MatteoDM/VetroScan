@@ -580,6 +580,24 @@ pub fn negative_mode(resolution: u16) -> Option<&'static ScanMode> {
     NEGATIVE_MODES.iter().find(|m| m.resolution == resolution)
 }
 
+/// The negatives' 1200 dpi mode with three times the glass's line
+/// (`[ScanNegColorMode1]`'s second `CTPC`, 35999) instead of twice: the
+/// mode [`NEGATIVE_MODES`] had on 8 November 2026, when it scanned a strip
+/// of negatives at 1200 dpi in 153 s (commit 9c87ab5; the setup and the
+/// motor are the same since). With the adapter's white it saturated red on
+/// a negative's base, hence the twice longer line; kept for measuring a
+/// longer exposure on slides, where only the shadows count
+/// (`hp3770 tma-scan --triple-line`). Never run at another resolution.
+pub const NEGATIVE_TRIPLE_1200: ScanMode = ScanMode {
+    ctpc: 35999,
+    ..NEGATIVE_MODES[0]
+};
+
+/// [`NEGATIVE_TRIPLE_1200`] at 1200 dpi, none at any other resolution.
+pub fn negative_triple_mode(resolution: u16) -> Option<&'static ScanMode> {
+    (resolution == NEGATIVE_TRIPLE_1200.resolution).then_some(&NEGATIVE_TRIPLE_1200)
+}
+
 /// The colour scan mode for a horizontal resolution (`RTS_GetScanmode`).
 pub fn colour_mode(resolution: u16) -> Option<&'static ScanMode> {
     COLOUR_MODES.iter().find(|m| m.resolution == resolution)

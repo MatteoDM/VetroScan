@@ -53,6 +53,11 @@ pub struct Request {
     /// scan alike. The driver asks them for slides too
     /// ([`crate::rts8822::session_request`]): less noise in their shadows.
     pub negative: bool,
+    /// Experimental, for measuring: with [`Request::negative`] at 1200 dpi,
+    /// three times the glass's line instead of twice
+    /// ([`crate::scan_modes::NEGATIVE_TRIPLE_1200`]); refused otherwise,
+    /// before anything moves.
+    pub triple_line: bool,
 }
 
 /// The transparency adapter's lamp warms up for at least this long (HP's
@@ -73,6 +78,7 @@ impl Request {
             depth: 8,
             transparency: false,
             negative: false,
+            triple_line: false,
         }
     }
 }
@@ -166,6 +172,16 @@ pub fn scan<T: Transport>(
         16 => params.depth = 16,
         d => return Err(Error::InvalidArgument(format!("depth {d}"))),
     }
+    // The triple line ran on the motor for films at 1200 dpi only (8
+    // November 2026): anything else is refused before anything moves.
+    if request.triple_line && !(params.negative && request.dpi == 1200) {
+        return Err(Error::InvalidArgument(format!(
+            "the triple line is for films at 1200 dpi only, not {} dpi{}",
+            request.dpi,
+            if params.negative { "" } else { " without film" }
+        )));
+    }
+    params.triple_line = request.triple_line;
     let gamma = geometry::identity_gamma();
     if !progress(Stage::Starting) {
         return Err(Error::Cancelled("start"));
@@ -367,6 +383,39 @@ mod tests {
             let r = scan(&mut chip, &HP3770, &request, &mut |_| true);
             assert!(matches!(r, Err(Error::InvalidArgument(_))), "{dpi} dpi");
         }
+    }
+
+    /// The triple line ran only for films at 1200 dpi: at another
+    /// resolution, or without film, it is refused before the scanner is
+    /// touched.
+    #[test]
+    fn the_triple_line_elsewhere_is_refused_before_anything_moves() {
+        for (dpi, film) in [(600, true), (300, true), (2400, true), (1200, false)] {
+            let request = Request {
+                transparency: film,
+                negative: film,
+                triple_line: true,
+                ..Request::new(
+                    dpi,
+                    Area {
+                        x: 0,
+                        y: 0,
+                        width: 8,
+                        height: 2,
+                    },
+                    Mode::Colour,
+                )
+            };
+            let mut chip = Chip::new(Untouched);
+            let r = scan(&mut chip, &HP3770, &request, &mut |_| true);
+            assert!(
+                matches!(r, Err(Error::InvalidArgument(_))),
+                "{dpi} dpi, film {film}"
+            );
+        }
+        let mode = crate::scan_modes::negative_triple_mode(1200).unwrap();
+        assert_eq!(mode.ctpc, 35999);
+        assert!(crate::scan_modes::negative_triple_mode(600).is_none());
     }
 
     fn request(mode: Mode) -> Request {

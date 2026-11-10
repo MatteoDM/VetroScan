@@ -99,6 +99,12 @@ enum Command {
         /// (at most 130: the glass, never past it).
         #[arg(long, value_parser = parse_height)]
         height: Option<f64>,
+        /// Experimental, for measuring: three times the glass's line
+        /// instead of twice (with --film, at 1200 dpi only: the one
+        /// resolution where it ran on the motor, on 8 November 2026). The
+        /// light parts of a film may saturate.
+        #[arg(long, requires = "film")]
+        triple_line: bool,
     },
     /// Turn a saved scan of the transparency adapter (the NAME-16bit.png of
     /// `tma-scan`) into its picture again, without the scanner.
@@ -293,7 +299,16 @@ fn main() -> ExitCode {
             film,
             calibrate_at,
             height,
-        } => open(cli.backend).and_then(|s| tma_scan(s, &output, dpi, film, calibrate_at, height)),
+            triple_line,
+        } => {
+            if triple_line && dpi != 1200 {
+                Err(format!("--triple-line runs at 1200 dpi only, not {dpi}").into())
+            } else {
+                open(cli.backend).and_then(|s| {
+                    tma_scan(s, &output, dpi, film, calibrate_at, height, triple_line)
+                })
+            }
+        }
         Command::Develop {
             input,
             output,
@@ -861,6 +876,7 @@ fn tma_scan(
     film: Option<FilmArg>,
     calibrate_at: Option<f64>,
     height: Option<f64>,
+    triple_line: bool,
 ) -> CliResult {
     use hp3770_core::geometry::Area;
     use hp3770_core::session::{self, Request, Stage, TMA_WARMUP};
@@ -897,6 +913,7 @@ fn tma_scan(
         transparency: true,
         // Films with the negatives' longer line, slides too (as the driver).
         negative: film.is_some(),
+        triple_line,
         depth: 16,
         adjust: Adjustments {
             sharpen: 0.0,

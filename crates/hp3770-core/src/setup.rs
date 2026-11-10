@@ -59,6 +59,9 @@ pub struct ScanParams {
     /// ([`scan_modes::negative_mode`]): a longer line and an exposure of
     /// its own for each colour.
     pub negative: bool,
+    /// With [`ScanParams::negative`] at 1200 dpi, three times the glass's
+    /// line instead of twice ([`scan_modes::NEGATIVE_TRIPLE_1200`]).
+    pub triple_line: bool,
 }
 
 /// How the chip arranges the lines of the three colours, which the CCD
@@ -208,7 +211,9 @@ pub fn setup(
     hw: &Hardware,
     gain_offset: &GainOffset,
 ) -> Result<SetupInfo> {
-    let mode = if params.negative {
+    let mode = if params.negative && params.triple_line {
+        scan_modes::negative_triple_mode(params.resolution_x)
+    } else if params.negative {
         scan_modes::negative_mode(params.resolution_x)
     } else {
         scan_modes::colour_mode(params.resolution_x)
