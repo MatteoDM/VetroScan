@@ -2223,6 +2223,9 @@ struct App {
     /// The scanner is plugged in but this user may not open it (Linux,
     /// udev rule missing).
     access_denied: bool,
+    /// The USB ids of every scanner the drivers know, for Linux's
+    /// permission when none can be opened yet.
+    known_usb: Vec<scanner_api::UsbId>,
     system_dark: bool,
     theme: ThemeChoice,
     kind: Kind,
@@ -2385,12 +2388,13 @@ impl App {
             "scuro" => ThemeChoice::Dark,
             _ => ThemeChoice::System,
         };
+        let models = worker::registry().models();
         (
             Self {
                 worker: None,
                 status: None,
-                caps: worker::registry()
-                    .models()
+                known_usb: models.iter().filter_map(|m| m.usb).collect(),
+                caps: models
                     .into_iter()
                     .next()
                     .unwrap_or_else(Capabilities::placeholder),
@@ -4583,7 +4587,8 @@ impl App {
             Message::GrantAccess => {
                 self.note =
                     tr("Conferma con la password per dare lo scanner a questo utente…").into();
-                return Task::perform(async { access::grant() }, Message::GrantDone);
+                let ids = self.known_usb.clone();
+                return Task::perform(async move { access::grant(&ids) }, Message::GrantDone);
             }
             Message::GrantDone(result) => {
                 self.note = match result {
@@ -5623,7 +5628,7 @@ impl App {
                 self.send_lamp_timer();
             }
             Event::Status(status) => {
-                self.access_denied = status.is_err() && access::denied();
+                self.access_denied = status.is_err() && access::denied(&self.known_usb);
                 self.status = Some(status);
                 if std::mem::take(&mut self.film_wanted) {
                     if self.adapter_plugged() {

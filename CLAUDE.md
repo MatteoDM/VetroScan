@@ -36,10 +36,18 @@ on the hardware are in `docs/architecture-plan.md`; read the phase you work on f
   `if backend == …` or a text that names a brand in the app. Before adding a feature, ask how
   it works on a scanner without it and on a different scanner (the Epson 4490 is next; the
   made-up scanners in `fake.rs` stand in for others in the e2e). Scanner-specific facts the app
-  needs are declared, as `Capabilities::usb` (the Windows buttons row) and
+  needs are declared, as `Capabilities::usb` (the Windows buttons row, Linux's udev rule) and
   `LampInfo::switches_off_after` (the lamp's choices) are. Still from the HP 3770, as generic
   defaults: `scan_imaging::convert::HP_SHARPEN` and `DEFAULT_THRESHOLD` (tuned against HP's
   driver); a new scanner may want its own.
+- **Windows, Linux and macOS, always**: the app and every driver work on all three (packages
+  for Windows x86_64, Linux x86_64/aarch64, macOS arm64/x86_64). USB goes through `nusb`
+  wherever it can (Linux usbfs, macOS IOKit, Windows WinUSB); what one system needs on its
+  own (Windows' `usbscan.sys` and WIA, Linux's udev rule and `pkexec`) sits behind
+  `#[cfg(...)]` with an answer for the other systems (`None`, "only on Linux"), never a build
+  that fails there. Such code finds the scanner by what its driver declares (its USB id), not
+  by its name. A scanner's udev rule goes into `packaging/linux` and the packages
+  (`nfpm.yaml`, `postinstall.sh`); `access.rs` writes the same lines, checked by a test.
 - **Capabilities rule**: everything in the app tied to a function of the scanner exists only if
   its `Capabilities` declare it, asked in one place (`App::caps` and helpers). A new function of
   the contract comes with its `Capabilities` field, the app's branch, and an e2e with a made-up
@@ -73,6 +81,16 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 - The app's e2e (`crates/vetroscan/src/e2e.rs`, about 120 tests) takes about 5 minutes: run the
   tests in the background and read their real exit code; never pipe cargo through `grep`, it
   hides a failure.
+- **The other systems**, while GitHub Actions cannot run (they test Linux, Windows and macOS):
+  - Linux: the same checks in WSL on the committed HEAD (clone `/mnt/c/.../repo` into
+    `$HOME`, `cargo fmt`, `clippy -D warnings`, `cargo test --workspace --locked`), from Git
+    Bash with `MSYS_NO_PATHCONV=1 wsl -d Ubuntu -- bash -lc '…'`; commit first.
+  - macOS: `CARGO_TARGET_DIR=target/mac cargo clippy --workspace --exclude vetroscan
+    --all-targets --locked --target aarch64-apple-darwin -- -D warnings` (and
+    `x86_64-apple-darwin`). The app itself cannot be built here (its notifications need
+    Apple's compiler), nor any test run: say that macOS is checked only so far.
+  - A change that touches `#[cfg(...)]` code, USB access or packaging is not done until both
+    have passed.
 - On the real scanner, only when Matteo has it connected:
   `cargo test -p hp3770-cli --test hardware -- --ignored --test-threads 1`.
 - To let Matteo try a change: `cargo build --release`, then start `target\release\vetroscan.exe`

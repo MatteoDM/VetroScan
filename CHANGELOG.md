@@ -24,6 +24,10 @@ GitHub; here they are in English.
   The texts on 8 bits and on sharpness no longer compare them with HP's driver.
 - On Windows, **Use the scanner buttons with this app only** is offered for any USB scanner
   whose maker's driver Windows has, found by its USB id, no longer only for the HP 3770.
+- On Linux, **Allow access to the scanner** works for every scanner VetroScan knows (the HP
+  3770 and the Epson 4490), no longer only for the HP 3770: it installs
+  `/etc/udev/rules.d/70-vetroscan.rules`, a line for each, the same lines as the packages'
+  rules. A `70-hp3770.rules` installed there by an older version keeps working.
 
 ### Removed
 - The Epson Perfection 4490 firmware's path in the preferences file (`epson_firmware`, never

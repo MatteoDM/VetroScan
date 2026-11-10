@@ -83,7 +83,7 @@ By default Linux lets only the administrator use USB devices. This rule gives ac
 scanner to whoever sits at the computer, without a password:
 
 ```sh
-sudo install -m 644 packaging/linux/70-hp3770.rules /etc/udev/rules.d/
+sudo install -m 644 packaging/linux/70-hp3770.rules packaging/linux/70-epson-4490.rules /etc/udev/rules.d/
 sudo udevadm control --reload
 ```
 
@@ -254,7 +254,7 @@ cargo uninstall vetroscan
 cargo uninstall hp3770-cli
 rm ~/.local/share/applications/vetroscan.desktop
 rm ~/.local/share/icons/hicolor/scalable/apps/vetroscan.svg
-sudo rm /etc/udev/rules.d/70-hp3770.rules
+sudo rm /etc/udev/rules.d/70-hp3770.rules /etc/udev/rules.d/70-epson-4490.rules
 rm -r ~/Work/scanner          # the downloaded code
 rm -r ~/.config/vetroscan     # the settings (optional)
 ```

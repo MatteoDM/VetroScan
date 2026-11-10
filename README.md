@@ -162,7 +162,7 @@ The user only needs to be allowed to open the device: the udev rule in
 [`packaging/linux`](packaging/linux) grants it to whoever is logged in to the session.
 
 ```sh
-sudo install -m 644 packaging/linux/70-hp3770.rules /etc/udev/rules.d/
+sudo install -m 644 packaging/linux/70-hp3770.rules packaging/linux/70-epson-4490.rules /etc/udev/rules.d/
 sudo udevadm control --reload
 # then unplug and plug the scanner back in
 cargo run --release --bin hp3770 -- status   # must answer without sudo

@@ -38,9 +38,10 @@ program at a time can use the scanner.
 
 ## Linux
 
-On Linux a USB device just plugged in belongs to root. The **udev rule** `70-hp3770.rules`
-gives it to the user sitting at the computer (the one of the graphical session, not one
-connected over ssh):
+On Linux a USB device just plugged in belongs to root. A **udev rule** for each scanner
+(`70-hp3770.rules` for the HP 3770, `70-epson-4490.rules` for the Epson 4490) gives it to the
+user sitting at the computer (the one of the graphical session, not one connected over ssh);
+the HP 3770's:
 
 ```text
 SUBSYSTEM=="usb", ATTR{idVendor}=="03f0", ATTR{idProduct}=="2505", MODE="0660", TAG+="uaccess"
@@ -63,7 +64,7 @@ What the packages install:
 |---|---|
 | `/usr/bin/vetroscan` | the app |
 | `/usr/bin/hp3770` | the command |
-| `/usr/lib/udev/rules.d/70-hp3770.rules` | the permission to use the scanner |
+| `/usr/lib/udev/rules.d/70-hp3770.rules`, `70-epson-4490.rules` | the permission to use the scanners |
 | `/usr/share/applications/vetroscan.desktop` | the entry in the applications menu |
 | `/usr/share/icons/hicolor/…/vetroscan.*` | the icon |
 | `/usr/share/licenses/vetroscan/` | licence and the libraries' licences |
@@ -145,9 +146,9 @@ itself: the app does it, once, with a button.
    then double-click.
 3. With the scanner plugged in, the **Scan** tab says "The scanner is plugged in, but Linux
    does not let this user use it" and shows **Allow access to the scanner**. Press it and
-   type the password: the app installs the rule in `/etc/udev/rules.d/70-hp3770.rules`,
-   applies it and connects to the scanner again, without unplugging the cable. It is only
-   needed the first time.
+   type the password: the app installs the rule in `/etc/udev/rules.d/70-vetroscan.rules`
+   (one line for each scanner VetroScan knows), applies it and connects to the scanner again,
+   without unplugging the cable. It is only needed the first time.
 
 The `hp3770` command is inside the AppImage: to use it,
 `~/Applications/vetroscan-v*-linux-x86_64.AppImage --appimage-extract` makes a
@@ -157,7 +158,8 @@ If the AppImage does not start and talks about **FUSE**, run it like this:
 `./vetroscan-v*-linux-x86_64.AppImage --appimage-extract-and-run`.
 
 **Updating:** download the new file and delete the old one.
-**Uninstalling:** delete the file, then the rule: `sudo rm /etc/udev/rules.d/70-hp3770.rules`
+**Uninstalling:** delete the file, then the rule: `sudo rm /etc/udev/rules.d/70-vetroscan.rules`
+(versions before 0.7 installed `70-hp3770.rules` there instead)
 
 ### From source
 

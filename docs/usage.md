@@ -841,7 +841,7 @@ The dot at the top is red and the bar at the bottom says *Scanner not connected*
 4. If that is not enough:
    - **Linux**: if the **Scan** tab says *The scanner is plugged in, but Linux does not let
      this user use it*, press **Allow access to the scanner** and type the computer's
-     password: the app installs the `70-hp3770.rules` rule and connects again by itself,
+     password: the app installs the `70-vetroscan.rules` rule and connects again by itself,
      without unplugging the cable. It is needed only once. Otherwise follow
      [Checking that it works (Linux)](install.md#checking-that-it-works-linux).
    - **Windows**: check the driver in *Device Manager*, as explained in
