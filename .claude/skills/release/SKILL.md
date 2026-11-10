@@ -1,6 +1,6 @@
 ---
 name: release
-description: Publishes a version of the HP 3770 scanner — raises the workspace version, moves what is new in the CHANGELOG, checks, commits, creates the vX.Y.Z tag and pushes it, so that the "CI and Release" workflow builds the packages for Linux/Windows/macOS and publishes the release on GitHub; also explains how to package locally with scripts/package.sh and how to recover from a failed release. Use it when asked to release, publish, tag, raise the version or build the packages.
+description: Publishes a version of VetroScan — raises the workspace version, moves what is new in the CHANGELOG, checks and commits; then either the vX.Y.Z tag lets the "CI and Release" workflow build and publish the packages, or, while GitHub Actions cannot run, the Windows and Linux packages are made locally (package.ps1, WSL) and published with gh release create; also installs the new version on this PC and recovers from a failed release. Use it when asked to release, publish, tag, raise the version, build the packages or install the new version.
 ---
 
 # Releasing the scanner
@@ -58,6 +58,10 @@ the tags: it is not touched at every release.
    cargo clippy --workspace --all-targets --locked -- -D warnings
    ```
 4. Commit: `Release vX.Y.Z` with `Cargo.toml`, `Cargo.lock` and `CHANGELOG.md`.
+   Then check whether the workflow can run at all (`gh run list --limit 3`): since 10 November
+   2026 the repository is private and GitHub Actions do not start (the account's billing), so
+   steps 5-7 cannot be done: go to *While the workflow cannot run* below instead. Pushing and
+   tagging are Matteo's either way: give him the commands.
 5. Push `main` and **do the dress rehearsal**: *Actions → CI and Release → Run workflow* on
    `main` (or `gh workflow run release.yml --ref main`). It runs the tests, `prepare` and the
    five `build`s but not `release`. Only an all-green rehearsal guarantees that the tag will
@@ -71,6 +75,54 @@ the tags: it is not touched at every release.
 7. Follow the run with `gh run list --workflow release.yml --limit 3` / `gh run watch <id>`;
    at the end `gh release view vX.Y.Z` must list 12 files (2 Windows, 2 macOS, 4 per Linux
    architecture) plus `SHA256SUMS.txt`.
+
+## While the workflow cannot run (since 10 November 2026)
+
+The packages are made on this Windows PC and Matteo publishes them. v0.5.0 and v0.6.0 were
+released this way, with Windows and Linux x86_64 only (macOS and Linux aarch64 need the
+workflow).
+
+1. Steps 1-4 above as usual: the WSL build clones the **committed** HEAD.
+2. Close VetroScan if it runs from `target\release` (the build cannot replace the exe). Then,
+   in the background and at the same time (each takes 2-3 minutes):
+   ```bash
+   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package.ps1
+   ```
+   ```bash
+   MSYS_NO_PATHCONV=1 wsl -d Ubuntu -- bash -lc 'SRC=/mnt/c/Users/white/Desktop/Driver_Software_hp3770/repo OUT=/mnt/c/Users/white/Desktop/Driver_Software_hp3770/repo/dist/vX.Y.Z-linux bash /mnt/c/Users/white/Desktop/Driver_Software_hp3770/repo/scripts/package-wsl.sh'
+   ```
+   `package.ps1` leaves the setup and the portable zip in `dist/`; `scripts/package-wsl.sh`
+   (the CI's pinned tools: keep them in step with `release.yml`) builds and checks the .deb,
+   .rpm, .pkg.tar.zst and AppImage and ends with `SMOKE OK`. Check that `hp3770 --version`
+   says the new version.
+3. Gather the six packages in `dist/vX.Y.Z/` and write the checksums in the CI's format (two
+   spaces, no `*`), then check them:
+   ```bash
+   cd dist/vX.Y.Z && sha256sum vetroscan-vX.Y.Z-* | sed 's/ \*/  /' > SHA256SUMS.txt && sha256sum -c SHA256SUMS.txt
+   ```
+4. The notes: the CHANGELOG's `## [X.Y.Z]` section without its heading, in
+   `dist/vX.Y.Z-notes.md`.
+5. **Matteo pushes and publishes** (the auto mode blocks Claude's `git push` and
+   `gh release create` here). Give him these, one per block, for PowerShell 5.1 (no `&&`,
+   files named one by one, no `*`):
+   ```bash
+   git -C C:\Users\white\Desktop\Driver_Software_hp3770\repo push
+   git -C C:\Users\white\Desktop\Driver_Software_hp3770\repo tag vX.Y.Z
+   git -C C:\Users\white\Desktop\Driver_Software_hp3770\repo push origin vX.Y.Z
+   cd C:\Users\white\Desktop\Driver_Software_hp3770\repo\dist\vX.Y.Z
+   gh release create vX.Y.Z -R MatteoDM/scanner --title vX.Y.Z --notes-file ..\vX.Y.Z-notes.md vetroscan-vX.Y.Z-windows-x86_64-setup.exe vetroscan-vX.Y.Z-windows-x86_64-portable.zip vetroscan-vX.Y.Z-linux-x86_64.deb vetroscan-vX.Y.Z-linux-x86_64.rpm vetroscan-vX.Y.Z-linux-x86_64.pkg.tar.zst vetroscan-vX.Y.Z-linux-x86_64.AppImage SHA256SUMS.txt
+   ```
+   Afterwards `gh release view vX.Y.Z -R MatteoDM/scanner` must list 7 files.
+
+## Installing the new version on this PC
+
+When Matteo asks for it: the installer, silent, per user (no administrator), over the version
+already installed, keeping his preferences:
+```powershell
+Start-Process -FilePath 'dist\vX.Y.Z\vetroscan-vX.Y.Z-windows-x86_64-setup.exe' -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER' -Wait -PassThru
+```
+It goes to `%LOCALAPPDATA%\Programs\VetroScan`; check its `hp3770.exe --version` and the
+`DisplayVersion` under `HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall`.
 
 ## When a release fails
 

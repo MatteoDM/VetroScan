@@ -1,2 +1,5 @@
 # The Epson 4490 firmware, byte for byte.
 *.bin binary
+
+# Shell scripts run in WSL from the Windows working copy: never CRLF.
+*.sh text eol=lf
