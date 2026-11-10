@@ -652,6 +652,12 @@ coloured lines (blue, green, red) the same distance apart.
   calibration at 300 dpi failed twice with "offsets still too dark after 20 checks", then
   worked after one scan at 600 dpi, with this version and with the one of 8 November alike.
   Not reproduced since; open.
+- **On films too** (10 November 2026, commit `a54013a`): the 3770 leaves the same pattern on
+  negatives (every 4.96-4.99 lines at 1200 dpi, about 1 level of 255 in a sky and 2-3.4 in the
+  light parts of the picture). **Togli le righe dello scanner** is offered in Pellicola and
+  works on the negative's linear samples before it is measured and inverted: on a real strip
+  the pattern came out 3-4 times fainter, the colours unchanged. `hp3770 develop --destripe`
+  does the same on a saved scan. Still declared per resolution only: see phase 13, point 2.
 
 ## Phase 12 · the Epson Perfection 4490 Photo · waiting for the scanner
 
@@ -1015,6 +1021,84 @@ License (mirrored in ChromiumOS' `portage/licenses/AVASYS`); `iscan` sources
 `non-free/COPYING.EPSON.en.txt`); Epson's support page for B11B176011; the Epson Perfection 4490
 user's guide (specifications, transport locks); PhotoReview's review of the 4490.
 
+## Phase 13 · films done professionally, for every scanner · decided 10 November 2026
+
+Matteo's question, the same day: are we tuning a generic app to one scanner? The work on films
+(the blue's noise, an exposure per colour, slides later) must make sense with several
+scanners, for professional use. Below what was measured, the rule decided and the order.
+
+### What was measured (10 November 2026, the HP 3770, 1200 dpi, notes in `captures/tma/note.txt`)
+
+Five strips, each scanned twice in a row without touching it (the two scans 3-5 lines apart):
+the film's grain is the same in both, so their difference is the scanner's own noise alone.
+
+- **The film's base sets where each channel starts, not the picture**: on two colour films
+  the base lets through about 75 % of red, 29 % of green and 14.5 % of blue (blue/red 0.20 on
+  both); the second film's mask is denser, mostly in green (green/red 0.39 against 0.34). A
+  chromogenic black-and-white film (orange base, grey picture) has blue/red 0.30. The same
+  strip scanned on two days gives the same base and densities within 0.01-0.02.
+- **The picture sets how far below the base a channel goes**: blue is lowest in the light,
+  bluish parts of the scene (dense in the negative's yellow dye).
+- **The noise in the light parts is the scanner's, not grain**: on a colour film's bright sky
+  the positive has 4-6 / 8-9.5 / 11-12 levels of 255 (R/G/B), on a light blue T-shirt
+  3.9 / 5.8 / 12.1; in both, practically all of it is in the difference of the two scans
+  (signal/noise of the samples: red ~33-43, green ~17-26, blue ~13-18). So more light on the
+  sensor, or averaging scans, would really help; a gain would not (it scales the noise too:
+  the same strip with every number doubled had the same signal/noise).
+- **Taking the noise out of the colour only** (Cb/Cr, a 2.5-pixel Gaussian, a try in Python)
+  brings the T-shirt to 3.9 / 4.1 / 4.3 and the sky to about 5 / 5 / 5, edges and detail
+  untouched (`scansioni/tma/confronto_maglietta_100.png`, `confronto_croma_100.png`).
+- HP's own configuration exposes the colours of a negative differently (`[ScanNegColorMode1]`:
+  the line 71399, red 50999, green 30599, blue 71399, the whole line): blue longest. Why green
+  gets the shortest is not understood, nor how the chip uses `EXPT`/`MEXPT` (phase 10).
+
+### The rule: four levels, no scanner's numbers above the driver
+
+| Level | What it holds | Example |
+|---|---|---|
+| **Driver** (one per scanner) | the physics: lamps, calibration, line timing, safety limits, and how a generic request becomes the chip's registers | the 3770's white 81/83/70 on the slot; the blue's exposure on `EXPT`/`MEXPT` |
+| **Contract** (`scanner-api`) | what the scanner can do, said generically | sources, resolutions per source, stripes per source, an exposure per channel up to ×N |
+| **Imaging** (`scan-imaging`) | algorithms that set themselves from what they measure on the scan | film inversion from the base; the noise reduction from the noise it estimates |
+| **App** | the workflow and the choices, taken from capabilities and measures | "this roll's base is so, so expose so" |
+
+Nothing measured on the HP 3770 goes into the app or the imaging as a number. The
+capabilities rule (above) holds for every new function: field in `Capabilities`, the app's
+branch, e2e with and without it.
+
+Checked on 10 November: the app's film code has nothing of the HP 3770 (its only mentions of
+HP are two texts: the lamp's timeout and the sharpness "as HP"); the film imaging works from
+what it measures. One gap: the stripes are declared per resolution, not per source.
+
+### In order
+
+1. **Colour-noise reduction for films, generic** (`scan-imaging`): the noise of each channel
+   estimated on the scan itself (a robust measure on smooth parts, approximating what the
+   difference of two scans gave), and the colour (not the brightness) smoothed as much as
+   needed to bring the noisier channels near the quietest; a scanner with less noise gets less
+   of it by itself. In the films' development by default, light, with a tick; the strength
+   used kept with the page, so a page saved again comes out the same. Checked on the five
+   strips.
+2. **Stripes per source** in the contract (`Stripes { dpi, repeat }` gets the source, or
+   `Capabilities::stripes_at(source, dpi)`): the 3770 declares the same for glass and films
+   (same sensor, measured); the 4490 has its own lamp in the lid and may have other stripes or
+   none. "Misura le righe" stays for the glass, with a film measure later if needed.
+3. **The base locked per roll**: measured once (on a strip's gaps or a blank leader) and used
+   for every frame of the same roll, so frames of one roll come out alike; a new roll measures
+   again. Stored with the pages and in the preferences of the Film mode, shown and resettable.
+4. **An exposure per channel in the contract**: `Capabilities` says the scanner can expose the
+   channels differently, up to which factor and at which resolutions; `ScanRequest` asks for
+   the factors; the app computes them from the roll's base (the dimmest channel brought up, the
+   brightest never above the calibration's white); each driver turns them into its registers.
+   For the 3770 first from the captures (`EXPT`/`MEXPT`), only within line periods already run
+   on the motor (the 3x line at 1200 dpi was run on 8 November); anything else guarded before
+   anything moves. A scanner without it keeps step 1 alone.
+5. **Slides, and more than one exposure**: no orange mask, but a far larger range; the
+   professional tool is a normal and a long pass merged (multi-exposure), which is step 4's
+   exposure used twice. Slides need slides at hand (none yet).
+6. **Later**: the raw linear scan always kept with its scanner, calibration and base in the
+   metadata (partly there: `-16bit.png`, `develop`, RAW), so a frame can be developed again;
+   an ICC input profile per scanner from an IT8 target, outside the scanners' code.
+
 ## Summary
 
 | Phase | Version | Risk | Without new hardware? |
@@ -1029,3 +1113,4 @@ user's guide (specifications, transport locks); PhotoReview's review of the 4490
 | 10 · slides and negatives on the 3770 (negatives done, slides open) | to be decided | medium | yes: the 3770's own adapter |
 | 11 · precise moves from the keyboard (done) | to be decided | low | yes |
 | 12 · Epson Perfection 4490 Photo, native, plug and play (waiting for the scanner) | to be decided | high: protocol unknown, two carriages | no: the scanner (firmware inside the program) |
+| 13 · films done professionally, for every scanner (decided) | to be decided | low (steps 1-3), medium (4-5: the motor) | 1-3 yes; 4 needs the 3770's captures; 5 needs slides |
