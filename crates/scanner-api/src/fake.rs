@@ -14,9 +14,9 @@
 //! ([`Controls::load`]).
 
 use crate::{
-    check, Adapter, Backend, ButtonInfo, Capabilities, ColourMode, DeviceInfo, DeviceStatus, Error,
-    LampInfo, LampState, Progress, Result, ScanRequest, ScanResult, Scanner, Source, Stripes,
-    SuggestedAction, Tone,
+    check, Adapter, Backend, ButtonInfo, Capabilities, ColourCorrection, ColourMatrix, ColourMode,
+    DeviceInfo, DeviceStatus, Error, LampInfo, LampState, Progress, Result, ScanRequest,
+    ScanResult, Scanner, Source, Stripes, SuggestedAction, Tone,
 };
 use scan_imaging::{Format, Image};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -95,6 +95,13 @@ pub fn film(x: f64, y: f64) -> [f64; 3] {
 /// two 35 mm pictures across the holder (35 x 23.4 mm), one above the
 /// other, each in its opaque mount.
 pub const SLIDES: [[f64; 4]; 2] = [[0.175, 0.6, 1.378, 0.921], [0.175, 2.1, 1.378, 0.921]];
+
+/// The correction of the slides' colours of [`FakeScanner::with_slides`]:
+/// made up, more saturated colours, grey left grey.
+pub const SLIDE_COLOUR: ColourMatrix = ColourMatrix {
+    rows: [1.2, -0.1, -0.1, -0.1, 1.2, -0.1, -0.1, -0.1, 1.2],
+    gamma: 2.2,
+};
 
 /// The transmission of the adapter's area with slides in the holder (as
 /// [`film`]): the lamp in the slot at the top, the slides' pictures (a
@@ -267,6 +274,7 @@ impl FakeScanner {
                     repeat,
                 })
                 .to_vec(),
+            colour: Vec::new(),
         })
     }
 
@@ -292,6 +300,7 @@ impl FakeScanner {
                 gamma: 2.2,
             },
             stripes: Vec::new(),
+            colour: Vec::new(),
         })
     }
 
@@ -316,13 +325,18 @@ impl FakeScanner {
 
     /// [`Self::with_adapter`] taking slides as well as negatives, as the HP
     /// 3770's (no stripes declared for slides: not measured on any), with
-    /// two slides in its holder ([`slides`]).
+    /// two slides in its holder ([`slides`]) and a correction of their
+    /// colours ([`SLIDE_COLOUR`]).
     pub fn with_slides() -> Self {
         let mut s = Self::with_adapter();
         s.caps.model = "Flatbed A4 slides".into();
         if let Some(a) = s.caps.transparency.as_mut() {
             a.sources = vec![Source::Slide, Source::Negative];
         }
+        s.caps.colour.push(ColourCorrection {
+            source: Source::Slide,
+            matrix: SLIDE_COLOUR,
+        });
         s.controls.load(Holder::Slides);
         s
     }
@@ -674,6 +688,8 @@ mod tests {
         let go = &mut |_| true;
         assert!(s.caps.offers(Source::Slide) && s.caps.offers(Source::Negative));
         assert_eq!(s.caps.stripes_at(Source::Slide, 600), None);
+        assert_eq!(s.caps.colour_at(Source::Slide), Some(SLIDE_COLOUR));
+        assert_eq!(s.caps.colour_at(Source::Negative), None);
         let (w, h) = s.caps.bed_pixels(Source::Slide, 600).unwrap();
         let slide = ScanRequest {
             source: Source::Slide,

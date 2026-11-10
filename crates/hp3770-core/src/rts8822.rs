@@ -19,8 +19,9 @@ use crate::{geometry, init, scan};
 use scan_imaging::adjust::Adjustments;
 use scan_imaging::Mode;
 use scanner_api::{
-    Adapter, ButtonInfo, Capabilities, ColourMode, DeviceStatus, Error, LampInfo, LampState,
-    Progress, ScanRequest, ScanResult, Scanner, Source, Stripes, SuggestedAction,
+    Adapter, ButtonInfo, Capabilities, ColourCorrection, ColourMatrix, ColourMode, DeviceStatus,
+    Error, LampInfo, LampState, Progress, ScanRequest, ScanResult, Scanner, Source, Stripes,
+    SuggestedAction,
 };
 
 /// Name of this backend in the [`scanner_api::Registry`].
@@ -68,7 +69,32 @@ pub fn capabilities(profile: &Profile) -> Capabilities {
                 })
             }))
             .collect(),
+        colour: profile
+            .transparency
+            .iter()
+            .filter_map(|t| t.slide_matrix)
+            .map(|m| ColourCorrection {
+                source: Source::Slide,
+                matrix: slide_colour(m),
+            })
+            .collect(),
     }
+}
+
+/// The correction of the slides' colours from HP's matrix `m`
+/// (thousandths). HP's rows add up to 0.87-0.94 because its driver follows
+/// the matrix with offsets and gammas of its own (`SLIDECOEFFS`): on our
+/// picture that would turn grey magenta, so each row is scaled to add up
+/// to 1. Applied to the values as displayed (gamma 2.2), where on the
+/// slides tried it clipped 0.5 % of the pixels against 2.8 % on linear
+/// light.
+fn slide_colour(m: [i16; 9]) -> ColourMatrix {
+    let mut rows = m.map(|v| f32::from(v) / 1000.0);
+    for row in rows.chunks_exact_mut(3) {
+        let sum: f32 = row.iter().sum();
+        row.iter_mut().for_each(|v| *v /= sum);
+    }
+    ColourMatrix { rows, gamma: 2.2 }
 }
 
 fn button_info(button: Button) -> ButtonInfo {
@@ -370,6 +396,16 @@ mod tests {
         assert_eq!(c.stripes_at(Source::Negative, 1200), Some(5));
         assert_eq!(c.stripes_at(Source::Negative, 300), None);
         assert_eq!(c.stripes_at(Source::Slide, 1200), None);
+        // HP's colour matrix for slides, its rows scaled to 1: grey stays
+        // grey; none for negatives or the glass.
+        let slide = c.colour_at(Source::Slide).expect("slides' colour");
+        assert_eq!(slide.gamma, 2.2);
+        for row in slide.rows.chunks_exact(3) {
+            assert!((row.iter().sum::<f32>() - 1.0).abs() < 1e-5, "{row:?}");
+        }
+        assert!((slide.rows[0] - 1.330 / 0.941).abs() < 1e-4);
+        assert_eq!(c.colour_at(Source::Negative), None);
+        assert_eq!(c.colour_at(Source::Glass), None);
         // The glass in pixels is what the driver accepts, to the pixel.
         for dpi in geometry::RESOLUTIONS {
             let (w, h) = c.glass_pixels(dpi);

@@ -7,11 +7,13 @@
 //! sharpening ([`convert`]), crops, rotation and straightening
 //! ([`transform`]), and finding the photos and pages on the glass
 //! ([`detect`]), slides and negatives in transmitted light ([`film`]), and
-//! the noise of the colour ([`chroma`]).
+//! the noise of the colour ([`chroma`]), a scanner's colours corrected
+//! with a matrix it declares ([`colour`]).
 //! Nothing here knows about USB or about a scanner model.
 
 pub mod adjust;
 pub mod chroma;
+pub mod colour;
 pub mod convert;
 pub mod detect;
 pub mod film;

@@ -805,7 +805,7 @@ fn develop(
         }
     };
     if let Some((m, gamma)) = matrix {
-        apply_matrix(&mut picture, m, gamma);
+        scan_imaging::colour::ColourMatrix { rows: m, gamma }.apply(&mut picture);
         eprintln!("colour matrix    {m:?} at gamma {gamma}");
     }
     if colour_noise {
@@ -833,23 +833,6 @@ fn develop(
     println!("picture          {} x {} pixels", shown.width, shown.height);
     println!("saved            {}", output.display());
     Ok(())
-}
-
-/// `develop --matrix`: each pixel of the linear 16-bit `picture` raised to
-/// 1 / `gamma`, multiplied by the 3x3 matrix `m` (row by row), clipped and
-/// brought back to linear.
-fn apply_matrix(picture: &mut [u16], m: [f32; 9], gamma: f32) {
-    let full = f32::from(u16::MAX);
-    let encode: Vec<f32> = (0..=u16::MAX)
-        .map(|v| (f32::from(v) / full).powf(1.0 / gamma))
-        .collect();
-    for p in picture.chunks_exact_mut(3) {
-        let v = [0, 1, 2].map(|c| encode[usize::from(p[c])]);
-        for (c, out) in p.iter_mut().enumerate() {
-            let x = m[c * 3] * v[0] + m[c * 3 + 1] * v[1] + m[c * 3 + 2] * v[2];
-            *out = (x.clamp(0.0, 1.0).powf(gamma) * full).round() as u16;
-        }
-    }
 }
 
 /// What is in the adapter's holder (`tma-scan --film`).

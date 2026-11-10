@@ -141,7 +141,8 @@ calibrates on the empty slot at the top of the holder: a strip at 1200 dpi takes
 minutes. 1200 dpi gives a 35 mm frame about 2 megapixels, fine for the screen and 10 × 15
 prints; the scanner has no infrared, so no automatic dust removal: blow on the film first.
 
-Two ticks in the **Scan** tab clean a film's picture:
+Two ticks in the **Scan** tab clean a film's picture, and a third, for slides, corrects
+their colours:
 
 - **Reduce the colour noise** (on by default): the light and blue parts of a negative come
   through the film's orange base with little blue light, so its positive gets coloured specks
@@ -151,6 +152,12 @@ Two ticks in the **Scan** tab clean a film's picture:
   noise is left alone.
 - **Remove the scanner's stripes** (off by default): the faint horizontal lines the HP 3770
   leaves on every scan, taken away from the negative before it becomes a positive.
+- **Correct the scanner's colours** (on by default, shown only for a film the scanner declares
+  a correction for: on the HP 3770, slides): the scanner sees a slide's colours through its
+  own lamp and sensor, and on the HP 3770 a blue sky comes out lavender. The correction is
+  the one HP's own driver uses for slides; untick it to get the colours as the sensor reads
+  them. A profile measured on a calibration slide (IT8) would be more exact, and may replace
+  it later.
 
 Below them, for negatives only, **Roll**: the film's **base**, the orange of the bare film,
 which sets how each colour is turned into the positive. By default each strip measures its own, in the gaps

@@ -170,6 +170,7 @@ pub fn capabilities() -> Capabilities {
             gamma: 2.2,
         },
         stripes: Vec::new(),
+        colour: Vec::new(),
     }
 }
 

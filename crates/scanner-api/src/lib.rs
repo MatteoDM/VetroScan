@@ -22,6 +22,7 @@ mod registry;
 
 pub use registry::{Backend, DeviceInfo, Registry};
 pub use scan_imaging::adjust::Tone;
+pub use scan_imaging::colour::ColourMatrix;
 
 use scan_imaging::Image;
 use std::fmt;
@@ -94,6 +95,20 @@ pub struct Capabilities {
     /// or none) at the resolutions where they were measured; the host can
     /// take them away (`scan_imaging::stripes`).
     pub stripes: Vec<Stripes>,
+    /// The correction of its colours, for each source that has one (from
+    /// its maker's driver, or measured on a target): the host applies it
+    /// to the picture, where the user leaves it on
+    /// (`scan_imaging::colour`).
+    pub colour: Vec<ColourCorrection>,
+}
+
+/// The correction of a scanner's colours from one source.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ColourCorrection {
+    /// Where the scan comes from.
+    pub source: Source,
+    /// The matrix, and the values it works on.
+    pub matrix: ColourMatrix,
 }
 
 /// Stripes across the scans of a scanner from one source at one
@@ -129,6 +144,7 @@ impl Capabilities {
                 gamma: 2.2,
             },
             stripes: Vec::new(),
+            colour: Vec::new(),
         }
     }
 
@@ -139,6 +155,15 @@ impl Capabilities {
             .iter()
             .find(|s| s.source == source && s.dpi == dpi)
             .map(|s| usize::from(s.repeat))
+    }
+
+    /// The correction of the colours of a scan from `source`, if it has
+    /// one.
+    pub fn colour_at(&self, source: Source) -> Option<ColourMatrix> {
+        self.colour
+            .iter()
+            .find(|c| c.source == source)
+            .map(|c| c.matrix)
     }
 
     /// Manufacturer and model, as one name ("HP Scanjet 3770").

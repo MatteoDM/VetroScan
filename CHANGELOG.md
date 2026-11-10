@@ -41,6 +41,12 @@ GitHub; here they are in English.
   slide found in the scan its own image, measured inside the slide, away from the mount. They
   are scanned with the negatives' longer exposure, which on real slides halved the noise in
   their dark parts for about 20 seconds more. **Roll** is for negatives only.
+- **Correct the scanner's colours**, for slides, on by default: the HP 3770 declares a colour
+  correction for slides (the matrix of HP's own driver), which turns the lavender cast a slide
+  gets from the scanner into its blue; untick it for the colours as the sensor reads them.
+  Shown only for a film the scanner declares a correction for.
+- `hp3770 develop --matrix` (nine numbers, row by row) and `--matrix-gamma` try a colour
+  matrix on a saved film scan.
 
 ### Changed
 - **Remove the scanner's stripes** now also works in **Film**: the HP 3770 leaves the same

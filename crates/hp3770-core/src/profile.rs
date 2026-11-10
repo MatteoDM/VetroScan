@@ -157,6 +157,10 @@ pub struct Transparency {
     /// The stripes across its scans of films, as [`DeviceModel::stripes`]
     /// for the glass.
     pub stripes: &'static [(u16, u16)],
+    /// The colour matrix of HP's driver for slides, row by row, in
+    /// thousandths, as HP wrote it (`rts8822::capabilities` turns it into
+    /// the correction declared).
+    pub slide_matrix: Option<[i16; 9]>,
 }
 
 impl Profile {
@@ -342,6 +346,12 @@ pub const HP3770: Profile = Profile {
         // Measured on negatives on 10 November 2026 (two strips at 1200
         // dpi: every 4.96-4.99 lines, the glass's pattern; one at 600 dpi).
         stripes: &[(600, 5), (1200, 5)],
+        // `SLIDE` of the resource `HPSJ3770` in HP's WIA driver
+        // (`hpxp3770.dll`, decoded on 10 November 2026 in
+        // `captures/tma/driver_hp`). Tried that night on two slides at 1200
+        // dpi with `hp3770 develop --matrix`: their lavender sky came out
+        // blue, chosen by Matteo.
+        slide_matrix: Some([1330, -6, -383, -69, 1006, -71, -14, -156, 1105]),
     }),
     // [PlatForm] of the configuration (line 14684 of the extracted file);
     // multi-value keys take the first value.

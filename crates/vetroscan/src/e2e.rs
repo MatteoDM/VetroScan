@@ -2167,6 +2167,46 @@ fn slides_are_chosen_scanned_as_positives_and_remembered() {
     assert!(!ui.app.slides);
 }
 
+/// The scanner's correction of the slides' colours: offered with slides
+/// only, on by default, remembered, and the pictures more colourful with
+/// it (the made-up matrix spreads the colours).
+#[test]
+fn the_scanners_colour_correction_is_offered_for_slides() {
+    let tick = "Correggi i colori dello scanner";
+    // The warm slides' red above their blue, over both pictures.
+    let scan = |on: bool| {
+        let (mut ui, _) = with_slides();
+        ui.send(Message::Pane(crate::Pane::Scan));
+        ui.click("Pellicola");
+        assert!(!ui.shows(tick), "none declared for negatives");
+        ui.send(Message::Slides(true));
+        assert!(ui.shows(tick));
+        assert!(ui.app.settings().scanner_colour, "on by default");
+        ui.send(Message::ScannerColour(on));
+        assert_eq!(ui.app.prefs().film.scanner_colour, Some(on));
+        ui.click("Scansiona foto");
+        assert_eq!(ui.app.pages.len(), 2, "{}", ui.app.note);
+        let (mut spread, mut n) = (0i64, 0i64);
+        for page in &ui.app.pages {
+            let deep = page.raw16.as_deref().expect("16 bits");
+            for p in deep.chunks_exact(3) {
+                spread += i64::from(p[0]) - i64::from(p[2]);
+                n += 1;
+            }
+        }
+        spread / n
+    };
+    let (without, with) = (scan(false), scan(true));
+    assert!(without > 0, "warm slides: {without}");
+    assert!(with > without + 500, "{without} then {with}");
+    // An adapter declaring no correction: no tick.
+    let (mut ui, _) = with_adapter();
+    ui.send(Message::Pane(crate::Pane::Scan));
+    ui.click("Pellicola");
+    assert!(ui.app.filming() && !ui.shows(tick));
+    assert_eq!(ui.app.colour_correction(), None);
+}
+
 /// Where the adapter takes one film only, there is no choice: its film.
 #[test]
 fn an_adapter_for_one_film_has_no_choice() {

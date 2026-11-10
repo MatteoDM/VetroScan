@@ -48,8 +48,8 @@ use scan_imaging::stripes;
 use scan_imaging::transform::{self, Transform};
 use scan_imaging::{Format, Image, Mode};
 use scanner_api::{
-    Area, Capabilities, DeviceInfo, DeviceStatus, LampState, Progress, ScanRequest, Source,
-    SuggestedAction, Tone,
+    Area, Capabilities, ColourMatrix, DeviceInfo, DeviceStatus, LampState, Progress, ScanRequest,
+    Source, SuggestedAction, Tone,
 };
 use separa::{Separating, SplitMsg};
 use std::borrow::Cow;
@@ -681,6 +681,9 @@ struct Settings {
     /// Films: smooth the noise of the colour of their picture, as much as
     /// measured on it (`scan_imaging::chroma`).
     colour_noise: bool,
+    /// Films: correct the picture's colours with the scanner's matrix for
+    /// the film, where it declares one (`Capabilities::colour`).
+    scanner_colour: bool,
 }
 
 impl Settings {
@@ -703,6 +706,7 @@ impl Settings {
             destripe: false,
             double: false,
             colour_noise: false,
+            scanner_colour: false,
         }
     }
 
@@ -749,6 +753,7 @@ impl Settings {
         Self {
             dpi: 1200,
             colour_noise: true,
+            scanner_colour: true,
             ..Self::photo()
         }
     }
@@ -805,6 +810,7 @@ impl Settings {
             destripe: Some(self.destripe),
             double: Some(self.double),
             colour_noise: Some(self.colour_noise),
+            scanner_colour: Some(self.scanner_colour),
             roll_base: None,
             slides: false,
             adjust: prefs::StoredAdjust {
@@ -954,6 +960,7 @@ impl Settings {
             destripe: m.destripe.unwrap_or(base.destripe),
             double: m.double.unwrap_or(base.double),
             colour_noise: m.colour_noise.unwrap_or(base.colour_noise),
+            scanner_colour: m.scanner_colour.unwrap_or(base.scanner_colour),
         }
     }
 }
@@ -1939,6 +1946,8 @@ enum Message {
     Double(bool),
     /// "Riduci il rumore di colore" (films).
     ColourNoise(bool),
+    /// "Correggi i colori dello scanner" (films it declares a matrix for).
+    ScannerColour(bool),
     /// "Blocca la base": the base of the last strip becomes the roll's.
     LockBase,
     /// "Nuovo rullino": each strip measures its own base again.
@@ -2788,6 +2797,15 @@ impl App {
         self.mm_draft = None;
     }
 
+    /// The scanner's correction of the colours of the film in the
+    /// adapter, where it declares one and the user leaves it on.
+    fn colour_correction(&self) -> Option<ColourMatrix> {
+        let source = self.source();
+        self.caps
+            .colour_at(source)
+            .filter(|_| source != Source::Glass && self.settings().scanner_colour)
+    }
+
     /// Where the scans come from.
     fn source(&self) -> Source {
         if !self.filming() {
@@ -2927,7 +2945,8 @@ impl App {
 
     /// A scan of `film` turned into its picture, with `measured` (the
     /// preview's) or measures of its own (a negative's from the `roll`'s
-    /// base if locked): the picture at 8 bits and at 16, the measures and,
+    /// base if locked), its colours corrected with `correction` if given
+    /// (the scanner's, for this film): the picture at 8 bits and at 16, the measures and,
     /// for negatives, the base found in the gaps between its frames (none
     /// with a base given). Without film to measure, the scan as it is.
     fn develop(
@@ -2936,6 +2955,7 @@ impl App {
         samples16: Option<Vec<u16>>,
         measured: Option<Measures>,
         roll: Option<[f32; 3]>,
+        correction: Option<ColourMatrix>,
         colour_noise: bool,
     ) -> Developed {
         let (w, h) = (image.width, image.height);
@@ -2960,6 +2980,10 @@ impl App {
             return (image, samples16, None, None);
         };
         let mut positive = m.positive(&deep);
+        // Before the noise: what the matrix spreads is smoothed with it.
+        if let Some(c) = correction {
+            c.apply(&mut positive);
+        }
         // Measured on the picture itself: as much as it needs, or none.
         if colour_noise {
             scan_imaging::chroma::reduce_auto(&mut positive, w);
@@ -4694,6 +4718,7 @@ impl App {
             Message::AutoCrop(on) => self.settings_mut().auto_crop = on,
             Message::Destripe(on) => self.settings_mut().destripe = on,
             Message::ColourNoise(on) => self.settings_mut().colour_noise = on,
+            Message::ScannerColour(on) => self.settings_mut().scanner_colour = on,
             Message::LockBase => {
                 let negatives = self.filming() && self.film_kind() == Film::Negative;
                 if let Some(base) = self.strip_base.filter(|_| negatives) {
@@ -4832,6 +4857,7 @@ impl App {
                     new.destripe = self.settings().destripe;
                     new.double = self.settings().double;
                     new.colour_noise = self.settings().colour_noise;
+                    new.scanner_colour = self.settings().scanner_colour;
                     self.change(|s| *s = new);
                     self.note = trf(
                         "Preset «{name}» applicato (Ctrl+Z per tornare indietro)",
@@ -5683,6 +5709,7 @@ impl App {
     fn on_scan(&mut self, purpose: Purpose, image: Image, samples16: Option<Vec<u16>>) {
         let (image, samples16) = self.cleaned(purpose, image, samples16);
         let colour_noise = self.settings().colour_noise;
+        let correction = self.colour_correction();
         match purpose {
             Purpose::Preview => {
                 self.close_editor(true);
@@ -5692,8 +5719,15 @@ impl App {
                 let kind = self.film_kind();
                 let transmission = film.then(|| at_dpi(image.clone(), PREVIEW_DPI));
                 let image = if film {
-                    let (picture, _, measures, gaps) =
-                        Self::develop(kind, image, samples16, None, self.roll_base, colour_noise);
+                    let (picture, _, measures, gaps) = Self::develop(
+                        kind,
+                        image,
+                        samples16,
+                        None,
+                        self.roll_base,
+                        correction,
+                        colour_noise,
+                    );
                     self.measures = measures;
                     if gaps.is_some() {
                         self.strip_base = gaps;
@@ -5771,6 +5805,7 @@ impl App {
                         samples16,
                         self.measures,
                         self.roll_base,
+                        correction,
                         colour_noise,
                     );
                     if gaps.is_some() {
@@ -7120,6 +7155,21 @@ impl App {
                         ))
                         .size(11),
                     );
+                if self.caps.colour_at(self.source()).is_some() {
+                    pane = pane
+                        .push(
+                            checkbox(self.settings().scanner_colour)
+                                .label(tr("Correggi i colori dello scanner"))
+                                .on_toggle(Message::ScannerColour)
+                                .text_size(13),
+                        )
+                        .push(
+                            text(tr(
+                                "La correzione che lo scanner dichiara per questa pellicola.                                  Senza, i colori come li legge il sensore.",
+                            ))
+                            .size(11),
+                        );
+                }
                 if self.film_kind() == Film::Negative {
                     pane = pane.push(self.roll_view());
                 }

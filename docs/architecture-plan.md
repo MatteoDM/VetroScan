@@ -1183,7 +1183,18 @@ what it measures. One gap: the stripes are declared per resolution, not per sour
    pushed hard (an indoor frame turns orange); half of it (`I + (POST - I) / 2`) in between.
    `SLIDE`'s rows add up to 0.87-0.94 (HP follows it with `SLIDECOEFFS`), tried with each row
    scaled to 1: a slide's lavender sky turns blue, 2.8 % clipped (0.5 % at gamma 2.2). Linear
-   or gamma 2.2 nearly the same. Waiting for Matteo's judgement.
+   or gamma 2.2 nearly the same. **Slides done on 10 November 2026** (Matteo chose them,
+   negatives left without: `POST` whole is too strong on our inversion and half of it would be
+   a number of ours, not a measure): the contract's `Capabilities::colour`
+   (`ColourCorrection { source, matrix }`, `colour_at(source)`), `scan_imaging::colour::
+   ColourMatrix` applying whatever matrix it is given; the 3770's driver keeps HP's `SLIDE`
+   as HP wrote it (`Transparency::slide_matrix`, thousandths) and declares it for
+   `Source::Slide` with each row scaled to 1, at gamma 2.2 (0.5 % clipped against 2.8 %
+   linear); the app's tick **Correggi i colori dello scanner** in Pellicola, only for a film
+   the scanner declares a correction for, on by default, kept in `StoredMode::scanner_colour`,
+   applied after the slide is stretched and before the colour noise. The made-up scanner's
+   slides have a made-up correction; an e2e checks the tick and the colours. Negatives: none
+   until measured (step 7's target; an IT8 is printed on slide film, so it fits slides first).
 7. **Later**: the raw linear scan always kept with its scanner, calibration and base in the
    metadata (partly there: `-16bit.png`, `develop`, RAW), so a frame can be developed again;
    an ICC input profile per scanner from an IT8 target, outside the scanners' code; dust and
