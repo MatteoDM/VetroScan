@@ -45,6 +45,8 @@ GitHub; here they are in English.
   correction for slides (the matrix of HP's own driver), which turns the lavender cast a slide
   gets from the scanner into its blue; untick it for the colours as the sensor reads them.
   Shown only for a film the scanner declares a correction for.
+- **Remove the scanner's stripes** now also works on slides: the HP 3770 leaves the same lines
+  on them as on negatives (every 5 lines, measured on the skies of two slides at 1200 dpi).
 - `hp3770 develop --matrix` (nine numbers, row by row) and `--matrix-gamma` try a colour
   matrix on a saved film scan.
 

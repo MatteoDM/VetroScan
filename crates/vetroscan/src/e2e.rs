@@ -2181,6 +2181,7 @@ fn the_scanners_colour_correction_is_offered_for_slides() {
         assert!(!ui.shows(tick), "none declared for negatives");
         ui.send(Message::Slides(true));
         assert!(ui.shows(tick));
+        assert!(ui.shows("Togli le righe dello scanner"), "slides' stripes");
         assert!(ui.app.settings().scanner_colour, "on by default");
         ui.send(Message::ScannerColour(on));
         assert_eq!(ui.app.prefs().film.scanner_colour, Some(on));

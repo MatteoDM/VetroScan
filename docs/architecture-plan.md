@@ -1149,8 +1149,11 @@ what it measures. One gap: the stripes are declared per resolution, not per sour
       nothing saturated, the positives right; measured as the app does, inside the slides):
       `Source::Slide` among the 3770 adapter's sources, the driver asking the negatives'
       longer line for it too (`session_request`, so the same guard on 600/1200 dpi; `tma-scan
-      --film slide` as well); no stripes declared for slides (none could be measured on the two
-      slides, their pictures too busy: to measure on a slide with an even sky). Imaging:
+      --film slide` as well); no stripes declared for slides at first (none found on the two
+      slides' busy crops); **declared on 10 November 2026** after Matteo saw them in the app:
+      on the skies of both slides (`diapo_app_1200dpi`) every 5 lines, 0.73 and 0.89 % from row
+      to row, 0.26-0.32 % after removal, so `Transparency::stripes` is declared for both films
+      (600 dpi measured on negatives only, the same modes). Imaging:
       `film::Measures` (a negative's or a slide's) and `film::measure_slides`, the levels
       taken inside the slides found (`inside`): on real slides the mounts are 116-224 samples,
       above the opaque level, so they would be the black. App: **Nel supporto** Negativi /

@@ -151,7 +151,8 @@ their colours:
   needs, leaving the brightness, where the detail is, as it was; a picture without coloured
   noise is left alone.
 - **Remove the scanner's stripes** (off by default): the faint horizontal lines the HP 3770
-  leaves on every scan, taken away from the negative before it becomes a positive.
+  leaves on every scan, on negatives and slides alike, taken away from the film as scanned,
+  before it becomes its picture.
 - **Correct the scanner's colours** (on by default, shown only for a film the scanner declares
   a correction for: on the HP 3770, slides): the scanner sees a slide's colours through its
   own lamp and sensor, and on the HP 3770 a blue sky comes out lavender. The correction is

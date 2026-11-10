@@ -50,9 +50,10 @@ pub fn capabilities(profile: &Profile) -> Capabilities {
             warm_up: scan::LAMP_WARMUP,
         }),
         tone: profile.tone(),
-        // The glass's, and the negatives' (measured on negatives; on the
-        // two slides scanned none was found to measure, their pictures too
-        // busy: not declared for slides until measured on one).
+        // The glass's, and the films': slides are scanned with the
+        // negatives' modes, and on the skies of two slides at 1200 dpi the
+        // stripes repeat every 5 lines as on negatives (measured on 10
+        // November 2026); at 600 dpi measured on negatives only.
         stripes: d
             .stripes
             .iter()
@@ -62,11 +63,15 @@ pub fn capabilities(profile: &Profile) -> Capabilities {
                 repeat,
             })
             .chain(profile.transparency.iter().flat_map(|t| {
-                t.stripes.iter().map(|&(dpi, repeat)| Stripes {
-                    source: Source::Negative,
-                    dpi,
-                    repeat,
-                })
+                [Source::Slide, Source::Negative]
+                    .into_iter()
+                    .flat_map(|source| {
+                        t.stripes.iter().map(move |&(dpi, repeat)| Stripes {
+                            source,
+                            dpi,
+                            repeat,
+                        })
+                    })
             }))
             .collect(),
         colour: profile
@@ -389,13 +394,14 @@ mod tests {
         assert_eq!(c.bed_pixels(Source::Slide, 200), Some((346, 841)));
         assert_eq!(c.resolutions_for(Source::Negative), [600, 1200]);
         assert_eq!(c.resolutions_for(Source::Slide), [600, 1200]);
-        // The stripes, per source: the glass's, and the films' measured at
-        // both film resolutions.
+        // The stripes, per source: the glass's, and the films' (the same
+        // modes for slides and negatives) at both film resolutions.
         assert_eq!(c.stripes_at(Source::Glass, 300), Some(10));
         assert_eq!(c.stripes_at(Source::Negative, 600), Some(5));
         assert_eq!(c.stripes_at(Source::Negative, 1200), Some(5));
         assert_eq!(c.stripes_at(Source::Negative, 300), None);
-        assert_eq!(c.stripes_at(Source::Slide, 1200), None);
+        assert_eq!(c.stripes_at(Source::Slide, 1200), Some(5));
+        assert_eq!(c.stripes_at(Source::Slide, 600), Some(5));
         // HP's colour matrix for slides, its rows scaled to 1: grey stays
         // grey; none for negatives or the glass.
         let slide = c.colour_at(Source::Slide).expect("slides' colour");

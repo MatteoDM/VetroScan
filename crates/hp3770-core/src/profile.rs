@@ -344,7 +344,9 @@ pub const HP3770: Profile = Profile {
             ..REFLECTIVE
         },
         // Measured on negatives on 10 November 2026 (two strips at 1200
-        // dpi: every 4.96-4.99 lines, the glass's pattern; one at 600 dpi).
+        // dpi: every 4.96-4.99 lines, the glass's pattern; one at 600 dpi)
+        // and on the skies of two slides at 1200 dpi the same night (every
+        // 5 lines, 0.7-0.9 % from row to row): the same for both films.
         stripes: &[(600, 5), (1200, 5)],
         // `SLIDE` of the resource `HPSJ3770` in HP's WIA driver
         // (`hpxp3770.dll`, decoded on 10 November 2026 in

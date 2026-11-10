@@ -324,7 +324,7 @@ impl FakeScanner {
     }
 
     /// [`Self::with_adapter`] taking slides as well as negatives, as the HP
-    /// 3770's (no stripes declared for slides: not measured on any), with
+    /// 3770's (the same stripes on slides as on negatives), with
     /// two slides in its holder ([`slides`]) and a correction of their
     /// colours ([`SLIDE_COLOUR`]).
     pub fn with_slides() -> Self {
@@ -333,6 +333,11 @@ impl FakeScanner {
         if let Some(a) = s.caps.transparency.as_mut() {
             a.sources = vec![Source::Slide, Source::Negative];
         }
+        s.caps.stripes.extend([600, 1200].map(|dpi| Stripes {
+            source: Source::Slide,
+            dpi,
+            repeat: 5,
+        }));
         s.caps.colour.push(ColourCorrection {
             source: Source::Slide,
             matrix: SLIDE_COLOUR,
@@ -687,7 +692,7 @@ mod tests {
         let mut s = FakeScanner::with_slides();
         let go = &mut |_| true;
         assert!(s.caps.offers(Source::Slide) && s.caps.offers(Source::Negative));
-        assert_eq!(s.caps.stripes_at(Source::Slide, 600), None);
+        assert_eq!(s.caps.stripes_at(Source::Slide, 600), Some(5));
         assert_eq!(s.caps.colour_at(Source::Slide), Some(SLIDE_COLOUR));
         assert_eq!(s.caps.colour_at(Source::Negative), None);
         let (w, h) = s.caps.bed_pixels(Source::Slide, 600).unwrap();
