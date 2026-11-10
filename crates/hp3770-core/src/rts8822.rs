@@ -207,6 +207,14 @@ pub fn session_request(request: &ScanRequest, fast_travel: bool, profile: &Profi
         // (measured on 10 November 2026 against the glass's line, which is
         // HP's for slides), nothing saturated.
         negative: film,
+        // At 1200 dpi slides get three times the glass's line: measured on
+        // two slides on 10 November 2026 (four scans, captures/tma/note.txt)
+        // their shadows came out 1.2-1.5 times less noisy than with twice,
+        // the light parts as before within the measure, nothing saturated,
+        // 30 s more. Not negatives (red saturated on their base on 8
+        // November), not at 600 dpi (never run there).
+        triple_line: request.source == Source::Slide
+            && crate::scan_modes::negative_triple_mode(request.dpi).is_some(),
         ..Request::new(
             request.dpi,
             geometry::Area {
@@ -485,6 +493,7 @@ mod tests {
             &HP3770,
         );
         assert!(r.transparency && r.negative);
+        assert!(!r.triple_line, "negatives keep twice the glass's line");
         let cli = geometry::Area::from_mm(1200, 87.6, 76.2, 44.0, 106.8);
         assert_eq!(
             (r.area.x, r.area.y, r.area.width, r.area.height),
@@ -508,7 +517,28 @@ mod tests {
             &HP3770,
         );
         assert!(slide.transparency && slide.negative);
+        assert!(
+            slide.triple_line,
+            "slides at 1200 dpi: three times the line"
+        );
         assert_eq!(slide.area, r.area);
+        // At 600 dpi the triple line never ran: twice, as negatives.
+        let slide600 = session_request(
+            &ScanRequest {
+                source: Source::Slide,
+                dpi: 600,
+                area: scanner_api::Area {
+                    x: 0,
+                    y: 0,
+                    width: w / 2,
+                    height: h / 2,
+                },
+                depth: 16,
+            },
+            true,
+            &HP3770,
+        );
+        assert!(slide600.negative && !slide600.triple_line);
     }
 
     /// The samples of the contract are the chip's untouched: processing them

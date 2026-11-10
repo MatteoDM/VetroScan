@@ -18,11 +18,15 @@ GitHub; here they are in English.
 ## [Unreleased]
 
 ### Added
-- `hp3770 tma-scan --triple-line` (experimental, for measuring): films at 1200 dpi with three
-  times the glass's line instead of twice, as the HP 3770 first scanned negatives; refused at
-  any other resolution, before the scanner moves.
+- `hp3770 tma-scan --triple-line` (experimental, for measuring negatives): films at 1200 dpi
+  with three times the glass's line instead of twice, as the HP 3770 first scanned negatives;
+  refused at any other resolution, before the scanner moves.
 
 ### Changed
+- Slides with the HP 3770's adapter at 1200 dpi are scanned with a longer exposure, three times
+  the glass's line instead of twice: on two real slides their darkest parts came out 1.2-1.5
+  times less noisy, the light parts as before, nothing burnt, for about 30 seconds more. At 600
+  dpi, and for negatives, as before. `hp3770 tma-scan --film slide` at 1200 dpi does the same.
 - **Lamp · Switch it off** follows the scanner in use: its longest choice is the time after
   which the scanner switches its lamp off by itself, where it does (*the scanner switches it
   off*: 13 minutes on the HP 3770, as before), and the note says the scanner's own warm-up.
