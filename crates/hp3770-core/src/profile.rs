@@ -309,9 +309,16 @@ pub const HP3770: Profile = Profile {
         // mm from home at 1200 steps per inch, inside the slot (84.8-92.8 mm
         // from home: the glass starts 8.8 mm from home, line 69 at 200 dpi).
         strip_steps: 4130,
-        // The adapter's light at 200 dpi: 87.6-131.6 mm across, 76.2-171.6
-        // mm down (HP's driver: 42.3 x 93.1 mm, 333 x 733 pixels).
-        area: [876, 762, 440, 954],
+        // The adapter's light: 87.6-131.6 mm across (200 dpi, 8 November),
+        // 76.2-183.0 mm down, the slot at the top included. Down to HP's
+        // own area's end: 42.3 x 93.1 mm (500 x 1100 at 300 dpi in
+        // `GetXPACapabilities`) starting `TA_StripToScan` = 1060/2400 in
+        // below the calibration strip, about 89.9-183.0 mm. Measured on 10
+        // November 2026 with the slides' holder (`tma-scan --height 130`):
+        // the light reaches 188-190 mm, the second slide ends at 176.8 mm.
+        // It was 76.2-171.6 mm: the end of the negatives' holder's window,
+        // which cut the second slide.
+        area: [876, 762, 440, 1068],
         // The slot without film at its top: about 88-132 x 76-84 mm.
         slot: [876, 756, 440, 83],
         // [CalibTransparent]: the offsets as on the glass (the optical black

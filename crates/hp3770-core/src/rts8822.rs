@@ -347,11 +347,13 @@ mod tests {
         let labels: Vec<_> = c.buttons.iter().map(|b| b.label.as_str()).collect();
         assert_eq!(labels, ["Scan", "Copy", "Instant Share"]);
         assert_eq!(c.tone, HP3770.tone());
-        // The adapter for negatives, its area the light measured in the lid.
+        // The adapter for negatives, its area the light measured in the lid
+        // (down to 183 mm: the slides' holder reaches further than the
+        // negatives').
         let adapter = c.transparency.as_ref().expect("an adapter");
         assert_eq!(adapter.sources, [Source::Negative]);
         assert!(c.offers(Source::Negative) && !c.offers(Source::Slide));
-        assert_eq!(c.bed_pixels(Source::Negative, 200), Some((346, 751)));
+        assert_eq!(c.bed_pixels(Source::Negative, 200), Some((346, 841)));
         assert_eq!(c.resolutions_for(Source::Negative), [600, 1200]);
         // The stripes, per source: the glass's, and the films' measured at
         // both film resolutions.
@@ -425,7 +427,7 @@ mod tests {
             &HP3770,
         );
         assert!(r.transparency && r.negative);
-        let cli = geometry::Area::from_mm(1200, 87.6, 76.2, 44.0, 95.4);
+        let cli = geometry::Area::from_mm(1200, 87.6, 76.2, 44.0, 106.8);
         assert_eq!(
             (r.area.x, r.area.y, r.area.width, r.area.height),
             (cli.x, cli.y, cli.width, cli.height)

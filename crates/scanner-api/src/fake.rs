@@ -51,7 +51,8 @@ pub fn glass(x: f64, y: f64) -> [u8; 3] {
 }
 
 /// The adapter's area of [`FakeScanner::with_adapter`], inches: the HP
-/// 3770's (44.0 x 95.4 mm).
+/// 3770's as first measured, with the negatives' holder (44.0 x 95.4 mm;
+/// the real one now reaches 106.8 mm, for the slides' holder).
 pub const ADAPTER_INCHES: (f64, f64) = (1.732, 3.756);
 
 /// The frames of the strip in the adapter's holder: left, top, width,

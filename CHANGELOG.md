@@ -46,6 +46,9 @@ GitHub; here they are in English.
 - The save window says what it saves: with several pages or photos, its title says whether
   they go into one file (PDF, multi-page TIFF) or one file each, numbered at the end of the
   name. It always saved them all, but it showed one name only, as if it saved one scan.
+- The HP 3770's adapter is scanned 11 mm further down, to 183 mm from the top of the glass
+  (HP's own area): its light reaches there with the slides' holder, and the second slide was
+  cut by about 5 mm. A strip of negatives takes about a tenth longer.
 
 ## [0.5.0] - 2026-11-10
 
