@@ -13,3 +13,6 @@
 
 # The Epson 4490 firmware is versioned since the repository went private
 # (10 November 2026): crates/epson-gt-x750/firmware/esfw54.bin.
+
+# Python caches of tools/measure.
+__pycache__/
