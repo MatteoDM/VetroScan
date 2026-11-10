@@ -57,6 +57,10 @@ the tags: it is not touched at every release.
    cargo fmt --all --check
    cargo clippy --workspace --all-targets --locked -- -D warnings
    ```
+   While the workflow cannot run, these are Windows' only: also run the Linux checks in WSL
+   and the macOS clippy described in `CLAUDE.md` (*Checks · The other systems*), and say in
+   the release's report that macOS was checked by clippy only (the app crate not built, no
+   test run).
 4. Commit: `Release vX.Y.Z` with `Cargo.toml`, `Cargo.lock` and `CHANGELOG.md`.
    Then check whether the workflow can run at all (`gh run list --limit 3`): since 10 November
    2026 the repository is private and GitHub Actions do not start (the account's billing), so
