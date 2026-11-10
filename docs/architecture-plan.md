@@ -1251,7 +1251,7 @@ what it measures. One gap: the stripes are declared per resolution, not per sour
 | 7 · new name + final check (done) | 0.3.0 | medium: updates and preferences | yes |
 | 8 · other HP (postponed) | to be decided | high | no: testers needed |
 | 9 · other brands (postponed) | to be decided | medium | eSCL yes, with a network scanner |
-| 10 · slides and negatives on the 3770 (negatives done; slides in the app, phase 13 step 5.2) | to be decided | medium | yes: the 3770's own adapter |
-| 11 · precise moves from the keyboard (done) | to be decided | low | yes |
-| 12 · Epson Perfection 4490 Photo, native, plug and play (waiting for the scanner) | to be decided | high: protocol unknown, two carriages | no: the scanner (firmware inside the program) |
-| 13 · films done professionally, for every scanner (steps 1-3, 5.1-5.2 done) | to be decided | low (1-3, 5.1-5.2, 6), medium (4, 5.3: the motor) | 1-3, 5.1-5.2, 6 yes; 4 needs the 3770's captures |
+| 10 · slides and negatives on the 3770 (done: negatives; slides through phase 13 step 5.2) | 0.5.0 (negatives), 0.6.0 (slides) | medium | yes: the 3770's own adapter |
+| 11 · precise moves from the keyboard (done) | 0.4.0 | low | yes |
+| 12 · Epson Perfection 4490 Photo, native, plug and play (milestone 1 written without the scanner; the rest waits for it) | 0.5.0 (milestone 1, experimental); the rest to be decided | high: protocol unknown, two carriages | no: the scanner (firmware inside the program) |
+| 13 · films done professionally, for every scanner (done: 1-3, 5.1-5.2, 6 for slides; 5.3 set aside; 4 stalled without HP's captures; open: 7, 8) | 0.6.0 (1-3, 5.1-5.2, 6); 7, 8 to be decided | low (1-3, 5.1-5.2, 6, 7 in software, 8), medium (4, 5.3: the motor) | 1-3, 5.1-5.2, 6, 7 in software, 8 yes; 4 needs the 3770's captures |
