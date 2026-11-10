@@ -75,8 +75,9 @@ pub struct DeviceModel {
     pub resolutions: &'static [u16],
     /// The front-panel buttons, left to right.
     pub buttons: &'static [Button],
-    /// The stripes across its scans of the glass: resolution (dpi) and the
-    /// lines after which their pattern repeats.
+    /// The stripes across its scans (of the glass, and of films with the
+    /// adapter: the same period, measured on 10 November 2026):
+    /// resolution (dpi) and the lines after which their pattern repeats.
     pub stripes: &'static [(u16, u16)],
 }
 

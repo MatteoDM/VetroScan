@@ -146,8 +146,8 @@ impl Controls {
         self.adapter_out.store(unplugged, Ordering::SeqCst);
     }
 
-    /// Puts stripes on the scans of the glass, at the resolutions the
-    /// scanner declares them ([`Capabilities::stripes`]): each line
+    /// Puts stripes on its scans, of the glass and of films (as the HP
+    /// 3770's), at the resolutions the scanner declares them ([`Capabilities::stripes`]): each line
     /// lighter or darker by up to `thousandths`, the pattern repeating as
     /// declared. 0 takes them away.
     pub fn stripes(&self, thousandths: u32) {
@@ -338,7 +338,7 @@ impl Scanner for FakeScanner {
         let mut deep = samples16(request);
         let amplitude = f64::from(self.controls.stripes.load(Ordering::SeqCst)) / 1000.0;
         if let Some(repeat) = self.caps.stripes_at(request.dpi) {
-            if amplitude > 0.0 && !request.source.is_film() {
+            if amplitude > 0.0 {
                 let stride = request.area.width as usize * 3;
                 for (y, line) in deep.chunks_mut(stride.max(1)).enumerate() {
                     let phase = std::f64::consts::TAU * (y % repeat) as f64 / repeat as f64;

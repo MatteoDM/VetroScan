@@ -1844,6 +1844,31 @@ fn stripes_of_last_page(ui: &Ui) -> f32 {
     (sum / n as f32).sqrt()
 }
 
+/// How strong the part of the last page's lines is that repeats after
+/// `repeat` lines: each line against its neighbours, averaged by its place
+/// in the pattern (the subject of a picture averages out, stripes do not).
+fn repeating_every(ui: &Ui, repeat: usize) -> f32 {
+    let full = &ui.app.pages.last().expect("a page").raw.full;
+    let w = full.width;
+    let means: Vec<f32> = (0..full.height)
+        .map(|y| {
+            let row = &full.data[y * w * 3..(y + 1) * w * 3];
+            row.iter().map(|&v| f32::from(v)).sum::<f32>() / row.len() as f32
+        })
+        .collect();
+    let k = 7;
+    let mut bins = vec![(0.0f32, 0usize); repeat];
+    for y in k..means.len() - k {
+        let smooth = means[y - k..=y + k].iter().sum::<f32>() / (2 * k + 1) as f32;
+        let b = &mut bins[y % repeat];
+        b.0 += means[y] / smooth.max(1.0) - 1.0;
+        b.1 += 1;
+    }
+    let avg: Vec<f32> = bins.iter().map(|(s, n)| s / (*n).max(1) as f32).collect();
+    let mean = avg.iter().sum::<f32>() / repeat as f32;
+    (avg.iter().map(|a| (a - mean).powi(2)).sum::<f32>() / repeat as f32).sqrt()
+}
+
 #[test]
 fn the_scanners_stripes_go_with_a_tick() {
     let mut ui = striped_lid();
@@ -1950,16 +1975,37 @@ fn misura_le_righe_finds_them_on_a_white_sheet_and_keeps_them() {
 }
 
 #[test]
-fn films_have_neither_tick() {
+fn films_have_the_stripes_tick_but_not_twice_the_resolution() {
     let (mut ui, _) = with_adapter();
     ui.click("Pellicola");
     ui.send(Message::Pane(crate::Pane::Scan));
-    assert!(!ui.shows("Togli le righe dello scanner"));
+    assert!(ui.shows("Togli le righe dello scanner"));
     assert!(!ui.shows("Scansiona a 2400 dpi e riduci"));
-    // Ticked on the glass, they still leave films alone.
-    ui.send(Message::Destripe(true));
+    ui.send(Message::Dpi(600));
+    assert!(!ui.shows("Scansiona a 1200 dpi e riduci"));
     ui.send(Message::Double(true));
     assert!(!ui.app.doubles());
+}
+
+#[test]
+fn the_scanners_stripes_go_from_films_too() {
+    // A strip scanned with the stripes on the negative, the tick off then
+    // on (each in its own run: a second scan would ask to replace).
+    let scan = |destripe: bool| {
+        let (mut ui, controls) = with_adapter();
+        controls.stripes(30);
+        ui.click("Pellicola");
+        ui.send(Message::Destripe(destripe));
+        ui.send(Message::Scan);
+        ui.settle();
+        assert!(!ui.app.pages.is_empty(), "{}", ui.app.note);
+        assert_eq!(ui.app.prefs().film.destripe, Some(destripe));
+        repeating_every(&ui, 5)
+    };
+    let with = scan(false);
+    assert!(with > 0.005, "{with}");
+    let without = scan(true);
+    assert!(without < with / 3.0, "{with} then {without}");
 }
 
 #[test]

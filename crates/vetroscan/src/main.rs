@@ -5398,10 +5398,11 @@ impl App {
         }
     }
 
-    /// A scan of the glass as the settings want it before anything else:
-    /// the scanner's stripes taken away (at the resolution scanned, where
-    /// they were measured), then a scan at twice the resolution brought
-    /// back to the one chosen.
+    /// A scan as the settings want it before anything else: the scanner's
+    /// stripes taken away (at the resolution scanned, where they were
+    /// measured; for films on the negative's linear samples, before it is
+    /// measured and turned into its picture), then, on the glass, a scan at
+    /// twice the resolution brought back to the one chosen.
     fn cleaned(
         &mut self,
         purpose: Purpose,
@@ -5409,13 +5410,16 @@ impl App {
         mut samples16: Option<Vec<u16>>,
     ) -> (Image, Option<Vec<u16>>) {
         let doubled = std::mem::take(&mut self.doubled) && purpose == Purpose::Page;
-        if self.filming() || purpose == Purpose::Measure {
+        if purpose == Purpose::Measure {
             return (image, samples16);
         }
         if self.settings().destripe {
             if let Some(repeat) = self.stripes_at(image.dpi) {
                 stripes::remove(&mut image, samples16.as_deref_mut(), repeat);
             }
+        }
+        if self.filming() {
+            return (image, samples16);
         }
         if doubled && image.format == Format::Rgb {
             let (w, h) = (image.width, image.height);
@@ -6831,9 +6835,10 @@ impl App {
                     .size(11),
                 );
         }
-        // On the glass only: the scanner's stripes, where it declares them,
-        // and twice the resolution, where it offers it.
-        if !self.filming() {
+        // The scanner's stripes, where it declares them (films too: the
+        // same sensor), and, on the glass only, twice the resolution, where
+        // it offers it.
+        {
             let scanned = if self.doubles() {
                 self.double_dpi().unwrap_or(self.dpi())
             } else {
@@ -6855,7 +6860,7 @@ impl App {
                         .size(11),
                     );
             }
-            if let Some(double) = self.double_dpi() {
+            if let Some(double) = self.double_dpi().filter(|_| !self.filming()) {
                 pane = pane
                     .push(
                         checkbox(self.settings().double)

@@ -17,7 +17,16 @@ GitHub; here they are in English.
 
 ## [Unreleased]
 
+### Added
+- `hp3770 develop --destripe` takes the scanner's stripes away from a saved film scan before
+  turning it into its picture.
+
 ### Changed
+- **Remove the scanner's stripes** now also works in **Film**: the HP 3770 leaves the same
+  lines on negatives (every 5 lines at 600 and 1200 dpi), most visible in the light parts of
+  the picture. They are taken away on the negative as scanned, before it becomes a positive;
+  on a real strip they came out three to four times fainter, the colours unchanged. Off by
+  default, as on the glass.
 - The save window says what it saves: with several pages or photos, its title says whether
   they go into one file (PDF, multi-page TIFF) or one file each, numbered at the end of the
   name. It always saved them all, but it showed one name only, as if it saved one scan.

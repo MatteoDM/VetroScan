@@ -107,6 +107,10 @@ enum Command {
         /// What is in the holder.
         #[arg(long, value_enum)]
         film: Option<FilmArg>,
+        /// Take the scanner's stripes away first (on the linear samples,
+        /// before the film is measured and turned into its picture).
+        #[arg(long)]
+        destripe: bool,
     },
     /// Switch the flatbed lamp, or the transparency adapter's, on or off.
     ///
@@ -270,8 +274,13 @@ fn main() -> ExitCode {
             output,
             dpi,
             film,
-        } => read_png16(&input)
-            .and_then(|(w, h, samples)| develop(samples, w, h, dpi, film, &output)),
+            destripe,
+        } => read_png16(&input).and_then(|(w, h, mut samples)| {
+            if destripe {
+                destripe_samples(&mut samples, w, h, dpi)?;
+            }
+            develop(samples, w, h, dpi, film, &output)
+        }),
         Command::Detect { input, crop } => detect(&input, crop.as_deref()),
         Command::Stripes { input } => stripes(&input),
         Command::Buttons { count, method, raw } => {
@@ -615,6 +624,35 @@ fn save_image(
 /// (`width` x `height` RGB, the adapter's area from its top left corner,
 /// at `dpi`), measured and turned into the picture with `film`, saved as
 /// `output`. Shared by `tma-scan` and `develop`.
+/// Takes the HP 3770's stripes away from linear 16-bit samples, with the
+/// repeat its profile declares at `dpi`.
+fn destripe_samples(samples: &mut [u16], width: usize, height: usize, dpi: u16) -> CliResult {
+    let repeat = hp3770_core::profile::HP3770
+        .device
+        .stripes
+        .iter()
+        .find(|&&(d, _)| d == dpi)
+        .map(|&(_, r)| usize::from(r))
+        .ok_or_else(|| format!("no stripes known at {dpi} dpi"))?;
+    let mut image = scan_imaging::Image {
+        width,
+        height,
+        dpi,
+        format: scan_imaging::Format::Rgb,
+        data: samples.iter().map(|&v| (v >> 8) as u8).collect(),
+    };
+    let done = scan_imaging::stripes::remove(&mut image, Some(samples), repeat);
+    eprintln!(
+        "stripes          {} (every {repeat} lines)",
+        if done {
+            "removed"
+        } else {
+            "image too small, left"
+        }
+    );
+    Ok(())
+}
+
 fn develop(
     samples: Vec<u16>,
     width: usize,

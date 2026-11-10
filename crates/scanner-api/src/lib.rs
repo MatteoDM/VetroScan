@@ -89,8 +89,8 @@ pub struct Capabilities {
     /// The tone curve its linear samples need on the host; its white
     /// levels are also the paper white of the samples.
     pub tone: Tone,
-    /// The stripes it leaves across its scans of the glass, at the
-    /// resolutions where they were measured (the host can take them away:
+    /// The stripes it leaves across its scans, of the glass and of films
+    /// (the same sensor), at the resolutions where they were measured (the host can take them away:
     /// `scan_imaging::stripes`).
     pub stripes: Vec<Stripes>,
 }
@@ -128,8 +128,8 @@ impl Capabilities {
         }
     }
 
-    /// Lines after which the stripes of a scan of the glass at `dpi`
-    /// repeat, if it leaves some there.
+    /// Lines after which the stripes of a scan at `dpi` repeat, if it
+    /// leaves some there.
     pub fn stripes_at(&self, dpi: u16) -> Option<usize> {
         self.stripes
             .iter()
