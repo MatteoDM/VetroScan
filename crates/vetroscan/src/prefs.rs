@@ -127,6 +127,9 @@ pub struct StoredMode {
     pub destripe: Option<bool>,
     /// Scan at twice the resolution and halve (absent: no).
     pub double: Option<bool>,
+    /// Films: smooth the colour's noise (absent: the default of the way of
+    /// working, yes for films).
+    pub colour_noise: Option<bool>,
     pub adjust: StoredAdjust,
 }
 
@@ -148,6 +151,7 @@ impl Default for StoredMode {
             depth: None,
             destripe: None,
             double: None,
+            colour_noise: None,
             adjust: StoredAdjust::default(),
         }
     }

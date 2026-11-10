@@ -111,6 +111,10 @@ enum Command {
         /// before the film is measured and turned into its picture).
         #[arg(long)]
         destripe: bool,
+        /// Smooth the colour's noise of the picture, as much as measured on
+        /// it (`scan_imaging::chroma`).
+        #[arg(long)]
+        colour_noise: bool,
     },
     /// Switch the flatbed lamp, or the transparency adapter's, on or off.
     ///
@@ -275,11 +279,12 @@ fn main() -> ExitCode {
             dpi,
             film,
             destripe,
+            colour_noise,
         } => read_png16(&input).and_then(|(w, h, mut samples)| {
             if destripe {
                 destripe_samples(&mut samples, w, h, dpi)?;
             }
-            develop(samples, w, h, dpi, film, &output)
+            develop(samples, w, h, dpi, film, colour_noise, &output)
         }),
         Command::Detect { input, crop } => detect(&input, crop.as_deref()),
         Command::Stripes { input } => stripes(&input),
@@ -659,6 +664,7 @@ fn develop(
     height: usize,
     dpi: u16,
     film: Option<FilmArg>,
+    colour_noise: bool,
     output: &std::path::Path,
 ) -> CliResult {
     use scan_imaging::adjust::{render_samples, Adjustments, Samples};
@@ -723,7 +729,7 @@ fn develop(
         film::inside(&samples, image.width, &frames)
     };
     let film_part = &film_part[..];
-    let picture = match film {
+    let mut picture = match film {
         None => samples,
         Some(FilmArg::Negative) => {
             let n = Negative::measure(film_part, base).ok_or("too little film in the scan")?;
@@ -742,6 +748,14 @@ fn develop(
             s.positive(&samples)
         }
     };
+    if colour_noise {
+        let noise = scan_imaging::chroma::estimate(&picture, image.width);
+        let radius = noise.and_then(scan_imaging::chroma::radius_for);
+        if let Some(r) = radius {
+            scan_imaging::chroma::reduce(&mut picture, image.width, r);
+        }
+        eprintln!("colour noise     {noise:?}, smoothed {radius:?} px");
+    }
     let shown = render_samples(
         Samples::Sixteen(&picture),
         image.width,
@@ -846,7 +860,7 @@ fn tma_scan(
     );
     let samples = report.samples16.ok_or("no 16-bit samples")?;
     save_png16(output, image.width, image.height, &samples)?;
-    develop(samples, image.width, image.height, dpi, film, output)?;
+    develop(samples, image.width, image.height, dpi, film, false, output)?;
     println!("scanned in       {:.1} s", start.elapsed().as_secs_f32());
     Ok(())
 }

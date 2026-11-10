@@ -6,10 +6,12 @@
 //! tone curve ([`adjust`]), grey and black-and-white conversion and
 //! sharpening ([`convert`]), crops, rotation and straightening
 //! ([`transform`]), and finding the photos and pages on the glass
-//! ([`detect`]), and slides and negatives in transmitted light ([`film`]).
+//! ([`detect`]), slides and negatives in transmitted light ([`film`]), and
+//! the noise of the colour ([`chroma`]).
 //! Nothing here knows about USB or about a scanner model.
 
 pub mod adjust;
+pub mod chroma;
 pub mod convert;
 pub mod detect;
 pub mod film;

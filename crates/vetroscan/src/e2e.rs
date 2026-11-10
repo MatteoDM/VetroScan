@@ -1988,6 +1988,23 @@ fn films_have_the_stripes_tick_but_not_twice_the_resolution() {
 }
 
 #[test]
+fn films_reduce_the_colour_noise_by_default_and_remember_the_tick() {
+    let (mut ui, _) = with_adapter();
+    ui.send(Message::Pane(crate::Pane::Scan));
+    assert!(!ui.shows("Riduci il rumore di colore"), "not on the glass");
+    ui.click("Pellicola");
+    assert!(ui.shows("Riduci il rumore di colore"));
+    assert!(ui.app.settings().colour_noise, "on by default for films");
+    // A film still comes out with it (the made-up one has little noise).
+    ui.send(Message::Scan);
+    ui.settle();
+    assert!(!ui.app.pages.is_empty(), "{}", ui.app.note);
+    ui.click("Riduci il rumore di colore");
+    assert!(!ui.app.settings().colour_noise);
+    assert_eq!(ui.app.prefs().film.colour_noise, Some(false));
+}
+
+#[test]
 fn the_scanners_stripes_go_from_films_too() {
     // A strip scanned with the stripes on the negative, the tick off then
     // on (each in its own run: a second scan would ask to replace).

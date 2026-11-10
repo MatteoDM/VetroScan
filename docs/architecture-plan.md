@@ -1071,7 +1071,11 @@ what it measures. One gap: the stripes are declared per resolution, not per sour
 
 ### In order
 
-1. **Colour-noise reduction for films, generic** (`scan-imaging`): the noise of each channel
+1. **Colour-noise reduction for films, generic** (`scan-imaging`) · **done on 10 November
+   2026** (`scan_imaging::chroma`: the colour noise against the brightness's measured on the
+   picture, the ratios red/brightness and blue/brightness smoothed with a Gaussian of
+   1.5-1.8 px on the five strips, at most 3; tick **Riduci il rumore di colore** in Pellicola,
+   on by default; blue 10-11 -> 5.4 levels on the T-shirt and both skies). The noise of each channel
    estimated on the scan itself (a robust measure on smooth parts, approximating what the
    difference of two scans gave), and the colour (not the brightness) smoothed as much as
    needed to bring the noisier channels near the quietest; a scanner with less noise gets less

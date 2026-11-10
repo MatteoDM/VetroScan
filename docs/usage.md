@@ -133,6 +133,17 @@ calibrates on the empty slot at the top of the holder: a strip at 1200 dpi takes
 minutes. 1200 dpi gives a 35 mm frame about 2 megapixels, fine for the screen and 10 × 15
 prints; the scanner has no infrared, so no automatic dust removal: blow on the film first.
 
+Two ticks in the **Scan** tab clean a film's picture:
+
+- **Reduce the colour noise** (on by default): the light and blue parts of a negative come
+  through the film's orange base with little blue light, so its positive gets coloured specks
+  there (measured on a light blue T-shirt: about three times more noise in blue than in red).
+  VetroScan measures the noise on each picture and smooths only its colour, as much as it
+  needs, leaving the brightness, where the detail is, as it was; a picture without coloured
+  noise is left alone.
+- **Remove the scanner's stripes** (off by default): the faint horizontal lines the HP 3770
+  leaves on every scan, taken away from the negative before it becomes a positive.
+
 **Take care:**
 
 - In **Photo** and **Film** a new scan takes the place of the photos you see (the app asks

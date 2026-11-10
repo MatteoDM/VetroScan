@@ -18,6 +18,12 @@ GitHub; here they are in English.
 ## [Unreleased]
 
 ### Added
+- **Reduce the colour noise**, for films, on by default: the coloured specks in the light and
+  blue parts of a negative's picture (the orange base lets little blue light through), measured
+  on each picture and smoothed as much as needed, the brightness and its detail untouched. On
+  real negatives the blue's noise came down from 10-12 to about 5 levels of 255, as red's and
+  green's; a picture with little colour noise is left alone. `hp3770 develop --colour-noise`
+  does the same.
 - `hp3770 develop --destripe` takes the scanner's stripes away from a saved film scan before
   turning it into its picture.
 

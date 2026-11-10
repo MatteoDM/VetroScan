@@ -678,6 +678,9 @@ struct Settings {
     /// Scan the glass at twice the resolution chosen and bring it back to
     /// it: finer, less noise and fainter stripes, in about twice the time.
     double: bool,
+    /// Films: smooth the noise of the colour of their picture, as much as
+    /// measured on it (`scan_imaging::chroma`).
+    colour_noise: bool,
 }
 
 impl Settings {
@@ -699,6 +702,7 @@ impl Settings {
             depth: 8,
             destripe: false,
             double: false,
+            colour_noise: false,
         }
     }
 
@@ -744,6 +748,7 @@ impl Settings {
     fn film() -> Self {
         Self {
             dpi: 1200,
+            colour_noise: true,
             ..Self::photo()
         }
     }
@@ -799,6 +804,7 @@ impl Settings {
             depth: Some(self.depth),
             destripe: Some(self.destripe),
             double: Some(self.double),
+            colour_noise: Some(self.colour_noise),
             adjust: prefs::StoredAdjust {
                 temperature: a.temperature,
                 tint: a.tint,
@@ -945,6 +951,7 @@ impl Settings {
             depth,
             destripe: m.destripe.unwrap_or(base.destripe),
             double: m.double.unwrap_or(base.double),
+            colour_noise: m.colour_noise.unwrap_or(base.colour_noise),
         }
     }
 }
@@ -1912,6 +1919,8 @@ enum Message {
     Destripe(bool),
     /// "Scansiona a ... dpi e riduci".
     Double(bool),
+    /// "Riduci il rumore di colore" (films).
+    ColourNoise(bool),
     /// "Misura le righe": a strip of a white sheet at each resolution.
     MeasureStripes,
     /// Back to the stripes the scanner's model declares.
@@ -2759,6 +2768,7 @@ impl App {
         image: Image,
         samples16: Option<Vec<u16>>,
         measured: Option<Negative>,
+        colour_noise: bool,
     ) -> (Image, Option<Vec<u16>>, Option<Negative>) {
         let (w, h) = (image.width, image.height);
         let deep: Cow<[u16]> = match &samples16 {
@@ -2770,7 +2780,11 @@ impl App {
         let Some(n) = negative else {
             return (image, samples16, None);
         };
-        let positive = n.positive(&deep);
+        let mut positive = n.positive(&deep);
+        // Measured on the picture itself: as much as it needs, or none.
+        if colour_noise {
+            scan_imaging::chroma::reduce_auto(&mut positive, w);
+        }
         let picture = Image {
             data: positive.iter().map(|&v| (v >> 8) as u8).collect(),
             ..image
@@ -4492,6 +4506,7 @@ impl App {
             Message::AutoSave(on) => self.settings_mut().auto_save = on,
             Message::AutoCrop(on) => self.settings_mut().auto_crop = on,
             Message::Destripe(on) => self.settings_mut().destripe = on,
+            Message::ColourNoise(on) => self.settings_mut().colour_noise = on,
             Message::Double(on) => self.settings_mut().double = on,
             Message::MeasureStripes => {
                 if self.busy.is_none()
@@ -4609,6 +4624,7 @@ impl App {
                     // How the scanner is driven, not a look.
                     new.destripe = self.settings().destripe;
                     new.double = self.settings().double;
+                    new.colour_noise = self.settings().colour_noise;
                     self.change(|s| *s = new);
                     self.note = trf(
                         "Preset «{name}» applicato (Ctrl+Z per tornare indietro)",
@@ -5459,6 +5475,7 @@ impl App {
 
     fn on_scan(&mut self, purpose: Purpose, image: Image, samples16: Option<Vec<u16>>) {
         let (image, samples16) = self.cleaned(purpose, image, samples16);
+        let colour_noise = self.settings().colour_noise;
         match purpose {
             Purpose::Preview => {
                 self.close_editor(true);
@@ -5467,7 +5484,8 @@ impl App {
                 let film = self.filming();
                 let transmission = film.then(|| at_dpi(image.clone(), PREVIEW_DPI));
                 let image = if film {
-                    let (picture, _, negative) = Self::develop(image, samples16, None);
+                    let (picture, _, negative) =
+                        Self::develop(image, samples16, None, colour_noise);
                     self.negative = negative;
                     picture
                 } else {
@@ -5534,7 +5552,8 @@ impl App {
                         transmission: transmission.clone(),
                     });
                 let (image, samples16) = if film {
-                    let (picture, deep, _) = Self::develop(image, samples16, self.negative);
+                    let (picture, deep, _) =
+                        Self::develop(image, samples16, self.negative, colour_noise);
                     (picture, deep)
                 } else {
                     (image, samples16)
@@ -6856,6 +6875,23 @@ impl App {
                         text(tr(
                             "Le righe chiare e scure che lo scanner lascia in ogni scansione: \
                              tolte dopo, senza tempo in più.",
+                        ))
+                        .size(11),
+                    );
+            }
+            // Films: the noise of the colour, measured on each picture.
+            if self.filming() {
+                pane = pane
+                    .push(
+                        checkbox(self.settings().colour_noise)
+                            .label(tr("Riduci il rumore di colore"))
+                            .on_toggle(Message::ColourNoise)
+                            .text_size(13),
+                    )
+                    .push(
+                        text(tr(
+                            "I puntini colorati nelle parti chiare e azzurre: misurati su ogni \
+                             foto e ammorbiditi quanto serve, senza toccare i dettagli.",
                         ))
                         .size(11),
                     );
