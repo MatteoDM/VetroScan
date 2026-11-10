@@ -1988,6 +1988,20 @@ fn films_have_the_stripes_tick_but_not_twice_the_resolution() {
 }
 
 #[test]
+fn films_have_the_stripes_tick_only_where_the_scanner_declares_stripes_on_films() {
+    use scanner_api::{Scanner, Source};
+    // An adapter with a lamp of its own, which leaves no stripes on films
+    // (as the Epson 4490's may): the glass's stripes do not count there.
+    let mut caps = FakeScanner::with_adapter().capabilities().clone();
+    caps.stripes.retain(|s| s.source == Source::Glass);
+    let mut ui = Ui::with_scanners(vec![FakeScanner::with(caps)]);
+    ui.send(Message::Pane(crate::Pane::Scan));
+    assert!(ui.shows("Togli le righe dello scanner"), "on the glass");
+    ui.click("Pellicola");
+    assert!(!ui.shows("Togli le righe dello scanner"), "not on films");
+}
+
+#[test]
 fn films_reduce_the_colour_noise_by_default_and_remember_the_tick() {
     let (mut ui, _) = with_adapter();
     ui.send(Message::Pane(crate::Pane::Scan));

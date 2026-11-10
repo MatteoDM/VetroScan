@@ -48,10 +48,22 @@ pub fn capabilities(profile: &Profile) -> Capabilities {
             warm_up: scan::LAMP_WARMUP,
         }),
         tone: profile.tone(),
+        // The glass's, and the films' for each film the adapter takes.
         stripes: d
             .stripes
             .iter()
-            .map(|&(dpi, repeat)| Stripes { dpi, repeat })
+            .map(|&(dpi, repeat)| Stripes {
+                source: Source::Glass,
+                dpi,
+                repeat,
+            })
+            .chain(profile.transparency.iter().flat_map(|t| {
+                t.stripes.iter().map(|&(dpi, repeat)| Stripes {
+                    source: Source::Negative,
+                    dpi,
+                    repeat,
+                })
+            }))
             .collect(),
     }
 }
@@ -341,6 +353,13 @@ mod tests {
         assert!(c.offers(Source::Negative) && !c.offers(Source::Slide));
         assert_eq!(c.bed_pixels(Source::Negative, 200), Some((346, 751)));
         assert_eq!(c.resolutions_for(Source::Negative), [600, 1200]);
+        // The stripes, per source: the glass's, and the films' measured at
+        // both film resolutions.
+        assert_eq!(c.stripes_at(Source::Glass, 300), Some(10));
+        assert_eq!(c.stripes_at(Source::Negative, 600), Some(5));
+        assert_eq!(c.stripes_at(Source::Negative, 1200), Some(5));
+        assert_eq!(c.stripes_at(Source::Negative, 300), None);
+        assert_eq!(c.stripes_at(Source::Slide, 1200), None);
         // The glass in pixels is what the driver accepts, to the pixel.
         for dpi in geometry::RESOLUTIONS {
             let (w, h) = c.glass_pixels(dpi);

@@ -657,7 +657,8 @@ coloured lines (blue, green, red) the same distance apart.
   light parts of the picture). **Togli le righe dello scanner** is offered in Pellicola and
   works on the negative's linear samples before it is measured and inverted: on a real strip
   the pattern came out 3-4 times fainter, the colours unchanged. `hp3770 develop --destripe`
-  does the same on a saved scan. Still declared per resolution only: see phase 13, point 2.
+  does the same on a saved scan. Declared per source since (phase 13, point 2); at 600 dpi
+  measured the same day on a film: every 5.0 lines, 2-3 levels in a blue sky.
 
 ## Phase 12 · the Epson Perfection 4490 Photo · waiting for the scanner
 
@@ -1082,7 +1083,11 @@ what it measures. One gap: the stripes are declared per resolution, not per sour
    of it by itself. In the films' development by default, light, with a tick; the strength
    used kept with the page, so a page saved again comes out the same. Checked on the five
    strips.
-2. **Stripes per source** in the contract (`Stripes { dpi, repeat }` gets the source, or
+2. **Stripes per source** in the contract · **done on 10 November 2026**
+   (`Stripes { source, dpi, repeat }`, `Capabilities::stripes_at(source, dpi)`; the 3770's
+   adapter declares its own, `Transparency::stripes`: every 5 lines at 600 and 1200 dpi, both
+   measured on negatives; "Misura le righe" only replaces the glass's; an e2e with an adapter
+   that declares none). Was: (`Stripes { dpi, repeat }` gets the source, or
    `Capabilities::stripes_at(source, dpi)`): the 3770 declares the same for glass and films
    (same sensor, measured); the 4490 has its own lamp in the lid and may have other stripes or
    none. "Misura le righe" stays for the glass, with a film measure later if needed.

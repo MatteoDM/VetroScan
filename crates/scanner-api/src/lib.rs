@@ -89,16 +89,20 @@ pub struct Capabilities {
     /// The tone curve its linear samples need on the host; its white
     /// levels are also the paper white of the samples.
     pub tone: Tone,
-    /// The stripes it leaves across its scans, of the glass and of films
-    /// (the same sensor), at the resolutions where they were measured (the host can take them away:
-    /// `scan_imaging::stripes`).
+    /// The stripes it leaves across its scans, for each source (the glass,
+    /// a film in the adapter: a different lamp or sensor may leave others,
+    /// or none) at the resolutions where they were measured; the host can
+    /// take them away (`scan_imaging::stripes`).
     pub stripes: Vec<Stripes>,
 }
 
-/// Stripes across the scans of a scanner at one resolution: a pattern of
-/// lighter and darker lines that repeats after the same number of lines.
+/// Stripes across the scans of a scanner from one source at one
+/// resolution: a pattern of lighter and darker lines that repeats after
+/// the same number of lines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Stripes {
+    /// Where the scan comes from.
+    pub source: Source,
     /// The resolution, dpi.
     pub dpi: u16,
     /// Lines after which the pattern repeats.
@@ -128,12 +132,12 @@ impl Capabilities {
         }
     }
 
-    /// Lines after which the stripes of a scan at `dpi` repeat, if it
-    /// leaves some there.
-    pub fn stripes_at(&self, dpi: u16) -> Option<usize> {
+    /// Lines after which the stripes of a scan from `source` at `dpi`
+    /// repeat, if it leaves some there.
+    pub fn stripes_at(&self, source: Source, dpi: u16) -> Option<usize> {
         self.stripes
             .iter()
-            .find(|s| s.dpi == dpi)
+            .find(|s| s.source == source && s.dpi == dpi)
             .map(|s| usize::from(s.repeat))
     }
 

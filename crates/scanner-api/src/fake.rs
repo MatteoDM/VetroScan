@@ -198,7 +198,11 @@ impl FakeScanner {
             // As the HP 3770's; the glass has them only when a test asks
             // (Controls::stripes).
             stripes: [(200, 5), (300, 10), (600, 5), (1200, 5)]
-                .map(|(dpi, repeat)| Stripes { dpi, repeat })
+                .map(|(dpi, repeat)| Stripes {
+                    source: Source::Glass,
+                    dpi,
+                    repeat,
+                })
                 .to_vec(),
         })
     }
@@ -238,6 +242,12 @@ impl FakeScanner {
             sources: vec![Source::Negative],
             resolutions: vec![600, 1200],
         });
+        // The same sensor sees films: the same stripes (as the HP 3770's).
+        s.caps.stripes.extend([600, 1200].map(|dpi| Stripes {
+            source: Source::Negative,
+            dpi,
+            repeat: 5,
+        }));
         s
     }
 
@@ -337,7 +347,7 @@ impl Scanner for FakeScanner {
         }
         let mut deep = samples16(request);
         let amplitude = f64::from(self.controls.stripes.load(Ordering::SeqCst)) / 1000.0;
-        if let Some(repeat) = self.caps.stripes_at(request.dpi) {
+        if let Some(repeat) = self.caps.stripes_at(request.source, request.dpi) {
             if amplitude > 0.0 {
                 let stride = request.area.width as usize * 3;
                 for (y, line) in deep.chunks_mut(stride.max(1)).enumerate() {

@@ -3324,17 +3324,18 @@ impl App {
         Self::bytes(&self.job_request(job), self.dpi()) * self.doubling_factor()
     }
 
-    /// Lines after which the stripes of a scan of the glass at `dpi`
-    /// repeat: as measured on this scanner ("Misura le righe"), or as its
-    /// model declares them.
-    fn stripes_at(&self, dpi: u16) -> Option<usize> {
+    /// Lines after which the stripes of a scan from `source` at `dpi`
+    /// repeat: on the glass as measured on this scanner ("Misura le
+    /// righe"), else as its model declares them for that source.
+    fn stripes_at(&self, source: Source, dpi: u16) -> Option<usize> {
         let measured = self
             .measured
             .get(&self.caps.name())
-            .and_then(|m| m.iter().find(|s| s.dpi == dpi));
+            .and_then(|m| m.iter().find(|s| s.dpi == dpi))
+            .filter(|_| source == Source::Glass);
         match measured {
             Some(s) => (s.repeat > 0).then_some(usize::from(s.repeat)),
-            None => self.caps.stripes_at(dpi),
+            None => self.caps.stripes_at(source, dpi),
         }
     }
 
@@ -5430,7 +5431,7 @@ impl App {
             return (image, samples16);
         }
         if self.settings().destripe {
-            if let Some(repeat) = self.stripes_at(image.dpi) {
+            if let Some(repeat) = self.stripes_at(self.source(), image.dpi) {
                 stripes::remove(&mut image, samples16.as_deref_mut(), repeat);
             }
         }
@@ -6863,7 +6864,7 @@ impl App {
             } else {
                 self.dpi()
             };
-            if self.stripes_at(scanned).is_some() {
+            if self.stripes_at(self.source(), scanned).is_some() {
                 pane = pane
                     .push(
                         checkbox(self.settings().destripe)
@@ -7729,7 +7730,7 @@ impl App {
                         ("pct", &i18n::decimal(format!("{:.1}", s.percent))),
                     ],
                 ),
-                None => match self.caps.stripes_at(dpi) {
+                None => match self.caps.stripes_at(Source::Glass, dpi) {
                     Some(n) => trf(
                         "{dpi} dpi: ogni {n} righe (dal modello)",
                         &[("dpi", &dpi), ("n", &n)],

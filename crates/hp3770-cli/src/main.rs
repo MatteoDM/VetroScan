@@ -625,15 +625,13 @@ fn save_image(
     Ok(())
 }
 
-/// What a scan with the transparency adapter becomes: its 16-bit samples
-/// (`width` x `height` RGB, the adapter's area from its top left corner,
-/// at `dpi`), measured and turned into the picture with `film`, saved as
-/// `output`. Shared by `tma-scan` and `develop`.
-/// Takes the HP 3770's stripes away from linear 16-bit samples, with the
-/// repeat its profile declares at `dpi`.
+/// Takes the HP 3770's stripes away from linear 16-bit samples of a film,
+/// with the repeat its profile declares for the adapter at `dpi`.
 fn destripe_samples(samples: &mut [u16], width: usize, height: usize, dpi: u16) -> CliResult {
     let repeat = hp3770_core::profile::HP3770
-        .device
+        .transparency
+        .as_ref()
+        .ok_or("this scanner has no transparency adapter")?
         .stripes
         .iter()
         .find(|&&(d, _)| d == dpi)
@@ -658,6 +656,10 @@ fn destripe_samples(samples: &mut [u16], width: usize, height: usize, dpi: u16) 
     Ok(())
 }
 
+/// What a scan with the transparency adapter becomes: its 16-bit samples
+/// (`width` x `height` RGB, the adapter's area from its top left corner,
+/// at `dpi`), measured and turned into the picture with `film`, saved as
+/// `output`. Shared by `tma-scan` and `develop`.
 fn develop(
     samples: Vec<u16>,
     width: usize,

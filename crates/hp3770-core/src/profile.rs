@@ -75,9 +75,9 @@ pub struct DeviceModel {
     pub resolutions: &'static [u16],
     /// The front-panel buttons, left to right.
     pub buttons: &'static [Button],
-    /// The stripes across its scans (of the glass, and of films with the
-    /// adapter: the same period, measured on 10 November 2026):
-    /// resolution (dpi) and the lines after which their pattern repeats.
+    /// The stripes across its scans of the glass: resolution (dpi) and the
+    /// lines after which their pattern repeats (films: the adapter's own,
+    /// [`Transparency::stripes`]).
     pub stripes: &'static [(u16, u16)],
 }
 
@@ -154,6 +154,9 @@ pub struct Transparency {
     pub slot: [u16; 4],
     /// Calibration parameters with the adapter's lamp.
     pub calibration: CalibrationConfig,
+    /// The stripes across its scans of films, as [`DeviceModel::stripes`]
+    /// for the glass.
+    pub stripes: &'static [(u16, u16)],
 }
 
 impl Profile {
@@ -329,6 +332,9 @@ pub const HP3770: Profile = Profile {
             black_cut_hundredths: [0, 0, 0],
             ..REFLECTIVE
         },
+        // Measured on negatives on 10 November 2026 (two strips at 1200
+        // dpi: every 4.96-4.99 lines, the glass's pattern; one at 600 dpi).
+        stripes: &[(600, 5), (1200, 5)],
     }),
     // [PlatForm] of the configuration (line 14684 of the extracted file);
     // multi-value keys take the first value.
