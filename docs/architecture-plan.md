@@ -1143,8 +1143,10 @@ what it measures. One gap: the stripes are declared per resolution, not per sour
       `TA_StripToScan` values is the 3770's is inferred, 1800 or 1920 would cut the negatives'
       window). The area becomes 76.2-183.0 mm (or HP's, without the slot), checked with both
       holders; the frames' detection and the e2e follow;
-   2. **slides in the contract and the app** · **done on 10 November 2026** (in code and
-      tests; on the scanner through the app still to be tried with Matteo's slides):
+   2. **slides in the contract and the app** · **done on 10 November 2026** (checked on the
+      scanner: `tma-scan --film slide` at 1200 dpi, now the longer line as the app, both
+      slides whole, 34.5 x 23.9 and 34.5 x 23.4 mm, in 121 s, gains 0, highest sample 39270,
+      nothing saturated, the positives right; measured as the app does, inside the slides):
       `Source::Slide` among the 3770 adapter's sources, the driver asking the negatives'
       longer line for it too (`session_request`, so the same guard on 600/1200 dpi; `tma-scan
       --film slide` as well); no stripes declared for slides (none could be measured on the two
