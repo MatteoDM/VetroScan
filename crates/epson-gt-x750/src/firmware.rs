@@ -2,9 +2,10 @@
 //! The scanner's firmware, `esfw54.bin`: sent at every power-on, before
 //! anything else.
 //!
-//! It is never in the repository. A build may embed it (`build.rs`, from
-//! the file named by `VETROSCAN_ESFW54`); otherwise, or when the user names
-//! another copy, it is read at run time from the places Epson's drivers
+//! Every build embeds it (`build.rs`: the repository's copy,
+//! `firmware/esfw54.bin`, or the file named by `VETROSCAN_ESFW54`); a
+//! build without it, or when the user names another copy, reads it at run
+//! time from the places Epson's drivers
 //! install it ([`search_paths`]). Either way only the two known copies are
 //! accepted, by SHA-256 (`known_firmware.rs`), and the bytes are sent as
 //! they are, but for the checksum (see [`crate::protocol::upload_firmware`]).
@@ -61,7 +62,7 @@ impl fmt::Display for Build {
 /// Where the firmware came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Origin {
-    /// Inside the program (`VETROSCAN_ESFW54` at build time).
+    /// Inside the program (`build.rs`).
     Embedded,
     /// Read from this file.
     File(PathBuf),
@@ -126,8 +127,7 @@ impl Firmware {
         Self::new(Cow::Owned(bytes), Origin::File(path.to_path_buf()))
     }
 
-    /// A made-up image taken as it is, for tests of the upload (the real
-    /// files are not in the repository).
+    /// A made-up image taken as it is, for tests of the upload.
     #[cfg(test)]
     pub(crate) fn unchecked(image: Vec<u8>) -> Self {
         Self {
@@ -295,9 +295,13 @@ mod tests {
         assert!(e.contains("embedded: broken"), "{e}");
     }
 
-    /// Only in builds made with `VETROSCAN_ESFW54`.
+    /// Every build from the repository has it.
     #[test]
     fn the_embedded_copy_is_a_known_one() {
+        let in_repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("firmware/esfw54.bin");
+        if in_repository.is_file() {
+            assert!(embedded(), "the repository's copy is embedded");
+        }
         assert_eq!(embedded(), Firmware::embedded().is_some());
         if let Some(fw) = Firmware::embedded() {
             assert_eq!(fw.unwrap().origin(), &Origin::Embedded);

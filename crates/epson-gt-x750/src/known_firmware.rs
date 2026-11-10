@@ -10,7 +10,8 @@
 
 /// The copy in Epson's Windows driver 3.2.4.1 (`es54.inf`,
 /// `C:\Windows\System32\esfw54.bin`), under the EPSON End User Software
-/// License Agreement: never distributed by this project.
+/// License Agreement: in the private repository and in the builds kept by
+/// Matteo, never in public packages.
 pub const WINDOWS_DRIVER_SHA256: &str =
     "B01384A9EC89F62183054A2826789498C7666C646BE7E5CFDE16CEDF012EF0F9";
 

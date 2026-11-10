@@ -742,8 +742,8 @@ The scanner needs `esfw54.bin` sent at every power-on, before anything else.
      named by `VETROSCAN_ESFW54` (on Matteo's PC `C:\Windows\System32\esfw54.bin`), checks its
      SHA-256 (`B01384A9…EF0F9`, the Windows driver's copy) and includes it
      (`include_bytes!`); the bytes are never changed;
-  2. **never in the git repository while it is public** (until step 4): the build takes it from
-     the disk of whoever builds,
+  2. **never in the git repository while it was public** (until step 4, done on 10 November
+     2026): the build took it from the disk of whoever builds,
      so no clone and no public CI build carries the copy under Epson's EULA. A build without it
      looks for the file at run time (a path in the Preferences, `System32\esfw54.bin`,
      `/usr/lib/firmware/epson/esfw54.bin` of `iscan-firmware`), with the same SHA-256 check;
@@ -755,8 +755,8 @@ The scanner needs `esfw54.bin` sent at every power-on, before anything else.
      licences, and a note of ours in the licence allowing that blob inside the GPL program
      (Matteo is the copyright holder). Builds kept by Matteo alone need none of this: the
      licences bind who distributes.
-  4. **Decided on 10 November 2026: the repository becomes private, then the firmware goes in
-     it.** Once `MatteoDM/scanner` is private (not before: today it is public), the original
+  4. **Done on 10 November 2026: the repository is private, and the firmware is in it.** Since
+     `MatteoDM/scanner` is private, the original
      `esfw54.bin` of Epson's Windows driver (SHA-256 `B01384A9…EF0F9`) is committed in the
      repository, versioned, and embedded in the executable of **every** build, CI's included:
      - first make the repository private on GitHub and check it (`gh repo view --json
@@ -882,11 +882,12 @@ pushed): the crate **`crates/epson-gt-x750`**, in the app's `Registry` after the
   every other command, and the moves of `04-carriage.md` by name (`1E 01`, `05`, `25`, `47`,
   `48`, `84`, `F4`), are refused before USB. A command is added there only after a capture
   shows it.
-- The firmware: `build.rs` embeds it when `VETROSCAN_ESFW54` names a copy with one of the two
-  known SHA-256 (any other file stops the build); otherwise it is looked for at run time
+- The firmware: `build.rs` embeds the repository's copy, `firmware/esfw54.bin` (or the one
+  `VETROSCAN_ESFW54` names), with one of the two known SHA-256 (any other file stops the
+  build); a build without it looks for it at run time
   (`epson_firmware` in `impostazioni.json`, else `esfw54.bin` in the app's settings folder, the
   same place on every system; then System32 on Windows, the `iscan` places on Linux; on macOS
-  no driver place is known), with the same check. `esfw54.bin` is in `.gitignore`.
+  no driver place is known), with the same check.
 - Tried on: Windows (tests, clippy, the command); Linux in WSL (tests, clippy, the command);
   macOS in the CI only (run 42716373743 on `epson-4490-milestone1`, 10 November 2026: the
   tests, the 4490's e2e included, and the macOS packages built; no Mac here). With the
@@ -930,9 +931,8 @@ scanner that needs a firmware is a new field of `Capabilities` (the capabilities
 designed once it is known how the scanner behaves around the upload; on Windows the firmware
 is found in System32 anyway.
 
-**When the repository becomes private** (decided on 10 November 2026, any time, scanner or
-not): the firmware into the repository and into every executable, point 4 of "What we do"
-above.
+**The repository became private on 10 November 2026**: the firmware is in it and in every
+executable, point 4 of "What we do" above.
 
 ### When it arrives, in order
 
@@ -987,8 +987,8 @@ above.
 
 ### Risks
 
-- **Licences**: the firmware's (above); the copy from Epson's Windows driver only in builds
-  kept by Matteo, never in git nor in public packages.
+- **Licences**: the firmware's (above); the copy from Epson's Windows driver only in the
+  private repository and in the builds kept by Matteo, never in public packages.
 - **The Windows driver** is from 2009: it may not install or not scan on Windows 11 (Epson
   says it does); without it the captures cannot be made, and the SANE way on Linux is left.
 - **Two carriages**: the transparency unit has its own moving lamp, which must follow the

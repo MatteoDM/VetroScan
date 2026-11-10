@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! Embeds the scanner's firmware in the program when the builder has it.
+//! Embeds the scanner's firmware in the program.
 //!
-//! `VETROSCAN_ESFW54` names a copy of `esfw54.bin` on the builder's disk
-//! (on Windows with Epson's driver: `C:\Windows\System32\esfw54.bin`). Only
-//! the two known copies are accepted (`src/known_firmware.rs`, by SHA-256);
-//! the file is copied unchanged into `OUT_DIR` and the crate includes it.
-//! Without the variable nothing is embedded and the backend looks for the
-//! file at run time: the repository never holds the firmware, and public
-//! builds (CI) are made without it.
+//! By default the copy in the repository, `firmware/esfw54.bin` (the one of
+//! Epson's Windows driver; the repository is private since 10 November
+//! 2026, and every build carries it, CI's included). `VETROSCAN_ESFW54`
+//! names another copy on the builder's disk instead (the AVASYS one, for a
+//! try). Only the two known copies are accepted (`src/known_firmware.rs`,
+//! by SHA-256); the file is copied unchanged into `OUT_DIR` and the crate
+//! includes it. With neither (a checkout without the file) nothing is
+//! embedded and the backend looks for the file at run time.
 
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -18,16 +19,27 @@ mod known {
 }
 
 const VAR: &str = "VETROSCAN_ESFW54";
+/// The repository's copy, relative to the crate.
+const IN_REPOSITORY: &str = "firmware/esfw54.bin";
 
 fn main() {
     println!("cargo::rerun-if-env-changed={VAR}");
     println!("cargo::rerun-if-changed=src/known_firmware.rs");
     println!("cargo::rustc-check-cfg=cfg(esfw54_embedded)");
 
-    let Some(path) = std::env::var_os(VAR).filter(|v| !v.is_empty()) else {
-        return;
+    let chosen = std::env::var_os(VAR).filter(|v| !v.is_empty());
+    let path = match &chosen {
+        Some(path) => PathBuf::from(path),
+        None => {
+            let manifest = std::env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
+            let path = Path::new(&manifest).join(IN_REPOSITORY);
+            println!("cargo::rerun-if-changed={}", path.display());
+            if !path.is_file() {
+                return;
+            }
+            path
+        }
     };
-    let path = PathBuf::from(path);
     println!("cargo::rerun-if-changed={}", path.display());
 
     let bytes = std::fs::read(&path)
@@ -52,10 +64,14 @@ fn main() {
     let out = Path::new(&std::env::var_os("OUT_DIR").expect("OUT_DIR")).join("esfw54.bin");
     std::fs::write(&out, &bytes).unwrap_or_else(|e| panic!("writing {}: {e}", out.display()));
     println!("cargo::rustc-cfg=esfw54_embedded");
-    println!(
-        "cargo::warning=embedding esfw54.bin ({build}) from {}",
-        path.display()
-    );
+    // Said only when the builder chose another copy: the repository's is
+    // the usual one.
+    if chosen.is_some() {
+        println!(
+            "cargo::warning=embedding esfw54.bin ({build}) from {}",
+            path.display()
+        );
+    }
 }
 
 fn hex(bytes: &[u8]) -> String {
