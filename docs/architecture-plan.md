@@ -1130,8 +1130,11 @@ what it measures. One gap: the stripes are declared per resolution, not per sour
    (35.1 x 23.9 mm). In order:
    1. **the adapter's area for slides** · **done on 10 November 2026** (the profile's
       `Transparency::area` 76.2-183.0 mm down, HP's end; `tma-scan` with the slides at 1200
-      dpi then found both whole, 35.1 x 23.4 and 35.1 x 23.9 mm, in 89 s; negatives not yet
-      scanned with it). Was (driver, first: without it the second slide is cut by 5 mm):
+      dpi then found both whole, 35.1 x 23.4 and 35.1 x 23.9 mm, in 89 s; a strip of
+      negatives too, both frames whole and measured as before, in 122 s: its holder sat about
+      8 mm lower than in the morning, its window ending at about 179 mm, so the old area would
+      have cut its second frame as well). Was (driver, first: without it the second slide is
+      cut by 5 mm):
       the profile's area, 76.2-171.6 mm from the glass's top, was the window of the
       negatives' holder seen on 8 November, not the end of the light. With the slides' holder
       the light reaches about 188-190 mm (`tma-scan --height 130`); HP's own area is 42.3 x
