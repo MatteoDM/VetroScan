@@ -223,12 +223,12 @@ scanner in use has.
   [Adjust](#the-adjust-tab)).
 
 The scanner always reads in colour: the colour chosen is applied afterwards. That is why,
-even on a scan already made, the [editor](#editing-a-scan-already-made) can go from grey to
-colour and back.
+even on a scan already made, **Mode** at the top of the [Adjust tab](#the-adjust-tab) can go
+from grey to colour and back.
 
 **Colour** in the **Scan** tab, like the resolution next to it, is always for the next scans,
 even while the viewer shows a page: the pages keep theirs. The colour of a page already
-scanned is changed in its editor (**Edit…** → **Colour** → **Mode**).
+scanned is changed in the **Adjust** tab, with **Mode** at the top while the page is shown.
 
 ### Depth: 8 or 16 bits
 
@@ -259,14 +259,22 @@ quality.
 At the top of the tab it says what you are adjusting:
 
 - **NEXT SCAN** (with the **Preview** view): you adjust the preview and the settings the next
-  scans will come with. In Document they also apply to the pages without «This page only».
+  scans will come with. In Document they also apply to the pages without «This page only», in
+  Photo and Film to the photos following the common adjustments.
 - **PAGE 2**, **PHOTO**… (with the **Page** or **Photo** view): you adjust the scan shown.
   - In **Document** each page has its own adjustments from the moment it is scanned: the box
     **This page only** is ticked, and changing a page does not change the others. Below it,
     **Apply to all pages** gives the look of the page shown to every page, to the preview and
     to the next scans. Unticking the box makes the page follow the common adjustments again
     (those of the preview), together with the other pages without the box.
-  - In **Photo** the preview and the photo always have the same adjustments.
+  - In **Photo** and **Film** each photo follows the common adjustments (those of the
+    preview) until you change one: from then on the changes apply to that photo only, and the
+    other photos, the preview and the next scans stay as they are. **Apply to all photos**
+    makes its look the common one, which every photo follows again; **Back to the common
+    adjustments** drops its own.
+- **Mode**, below (only with a page or a photo shown): Colour, Grey or Black and white for
+  that scan, even different from how it was acquired. The next scans keep the colour chosen
+  in the **Scan** tab.
 
 ### The controls
 
@@ -294,14 +302,19 @@ be used. A preset applied is undone with **Ctrl+Z**.
 right), and the percentage of **blacks clipped** and **whites clipped**: if it is high,
 details are lost in the shadows or in the highlights.
 
-**Basic** (not in Black and white):
+**Colour** (only in Colour):
 - **Neutral eyedropper**: then click on the image a point that should be grey or white (a
   wall, a sheet, an overcast sky): the app removes the colour cast starting from there.
   **Esc** cancels it.
+- **Temperature** (cool ↔ warm), **Tint** (green ↔ magenta), **Vibrance** (livens up dull
+  colours and spares those already bright) and **Saturation** (all colours the same way).
+
+**Tone** (not in Black and white): **Exposure** (in stops), **Contrast**, **Highlights**,
+**Shadows**, **Whites**, **Blacks**.
+
+**Levels** (not in Black and white):
 - **Auto levels**: chooses by itself the black and white points.
-- Sliders **Temperature** (cool ↔ warm), **Tint** (green ↔ magenta), **Exposure** (in stops),
-  **Contrast**, **Highlights**, **Shadows**, **Whites**, **Blacks**.
-- *Levels*: **Black point**, **White point**, **Gamma** (midtones), **Brightness**.
+- **Black point**, **White point**, **Gamma** (midtones), **Brightness**.
 
 **Curve** (not in Black and white). The graph goes from the shadows (bottom left) to the
 highlights (top right), with the histogram behind. **Click** adds a point (up to 16), **drag**
@@ -311,9 +324,6 @@ channels (**All**) or on **R**, **G**, **B** separately. Three ready-made curves
 The point clicked last stays chosen (it is drawn full, with its input and output): the
 **arrows** move it by one level (**Shift** ten), **Tab** chooses the next one (**Shift+Tab**
 the one before), **Delete** removes it (not the two ends), **Esc** lets it go.
-
-**Colour** (only in Colour): **Vibrance** (livens up dull colours and spares those already
-bright) and **Saturation** (all colours the same way).
 
 **Detail**:
 - **Sharpness**: 1.5 is what the HP driver does; 0 switches it off.
@@ -349,8 +359,9 @@ it.
 **Ctrl+Y** or **Ctrl+Shift+Z** redoes it. Dragging a slider, even for long, counts as one step
 only. The last 100 steps are kept.
 
-- A change made with **This page only** is undone on that page, even if meanwhile you look at
-  another one.
+- A change made with **This page only**, or to a photo, is undone on that page, even if
+  meanwhile you look at another one. A photo's first change undone, it follows the common
+  adjustments again.
 - Each mode has its own history: going back to a mode, Ctrl+Z goes on from where it was.
 - Ctrl+Z does **not** bring back resolution, depth and format chosen by hand, nor pages
   deleted, moved or replaced.
@@ -432,8 +443,8 @@ are pages not saved, it asks first.
 
 ## Editing a scan already made
 
-The **editor** corrects a page or a photo after the scan: colours, rotation, straightening,
-crop, size. Like the adjustments, **it spoils nothing**: it always starts from the original
+The **editor** corrects the shape of a page or a photo after the scan: rotation,
+straightening, crop, size (its colours are changed in the [Adjust tab](#the-adjust-tab)). Like the adjustments, **it spoils nothing**: it always starts from the original
 scan, until you save.
 
 **Opening it:** **Edit** under the thumbnail, double-click on the thumbnail, **Edit…** on the
@@ -448,19 +459,10 @@ viewer, or the **E** key while looking at a page.
 
 Above the viewer there is the bar **Editing page N** with **Undo**, **Redo**, **Discard** and
 **Apply**. The editor has its own history: **Ctrl+Z** and **Ctrl+Y** undo and redo only the
-steps made inside it. **Back to the original**, at the top right of the panel, puts the page
-back as it was just scanned (this too is undone with Ctrl+Z).
+steps made inside it. **Back to the original**, at the top right of the panel, puts back the
+crop, the turns and the size the page was scanned with (this too is undone with Ctrl+Z).
 
-The panel has three parts: **Colour**, **Crop**, **Size**.
-
-### Colour
-
-- **Mode**: Colour, Grey or Black and white, even different from how it was acquired.
-- Below, all the controls of the [Adjust tab](#the-adjust-tab): presets, histogram, balance
-  with the eyedropper, sliders, curve, saturation and vibrance, sharpness, descreening,
-  threshold.
-- **Reset colours** brings the page back to the adjustments and the colour it was acquired
-  with.
+The panel has two parts: **Crop** and **Size**.
 
 ### Crop
 

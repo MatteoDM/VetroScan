@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! The editor of a scan already made: its colours again, turning,
-//! straightening and cropping, its size.
+//! The editor of a scan already made: turning, straightening and
+//! cropping, its size. Its colours are changed in "Regola".
 //!
-//! Nothing is taken from the scanner's samples: a page keeps its look and
-//! its [`Transform`], and the editor changes only those, live, on the page
+//! Nothing is taken from the scanner's samples: a page keeps its
+//! [`Transform`], and the editor changes only that, live, on the page
 //! itself. What it was when the editor opened is kept, so "Scarta" puts it
 //! back; the editor has its own Ctrl+Z.
 
 use crate::i18n::{tr, trf};
 use crate::viewer::Selection;
-use crate::{heading, labelled, App, Colour, Field, Look, Message, Page, Tab, View, ALL_COLOURS};
+use crate::{heading, labelled, App, Message, Page, Tab, View};
 use iced::widget::{
     button, checkbox, column, container, mouse_area, pick_list, row, slider, text, text_input,
     Space,
@@ -21,7 +21,6 @@ use std::time::{Duration, Instant};
 /// The parts of the editor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Section {
-    Colour,
     Frame,
     Size,
 }
@@ -204,12 +203,9 @@ pub fn constrain(sel: [f32; 4], prev: [f32; 4], r: f32, fw: f32, fh: f32) -> [f3
     [x, y, w, h]
 }
 
-/// What the editor changes of a page.
+/// What the editor changes of a page: its geometry.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Edit {
-    /// Its own look (None: the shared one).
-    pub look: Option<Look>,
-    pub colour: Colour,
     pub transform: Transform,
 }
 
@@ -217,7 +213,6 @@ pub struct Edit {
 /// step of Ctrl+Z.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Key {
-    Field(Field),
     Angle,
     Crop,
     Size(SizeField),
@@ -298,13 +293,10 @@ pub enum EditMsg {
     Open(usize),
     Apply,
     Discard,
-    /// The colour mode of the page edited (the next scans keep theirs).
-    Colour(Colour),
     Section(Section),
     Undo,
     Redo,
     ResetAll,
-    ResetColour,
     ResetFrame,
     Rotate(bool),
     HalfTurn,
@@ -461,9 +453,6 @@ impl App {
             EditMsg::Open(i) => self.open_editor(i),
             EditMsg::Apply => self.close_editor(true),
             EditMsg::Discard => self.close_editor(false),
-            // Through the panel's changes: with the editor open they are
-            // the page's (its own look from now on).
-            EditMsg::Colour(colour) => self.change(|s| s.colour = colour),
             EditMsg::Section(section) => {
                 if let Some(e) = self.editor.as_mut() {
                     if e.section != section {
@@ -513,21 +502,14 @@ impl App {
                 self.edit_remember(None);
                 if let Some(page) = self.edited_page_mut() {
                     page.set_edit(Edit {
-                        look: None,
-                        colour: page.scanned_colour,
                         transform: Transform::default(),
                     });
                 }
                 self.dirty_page = true;
-                self.note = tr("Tornata com'era stata scansionata (Ctrl+Z per annullare)").into();
-            }
-            EditMsg::ResetColour => {
-                self.edit_remember(None);
-                if let Some(page) = self.edited_page_mut() {
-                    page.own = None;
-                    page.settings.colour = page.scanned_colour;
-                }
-                self.dirty_page = true;
+                self.note = tr(
+                    "Ritaglio, rotazione e dimensioni come alla scansione (Ctrl+Z per annullare)",
+                )
+                .into();
             }
             EditMsg::ResetFrame => self.edit_transform(None, |t, _, _| {
                 *t = Transform {
@@ -742,7 +724,6 @@ impl App {
         };
         let sections = container(
             row![
-                section_tab(tr("Colore"), Section::Colour),
                 section_tab(tr("Ritaglia"), Section::Frame),
                 section_tab(tr("Dimensioni"), Section::Size),
             ]
@@ -771,41 +752,10 @@ impl App {
         ]
         .align_y(Alignment::Center);
         let body = match e.section {
-            Section::Colour => self.colour_section(),
             Section::Frame => self.frame_section(e),
             Section::Size => self.size_section(e),
         };
         column![title, sections, body].spacing(12).into()
-    }
-
-    fn colour_section(&self) -> Element<'_, Message> {
-        let s = self.active();
-        let own = self.edited_page().is_some_and(|p| p.own.is_some());
-        let top = column![
-            labelled(
-                tr("Modo"),
-                pick_list(ALL_COLOURS, Some(s.colour), |c| EditMsg::Colour(c).into())
-                    .width(Length::Fill)
-                    .text_size(13)
-                    .into(),
-            ),
-            row![
-                text(if own {
-                    tr("Regolazioni solo di questa scansione.")
-                } else {
-                    tr("Segue le regolazioni comuni finché non ne cambi una.")
-                })
-                .size(11)
-                .width(Length::Fill),
-                button(text(tr("Ripristina colori")).size(12))
-                    .style(button::text)
-                    .padding([2, 6])
-                    .on_press(EditMsg::ResetColour.into()),
-            ]
-            .align_y(Alignment::Center),
-        ]
-        .spacing(6);
-        self.adjust_controls(top.into())
     }
 
     fn frame_section(&self, e: &Editor) -> Element<'_, Message> {

@@ -1387,8 +1387,6 @@ struct Page {
     /// Turns, straightening, crop and size, worked out from the samples
     /// each time (the samples stay as scanned).
     transform: Transform,
-    /// The colour mode it was scanned in.
-    scanned_colour: Colour,
     /// Its own layout in a PDF (none: the document's).
     layout: Option<PageLayout>,
     /// In a PDF, when it fills the sheet and overflows it: the part kept,
@@ -1420,7 +1418,6 @@ impl Page {
             whole: None,
             raw16: None,
             transform: Transform::default(),
-            scanned_colour: settings.colour,
             layout: None,
             focus: [0.5, 0.5],
         }
@@ -1441,24 +1438,12 @@ impl Page {
     /// What the editor changes.
     fn edit(&self) -> Edit {
         Edit {
-            look: self.own,
-            colour: self.settings.colour,
             transform: self.transform,
         }
     }
 
     fn set_edit(&mut self, e: Edit) {
-        self.own = e.look;
-        self.settings.colour = e.colour;
         self.transform = e.transform;
-    }
-
-    /// The settings of an edit of this page.
-    fn settings_with(&self, e: &Edit, shared: &Settings) -> Settings {
-        let mut s = self.settings;
-        s.colour = e.colour;
-        e.look.unwrap_or(Look::of(shared)).put(&mut s);
-        s
     }
 
     /// The transform for the small copy and the size the viewer shows.
@@ -1601,9 +1586,10 @@ impl Page {
 /// Groups of the adjustments panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Group {
-    Tone,
-    Curve,
     Colour,
+    Tone,
+    Levels,
+    Curve,
     Detail,
     Lineart,
 }
@@ -1900,6 +1886,9 @@ enum Message {
     Dpi(u16),
     Depth(Depth),
     Colour(Colour),
+    /// The colour mode of the page shown (in "Regola"; the next scans
+    /// keep theirs).
+    PageColour(Colour),
     Output(Output),
     PdfSize(PdfSize),
     PdfFit(PdfFit),
@@ -2385,7 +2374,7 @@ impl App {
                 job: None,
                 jobs: std::collections::VecDeque::new(),
                 batch: (0, 0),
-                open: vec![Group::Tone, Group::Colour],
+                open: vec![Group::Colour, Group::Tone, Group::Levels],
                 eyedropper: false,
                 before: false,
                 busy: None,
@@ -2412,7 +2401,7 @@ impl App {
                 epoch: 0,
                 separating: None,
                 editor: None,
-                edit_section: Section::Colour,
+                edit_section: Section::Frame,
                 unsaved: false,
                 confirm: None,
                 after_save: None,
@@ -2567,6 +2556,7 @@ impl App {
                 | Message::CurveSet(..)
                 | Message::Descreen(_)
                 | Message::Adaptive(_)
+                | Message::PageColour(_)
                 | Message::OwnLook(_)
                 | Message::LookApplyToAll
                 | Message::PresetApply(_)
@@ -2833,9 +2823,13 @@ impl App {
         }
     }
 
-    /// Whether the panel edits a page with a look of its own.
+    /// Whether the panel's changes go to the page shown alone: a page
+    /// with a look of its own, or any photo (in Foto and Pellicola each
+    /// photo is an original of its own, and takes a look of its own at
+    /// its first change).
     fn editing_own(&self) -> bool {
-        self.editing_page() && self.shown().is_some_and(|p| p.own.is_some())
+        self.editing_page()
+            && (self.kind == Kind::Photo || self.shown().is_some_and(|p| p.own.is_some()))
     }
 
     /// The shared look changed: redraw the preview, the page shown if it
@@ -2897,10 +2891,6 @@ impl App {
     /// Saves the settings the panel edits for Ctrl+Z: the page's own look,
     /// or the shared settings.
     fn remember(&mut self, field: Option<Field>) {
-        if self.editor().is_some() {
-            self.edit_remember(field.map(editor::Key::Field));
-            return;
-        }
         let now = std::time::Instant::now();
         let same = matches!(
             (field, self.last_edit),
@@ -2913,15 +2903,31 @@ impl App {
         // A page's own look is kept with the page it belongs to:
         // `Index(i)` for page i, `Page` for a new scan waiting for a choice.
         let entry = if self.editing_own() {
-            let page = match self.shown_key() {
-                Some(i) => Target::Index(i),
-                None => Target::Page,
-            };
-            (page, self.active())
+            (self.page_target(), self.active())
         } else {
             (Target::Preview, *self.settings())
         };
         self.undo.push(entry);
+        if self.undo.len() > 100 {
+            self.undo.remove(0);
+        }
+        self.redo_stack.clear();
+    }
+
+    /// The Ctrl+Z target of the page shown: `Index(i)` for page i, `Page`
+    /// for a new scan waiting for a choice.
+    fn page_target(&self) -> Target {
+        match self.shown_key() {
+            Some(i) => Target::Index(i),
+            None => Target::Page,
+        }
+    }
+
+    /// Saves the page shown for Ctrl+Z, whether or not it has a look of
+    /// its own (its colour mode is always its own).
+    fn remember_page(&mut self) {
+        self.last_edit = None;
+        self.undo.push((self.page_target(), self.active()));
         if self.undo.len() > 100 {
             self.undo.remove(0);
         }
@@ -2945,6 +2951,7 @@ impl App {
         match target {
             Target::Page | Target::Index(_) => {
                 let shared = *self.settings();
+                let photo = self.kind == Kind::Photo;
                 // Whether the result tab shows that page now.
                 let shown = self.tab == Tab::Result
                     && match target {
@@ -2956,7 +2963,17 @@ impl App {
                     _ => self.redone.as_mut().map(|(_, p)| p),
                 }?;
                 let current = page.effective(&shared);
-                page.own = Some(Look::of(&settings));
+                // Put back as the shared look is: a page following it goes
+                // on following it, and a photo follows it again (its own
+                // look came with a change).
+                let look = Look::of(&settings);
+                if look != Look::of(&shared) {
+                    page.own = Some(look);
+                } else if photo {
+                    page.own = None;
+                } else if page.own.is_some() {
+                    page.own = Some(look);
+                }
                 page.settings.colour = settings.colour;
                 if shown {
                     self.dirty_page = true;
@@ -2975,35 +2992,30 @@ impl App {
         }
     }
 
-    /// A change to what the panel edits. On a page with its own look, that
-    /// look; otherwise the shared settings, which every page following
-    /// them shows. The colour mode of a page shown stays its own.
+    /// A change to what the panel edits. On a page with its own look (or
+    /// a photo, which takes one), that look; otherwise the shared
+    /// settings, which every page following them shows. The colour mode
+    /// of a page shown stays its own.
     fn apply(&mut self, f: impl Fn(&mut Settings)) {
-        if self.editor().is_some() {
-            // The editor gives the page a look of its own.
-            let shared = *self.settings();
-            if let Some(page) = self.shown_mut() {
-                let mut s = page.effective(&shared);
-                f(&mut s);
-                page.settings.colour = s.colour;
-                page.own = Some(Look::of(&s));
-            }
-            self.dirty_page = true;
-            return;
-        }
         if self.editing_page() {
             let shared = *self.settings();
+            let own = self.editing_own();
             let Some(page) = self.shown_mut() else {
                 return;
             };
             let mut s = page.effective(&shared);
             f(&mut s);
+            let look = Look::of(&s);
+            let same = look == Look::of(&shared);
             page.settings.colour = s.colour;
-            if page.own.is_some() {
-                page.own = Some(Look::of(&s));
+            if page.own.is_some() || (own && !same) {
+                page.own = Some(look);
+                self.dirty_page = true;
+            } else if same {
+                // Only its colour mode changed.
                 self.dirty_page = true;
             } else {
-                Look::of(&s).put(self.settings_mut());
+                look.put(self.settings_mut());
                 self.shared_changed();
             }
         } else {
@@ -3097,7 +3109,7 @@ impl App {
             Some(e) if self.before => e.start,
             _ => page.edit(),
         };
-        let settings = page.settings_with(&edit, &shared);
+        let settings = page.effective(&shared);
         let adjust = if self.before && editor.is_none() && shown {
             Adjustments::default()
         } else {
@@ -4350,8 +4362,8 @@ impl App {
                 }
             }
             // The colour of the next scans, as the resolution beside it,
-            // whatever the viewer shows (a page's own is changed in its
-            // editor: EditMsg::Colour). The pages keep theirs.
+            // whatever the viewer shows (a page's own is changed in
+            // "Regola": Message::PageColour). The pages keep theirs.
             Message::Colour(colour) => {
                 self.remember_shared();
                 let kind = self.kind;
@@ -4361,6 +4373,14 @@ impl App {
                     s.output = outputs(kind, colour, s.depth)[0];
                 }
                 self.dirty_preview = true;
+            }
+            Message::PageColour(colour) => {
+                if self.editing_page() && self.active().colour != colour {
+                    // Kept with the page, whether or not it has a look of
+                    // its own: the mode is always the page's.
+                    self.remember_page();
+                    self.apply(|s| s.colour = colour);
+                }
             }
             Message::Output(output) => self.settings_mut().output = output,
             Message::PdfSize(size) => self.settings_mut().pdf_size = size,
@@ -4570,16 +4590,52 @@ impl App {
             }
             Message::OwnLook(on) => {
                 let shared = *self.settings();
-                if self.kind == Kind::Document && self.editing_page() {
+                if self.editing_page() && (self.kind == Kind::Document || !on) {
+                    let photo = self.kind == Kind::Photo;
+                    if photo {
+                        self.remember_page();
+                    }
                     if let Some(page) = self.shown_mut() {
                         page.own = on.then(|| page.own.unwrap_or(Look::of(&shared)));
                         self.dirty_page = true;
                     }
-                    self.note = if on {
-                        tr("Questa pagina ha ora regolazioni sue").into()
-                    } else {
-                        tr("Questa pagina segue di nuovo le regolazioni comuni").into()
+                    self.note = match (photo, on) {
+                        (false, true) => tr("Questa pagina ha ora regolazioni sue").into(),
+                        (false, false) => {
+                            tr("Questa pagina segue di nuovo le regolazioni comuni").into()
+                        }
+                        (true, _) => tr(
+                            "Questa foto segue di nuovo le regolazioni comuni (Ctrl+Z per tornare \
+                             indietro)",
+                        )
+                        .into(),
                     };
+                }
+            }
+            // Foto and Pellicola: the look of the photo shown becomes the
+            // shared one, and every photo follows it again.
+            Message::LookApplyToAll if self.kind == Kind::Photo => {
+                let shared = *self.settings();
+                let look = self
+                    .shown()
+                    .filter(|_| self.editing_page())
+                    .map(|p| Look::of(&p.effective(&shared)));
+                if let Some(look) = look {
+                    self.remember_shared();
+                    look.put(self.settings_mut());
+                    for page in &mut self.pages {
+                        page.own = None;
+                    }
+                    if let Some((_, page)) = &mut self.redone {
+                        page.own = None;
+                    }
+                    let shown = self.current;
+                    self.stale = (0..self.pages.len())
+                        .filter(|&i| Some(i) != shown)
+                        .collect();
+                    self.dirty_preview = true;
+                    self.dirty_page = true;
+                    self.note = tr("Regolazioni applicate a tutte le foto").into();
                 }
             }
             Message::LookApplyToAll => {
@@ -4716,23 +4772,25 @@ impl App {
                 let d = Adjustments::default();
                 let j = &mut s.adjust;
                 match group {
-                    Group::Tone => {
+                    Group::Colour => {
                         j.temperature = d.temperature;
                         j.tint = d.tint;
+                        j.saturation = d.saturation;
+                        j.vibrance = d.vibrance;
+                    }
+                    Group::Tone => {
                         j.exposure = d.exposure;
+                        j.contrast = d.contrast;
                         j.highlights = d.highlights;
                         j.shadows = d.shadows;
                         j.whites = d.whites;
                         j.blacks = d.blacks;
+                    }
+                    Group::Levels => {
                         j.black = d.black;
                         j.white = d.white;
                         j.gamma = d.gamma;
                         j.brightness = d.brightness;
-                        j.contrast = d.contrast;
-                    }
-                    Group::Colour => {
-                        j.saturation = d.saturation;
-                        j.vibrance = d.vibrance;
                     }
                     Group::Curve => j.curve = d.curve,
                     Group::Detail => {
@@ -6711,7 +6769,7 @@ impl App {
             pane = pane.push(
                 text(trf(
                     "Valgono per le prossime scansioni: il colore della {name} si cambia in \
-                     «Modifica…».",
+                     «Regola».",
                     &[("name", &self.page_name(i))],
                 ))
                 .size(11),
@@ -6997,11 +7055,56 @@ impl App {
             ))
             .size(11)
             .into(),
-            (Kind::Photo, _) => text(tr("Anteprima e foto hanno sempre le stesse regolazioni."))
-                .size(11)
-                .into(),
+            (Kind::Photo, true) => {
+                let own = self.shown().is_some_and(|p| p.own.is_some());
+                let scope = column![text(if own {
+                    tr("Regolazioni solo di questa foto.")
+                } else {
+                    tr(
+                        "Segue le regolazioni comuni finché non ne cambi una: da lì valgono \
+                         solo per questa foto.",
+                    )
+                })
+                .size(11)]
+                .spacing(4);
+                let mut buttons = row![].spacing(4);
+                if own {
+                    buttons = buttons.push(
+                        button(text(tr("Torna alle regolazioni comuni")).size(12))
+                            .style(button::text)
+                            .padding([2, 6])
+                            .on_press(Message::OwnLook(false)),
+                    );
+                }
+                if self.pages.len() > 1 || own {
+                    buttons = buttons.push(
+                        button(text(tr("Applica a tutte le foto")).size(12))
+                            .style(button::text)
+                            .padding([2, 6])
+                            .on_press(Message::LookApplyToAll),
+                    );
+                }
+                scope.push(buttons).into()
+            }
+            (Kind::Photo, false) => text(tr(
+                "Le modifiche valgono per l'anteprima, per le prossime scansioni \
+                 e per le foto che seguono le regolazioni comuni.",
+            ))
+            .size(11)
+            .into(),
         };
-        let top = column![text(editing.to_uppercase()).size(11), scope].spacing(10);
+        let mut top = column![text(editing.to_uppercase()).size(11), scope].spacing(10);
+        // The colour mode of a page already scanned (the next scans have
+        // theirs in "Scansione").
+        if self.editing_page() {
+            top = top.push(labelled(
+                tr("Modo"),
+                pick_list(ALL_COLOURS, Some(self.active().colour), Message::PageColour)
+                    .width(Length::Fill)
+                    .text_size(13)
+                    .into(),
+            ));
+        }
         self.adjust_controls(top.into())
     }
 
@@ -7043,50 +7146,56 @@ impl App {
                     .into(),
             }
         };
-        let base = self.group(
-            Group::Tone,
-            tr("Base"),
-            !lineart,
-            tr("In bianco e nero conta la soglia, qui sotto"),
-            column![
-                row![
-                    button(text(tr("Contagocce neutro")).size(12))
-                        .style(if self.eyedropper {
-                            button::primary
-                        } else {
-                            button::secondary
-                        })
-                        .on_press(Message::Eyedropper),
-                    button(text(tr("Livelli auto")).size(12))
-                        .style(button::secondary)
-                        .on_press(Message::AutoLevels),
-                ]
-                .spacing(6),
-                self.adjuster(Field::Temperature, &s),
-                self.adjuster(Field::Tint, &s),
-                self.adjuster(Field::Exposure, &s),
-                self.adjuster(Field::Contrast, &s),
-                self.adjuster(Field::Highlights, &s),
-                self.adjuster(Field::Shadows, &s),
-                self.adjuster(Field::Whites, &s),
-                self.adjuster(Field::Blacks, &s),
-                text(tr("Livelli")).size(12),
-                self.adjuster(Field::Black, &s),
-                self.adjuster(Field::White, &s),
-                self.adjuster(Field::Gamma, &s),
-                self.adjuster(Field::Brightness, &s),
-            ]
-            .spacing(8)
-            .into(),
-        );
         let colour = self.group(
             Group::Colour,
             tr("Colore"),
             s.colour == Colour::Rgb,
             tr("Solo per le scansioni a colori"),
             column![
+                row![button(text(tr("Contagocce neutro")).size(12))
+                    .style(if self.eyedropper {
+                        button::primary
+                    } else {
+                        button::secondary
+                    })
+                    .on_press(Message::Eyedropper)],
+                self.adjuster(Field::Temperature, &s),
+                self.adjuster(Field::Tint, &s),
                 self.adjuster(Field::Vibrance, &s),
                 self.adjuster(Field::Saturation, &s),
+            ]
+            .spacing(8)
+            .into(),
+        );
+        let tone = self.group(
+            Group::Tone,
+            tr("Tono"),
+            !lineart,
+            tr("In bianco e nero conta la soglia, qui sotto"),
+            column![
+                self.adjuster(Field::Exposure, &s),
+                self.adjuster(Field::Contrast, &s),
+                self.adjuster(Field::Highlights, &s),
+                self.adjuster(Field::Shadows, &s),
+                self.adjuster(Field::Whites, &s),
+                self.adjuster(Field::Blacks, &s),
+            ]
+            .spacing(8)
+            .into(),
+        );
+        let levels = self.group(
+            Group::Levels,
+            tr("Livelli"),
+            !lineart,
+            tr("In bianco e nero conta la soglia, qui sotto"),
+            column![
+                row![button(text(tr("Livelli auto")).size(12))
+                    .style(button::secondary)
+                    .on_press(Message::AutoLevels)],
+                self.adjuster(Field::Black, &s),
+                self.adjuster(Field::White, &s),
+                self.adjuster(Field::Gamma, &s),
+                self.adjuster(Field::Brightness, &s),
             ]
             .spacing(8)
             .into(),
@@ -7264,9 +7373,10 @@ impl App {
             top,
             presets,
             histogram,
-            base,
-            curve_group,
             colour,
+            tone,
+            levels,
+            curve_group,
             detail,
             bw
         ]

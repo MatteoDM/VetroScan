@@ -229,11 +229,8 @@ impl App {
 
     /// Whether the curve editor is on the screen.
     pub fn curve_shown(&self) -> bool {
-        let panel = match self.editor() {
-            Some(e) => e.section == crate::editor::Section::Colour,
-            None => self.pane == crate::Pane::Adjust,
-        };
-        panel
+        self.editor().is_none()
+            && self.pane == crate::Pane::Adjust
             && self.open.contains(&crate::Group::Curve)
             && self.active().colour != crate::Colour::Lineart
     }

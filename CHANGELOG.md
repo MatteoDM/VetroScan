@@ -77,11 +77,20 @@ GitHub; here they are in English.
   did not see, leave one out, turn it by 0.1° or 1°, or find them again. **Split into N**
   (Enter) cuts, **Cancel** (Esc) leaves the scan whole. With nothing found, an area can be
   drawn by hand.
+- **The colours in one place, the Adjust tab.** **Edit…** now changes only the shape (crop,
+  turns, straightening, size); the colour mode of a page or a photo already scanned is
+  **Mode** at the top of Adjust, and its adjustments are those of Adjust. The sliders are in
+  three groups: **Colour** (eyedropper, temperature, tint, vibrance, saturation), **Tone**
+  (exposure, contrast, highlights, shadows, whites, blacks) and **Levels** (auto levels,
+  black and white points, gamma, brightness).
+- In Photo and Film a change in Adjust with a photo shown is for that photo only (before, it
+  changed every photo and the preview): **Apply to all photos** and **Back to the common
+  adjustments** are next to it.
 
 ### Fixed
 - **Colour** in the Scan tab is always for the next scans, as the resolution next to it:
   with a page shown it used to change that page instead, and the status bar and the formats
-  offered in Output did not agree with it. A page's own colour is changed in its editor.
+  offered in Output did not agree with it. A page's own colour is changed in Adjust.
 
 ## [0.4.0] - 2026-11-08
 

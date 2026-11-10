@@ -1102,14 +1102,14 @@ fn ctrl_z_takes_a_setting_back_and_ctrl_y_puts_it_again() {
 }
 
 #[test]
-fn colour_in_the_scan_settings_is_for_the_next_scans_a_page_changes_it_in_its_editor() {
-    use crate::{Colour, EditMsg};
+fn colour_in_the_scan_settings_is_for_the_next_scans_a_page_changes_it_in_regola() {
+    use crate::Colour;
     let mut ui = document(1);
     ui.send(Message::Save);
     ui.send(Message::PageShow(0));
     ui.send(Message::Pane(crate::Pane::Scan));
     assert!(ui.shows(
-        "Valgono per le prossime scansioni: il colore della pagina 1 si cambia in «Modifica…»."
+        "Valgono per le prossime scansioni: il colore della pagina 1 si cambia in «Regola»."
     ));
     // Chosen with the page shown: the next scans, as the resolution beside it.
     ui.send(Message::Colour(Colour::Grey));
@@ -1118,15 +1118,71 @@ fn colour_in_the_scan_settings_is_for_the_next_scans_a_page_changes_it_in_its_ed
     assert!(!ui.app.unsaved, "the page did not change");
     ui.send(Message::Undo);
     assert_eq!(ui.app.settings().colour, Colour::Rgb);
-    // The page's own, in its editor.
-    ui.send(Message::Edit(EditMsg::Open(0)));
-    ui.send(Message::Edit(EditMsg::Colour(Colour::Lineart)));
-    ui.send(Message::Edit(EditMsg::Apply));
+    // The page's own, at the top of "Regola".
+    ui.send(Message::Pane(crate::Pane::Adjust));
+    assert!(ui.shows("Modo"));
+    ui.send(Message::PageColour(Colour::Lineart));
     assert_eq!(ui.app.pages[0].settings.colour, Colour::Lineart);
     assert_eq!(ui.app.settings().colour, Colour::Rgb);
     assert!(ui.app.unsaved);
+    // Ctrl+Z gives the page its colour back, Ctrl+Y the new one again.
+    ui.send(Message::Undo);
+    assert_eq!(ui.app.pages[0].settings.colour, Colour::Rgb);
+    ui.send(Message::Redo);
+    assert_eq!(ui.app.pages[0].settings.colour, Colour::Lineart);
     ui.scan(1);
     assert_eq!(ui.app.pages[1].settings.colour, Colour::Rgb);
+}
+
+#[test]
+fn the_editor_changes_only_the_geometry() {
+    use crate::EditMsg;
+    let mut ui = document(1);
+    ui.send(Message::Edit(EditMsg::Open(0)));
+    assert!(!ui.shows("Ripristina colori"));
+    assert!(!ui.shows("Modo"));
+    ui.send(Message::Edit(EditMsg::Discard));
+    assert!(ui.app.editor.is_none());
+}
+
+#[test]
+fn a_photo_takes_a_look_of_its_own_at_its_first_change() {
+    use crate::Field;
+    let mut ui = Ui::new();
+    ui.send(Message::Kind(Kind::Photo));
+    ui.send(Message::AutoCrop(false));
+    ui.scan(1);
+    ui.send(Message::PageDuplicate(0));
+    assert_eq!(ui.app.pages.len(), 2);
+    assert!(ui.app.pages.iter().all(|p| p.own.is_none()));
+    ui.send(Message::PageShow(1));
+    ui.send(Message::Pane(crate::Pane::Adjust));
+    assert!(ui.shows(
+        "Segue le regolazioni comuni finché non ne cambi una: da lì valgono solo per questa foto."
+    ));
+    // Only the photo shown: not the other, the preview or the next scans.
+    ui.send(Message::Adjust(Field::Temperature, 40.0));
+    assert_eq!(ui.app.pages[1].own.unwrap().adjust.temperature, 40.0);
+    assert!(ui.app.pages[0].own.is_none());
+    assert_eq!(ui.app.photo.adjust.temperature, 0.0);
+    assert!(ui.shows("Regolazioni solo di questa foto."));
+    // Ctrl+Z: back to following the shared look.
+    ui.send(Message::Undo);
+    assert!(ui.app.pages[1].own.is_none());
+    ui.send(Message::Redo);
+    assert_eq!(ui.app.pages[1].own.unwrap().adjust.temperature, 40.0);
+    // Given to all: the shared look, which every photo follows again.
+    ui.click("Applica a tutte le foto");
+    assert_eq!(ui.app.photo.adjust.temperature, 40.0);
+    assert!(ui.app.pages.iter().all(|p| p.own.is_none()));
+    let shared = *ui.app.settings();
+    assert_eq!(ui.app.pages[0].effective(&shared).adjust.temperature, 40.0);
+    // And back to the common look on its own.
+    ui.send(Message::Adjust(Field::Saturation, 30.0));
+    assert!(ui.app.pages[1].own.is_some());
+    ui.click("Torna alle regolazioni comuni");
+    assert!(ui.app.pages[1].own.is_none());
+    assert_eq!(ui.app.photo.adjust.saturation, 0.0);
 }
 
 #[test]
