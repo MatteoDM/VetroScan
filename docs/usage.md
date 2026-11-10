@@ -128,9 +128,6 @@ VetroScan scans both **negatives** and **slides** with it:
 Slides are scanned as negatives are on the HP 3770, with the longer exposure of its negatives'
 modes: measured on real slides, it halves the noise in their dark parts (where a slide is far
 denser than a negative), for about 20 seconds more; nothing came out burnt in the light parts.
-At 1200 dpi slides get a longer exposure still (three times the glass's instead of twice):
-their darkest parts came out another 1.2-1.5 times less noisy, the light parts as before, for
-about 30 seconds more (a strip of two slides takes about two and a half minutes).
 
 With the automatic crop off you get the whole strip as one image; **Split the frames**, on the
 viewer, shows the frames found on it, to correct, then cuts it into one image per frame,

@@ -99,10 +99,10 @@ enum Command {
         /// (at most 130: the glass, never past it).
         #[arg(long, value_parser = parse_height)]
         height: Option<f64>,
-        /// Experimental, for measuring negatives: three times the glass's
-        /// line instead of twice (with --film, at 1200 dpi only: the one
-        /// resolution where it ran on the motor). The light parts of a film
-        /// may saturate. Slides at 1200 dpi always get it, as in the app.
+        /// Experimental, for measuring: three times the glass's line
+        /// instead of twice (with --film, at 1200 dpi only: the one
+        /// resolution where it ran on the motor, on 8 November 2026). The
+        /// light parts of a film may saturate.
         #[arg(long, requires = "film")]
         triple_line: bool,
     },
@@ -913,9 +913,7 @@ fn tma_scan(
         transparency: true,
         // Films with the negatives' longer line, slides too (as the driver).
         negative: film.is_some(),
-        // Slides at 1200 dpi with three times the line, as the driver asks
-        // for them (rts8822::session_request).
-        triple_line: triple_line || (matches!(film, Some(FilmArg::Slide)) && dpi == 1200),
+        triple_line,
         depth: 16,
         adjust: Adjustments {
             sharpen: 0.0,

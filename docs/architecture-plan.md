@@ -1163,20 +1163,7 @@ what it measures. One gap: the stripes are declared per resolution, not per sour
       `with_slides` (two slides in the holder, `Controls::load` for the strip); e2e with and
       without the choice;
    3. **more than one exposure** (step 4): a normal and a longer pass merged, for the shadows
-      beyond density 2.5; only on line periods already run, measured before. **A longer single
-      pass first, done on 10 November 2026**: the three times longer line the negatives had on
-      8 November (`scan_modes::NEGATIVE_TRIPLE_1200`, run at 1200 dpi only), measured on the
-      two slides with `tma-scan --triple-line` (four scans, two with each line; notes in
-      `captures/tma/note.txt`, comparisons in `scansioni/tma/confronto_riga3x_*.png`): the
-      calibration keeps the same scale, nothing saturated (at most 58297, in the holder's
-      clear parts), the shadows' signal/noise 1.2-1.3 times higher at density 2-2.5 and
-      1.4-1.5 beyond (cautious, the second pair moved by 0.2-0.6 mm; 1.4-1.9 against the
-      first), the light parts the same within the measure, the scanner's black 1.4 times
-      less noisy, 151 s instead of 120-129. Matteo chose it: the driver asks it for slides at
-      1200 dpi (`Request::triple_line`, `session_request`); negatives keep twice (red
-      saturated on their base), 600 dpi too (never run). Averaging two passes, computed from
-      the same scans, gives about as much in twice the time. Merging a normal and a longer
-      pass remains for the shadows beyond 2.5, if ever needed.
+      beyond density 2.5; only on line periods already run, measured before.
 6. **The colour of films, per source** (new, from HP's driver, 10 November 2026): HP's WIA
    driver (`hpxp3770.dll`, its resource `HPSJ3770`, Huffman-compressed, decoded in
    `captures/tma/driver_hp`) corrects every source with a 3x3 colour matrix: the glass's
