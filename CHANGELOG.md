@@ -17,6 +17,8 @@ GitHub; here they are in English.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-11
+
 ### Added
 - `hp3770 tma-scan --triple-line` (experimental, for measuring): films at 1200 dpi with three
   times the glass's line instead of twice, as the HP 3770 first scanned negatives; refused at
@@ -374,7 +376,8 @@ First version.
 - Texts with a run of spaces in the middle (note on RAW, on 16 bits and on the buttons in
   Windows); the button of the default folder uses the system's separator.
 
-[Unreleased]: https://github.com/MatteoDM/scanner/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/MatteoDM/scanner/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/MatteoDM/scanner/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/MatteoDM/scanner/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/MatteoDM/scanner/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/MatteoDM/scanner/compare/v0.3.1...v0.4.0
