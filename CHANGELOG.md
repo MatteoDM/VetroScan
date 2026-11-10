@@ -26,6 +26,13 @@ GitHub; here they are in English.
   does the same.
 - `hp3770 develop --destripe` takes the scanner's stripes away from a saved film scan before
   turning it into its picture.
+- **Roll**, for films: the base of a strip (the bare film's orange, measured between its
+  frames) can be locked with **Lock the base of the last strip** and is then used for every
+  following strip of the same roll, which measures only its highlights and blacks; shown, kept
+  in the preferences of Film, unlocked with **New roll**. A strip with a single frame no
+  longer has to guess its base from its shadows (casts of up to 12-16 levels of 255 on real
+  negatives). `hp3770 develop --base R G B` develops a saved scan with a base given, and
+  prints the one between its frames.
 
 ### Changed
 - **Remove the scanner's stripes** now also works in **Film**: the HP 3770 leaves the same

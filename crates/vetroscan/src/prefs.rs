@@ -130,6 +130,9 @@ pub struct StoredMode {
     /// Films: smooth the colour's noise (absent: the default of the way of
     /// working, yes for films).
     pub colour_noise: Option<bool>,
+    /// Films: the base of the roll in the adapter, locked ("Blocca la base"),
+    /// transmission per channel (absent: each strip measures its own).
+    pub roll_base: Option<[f32; 3]>,
     pub adjust: StoredAdjust,
 }
 
@@ -152,6 +155,7 @@ impl Default for StoredMode {
             destripe: None,
             double: None,
             colour_noise: None,
+            roll_base: None,
             adjust: StoredAdjust::default(),
         }
     }

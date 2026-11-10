@@ -1091,9 +1091,22 @@ what it measures. One gap: the stripes are declared per resolution, not per sour
    `Capabilities::stripes_at(source, dpi)`): the 3770 declares the same for glass and films
    (same sensor, measured); the 4490 has its own lamp in the lid and may have other stripes or
    none. "Misura le righe" stays for the glass, with a film measure later if needed.
-3. **The base locked per roll**: measured once (on a strip's gaps or a blank leader) and used
-   for every frame of the same roll, so frames of one roll come out alike; a new roll measures
-   again. Stored with the pages and in the preferences of the Film mode, shown and resettable.
+3. **The base locked per roll** · **done on 10 November 2026**
+   (`film::measure_strip_with(.., base)`: a base given is used as it is, the highlights and
+   black still measured inside the strip's frames; `Strip::gaps`, the base between the frames
+   when none is given. Pellicola, Scansione tab, block **Rullino**: "Blocca la base
+   dell'ultima striscia" (only after a strip whose base was measured in its gaps), the base
+   shown R/G/B, "Nuovo rullino" to unlock; `StoredMode::roll_base` in the preferences of the
+   Film mode; `hp3770 develop --base R G B`; an e2e with the adapter). Measured on the strips
+   of 10 November (1200 dpi): the same strip scanned twice in a row gives gap bases 0.6-4 %
+   apart (the scanner's level from one scan to the next), so a base locked on one scan moves
+   another scan's picture by 1-2.5 levels of 255 on average; a single frame without gaps,
+   with its base guessed from its own film (`base_auto`), is off by -0.04 to +0.08 in density
+   and shifts its picture by up to 12-16 levels in one channel (a cast). Stored with the
+   pages: left to step 6 (the raw scan kept with its base in the metadata). Was: measured
+   once (on a strip's gaps or a blank leader) and used for every frame of the same roll, so
+   frames of one roll come out alike; a new roll measures again. Stored with the pages and in
+   the preferences of the Film mode, shown and resettable.
 4. **An exposure per channel in the contract**: `Capabilities` says the scanner can expose the
    channels differently, up to which factor and at which resolutions; `ScanRequest` asks for
    the factors; the app computes them from the roll's base (the dimmest channel brought up, the

@@ -115,6 +115,11 @@ enum Command {
         /// it (`scan_imaging::chroma`).
         #[arg(long)]
         colour_noise: bool,
+        /// A negative's base as given, transmission per channel (0-1, red
+        /// green blue, as "negative base" prints it): a roll's base locked,
+        /// instead of the one between this strip's frames.
+        #[arg(long, num_args = 3, value_delimiter = ',', value_names = ["R", "G", "B"])]
+        base: Option<Vec<f32>>,
     },
     /// Switch the flatbed lamp, or the transparency adapter's, on or off.
     ///
@@ -280,11 +285,19 @@ fn main() -> ExitCode {
             film,
             destripe,
             colour_noise,
+            base,
         } => read_png16(&input).and_then(|(w, h, mut samples)| {
             if destripe {
                 destripe_samples(&mut samples, w, h, dpi)?;
             }
-            develop(samples, w, h, dpi, film, colour_noise, &output)
+            let base = match base.as_deref() {
+                None => None,
+                Some(&[r, g, b]) if [r, g, b].iter().all(|v| *v > 0.0 && *v <= 1.0) => {
+                    Some([r, g, b])
+                }
+                Some(_) => return Err("--base wants three transmissions from 0 to 1".into()),
+            };
+            develop(samples, w, h, dpi, film, colour_noise, base, &output)
         }),
         Command::Detect { input, crop } => detect(&input, crop.as_deref()),
         Command::Stripes { input } => stripes(&input),
@@ -658,8 +671,10 @@ fn destripe_samples(samples: &mut [u16], width: usize, height: usize, dpi: u16) 
 
 /// What a scan with the transparency adapter becomes: its 16-bit samples
 /// (`width` x `height` RGB, the adapter's area from its top left corner,
-/// at `dpi`), measured and turned into the picture with `film`, saved as
-/// `output`. Shared by `tma-scan` and `develop`.
+/// at `dpi`), measured and turned into the picture with `film` (a
+/// negative from its `base` if given), saved as `output`. Shared by
+/// `tma-scan` and `develop`.
+#[allow(clippy::too_many_arguments)]
 fn develop(
     samples: Vec<u16>,
     width: usize,
@@ -667,6 +682,7 @@ fn develop(
     dpi: u16,
     film: Option<FilmArg>,
     colour_noise: bool,
+    given: Option<[f32; 3]>,
     output: &std::path::Path,
 ) -> CliResult {
     use scan_imaging::adjust::{render_samples, Adjustments, Samples};
@@ -723,7 +739,9 @@ fn develop(
     }
     // The base in the gaps between frames; the levels inside the frames,
     // a twentieth in from each side (away from the holder's edges).
-    let base = film::base_between(&samples, image.width, &frames);
+    let gaps = film::base_between(&samples, image.width, &frames);
+    eprintln!("base in the gaps {gaps:.3?}");
+    let base = given.or(gaps);
     let film_part: Vec<u16> = if frames.is_empty() {
         let skip = (rows.end.min(image.height) * image.width * 3).min(samples.len());
         samples[skip..].to_vec()
@@ -862,7 +880,16 @@ fn tma_scan(
     );
     let samples = report.samples16.ok_or("no 16-bit samples")?;
     save_png16(output, image.width, image.height, &samples)?;
-    develop(samples, image.width, image.height, dpi, film, false, output)?;
+    develop(
+        samples,
+        image.width,
+        image.height,
+        dpi,
+        film,
+        false,
+        None,
+        output,
+    )?;
     println!("scanned in       {:.1} s", start.elapsed().as_secs_f32());
     Ok(())
 }

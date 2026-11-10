@@ -144,6 +144,18 @@ Two ticks in the **Scan** tab clean a film's picture:
 - **Remove the scanner's stripes** (off by default): the faint horizontal lines the HP 3770
   leaves on every scan, taken away from the negative before it becomes a positive.
 
+Below them, **Roll**: the film's **base**, the orange of the bare film, which sets how each
+colour is turned into the positive. By default each strip measures its own, in the gaps
+between its frames. The frames of one roll all have the same base, so once a strip with at
+least two frames has been scanned you can press **Lock the base of the last strip**: the base
+is shown (red, green and blue, as the share of the lamp's light the bare film lets through)
+and every following strip uses it, measuring by itself only its highlights and blacks, which
+follow the scenes. It matters most for a strip with a single frame, or with no gap in view:
+without a locked base its base is guessed from the darkest shadows of the picture, and on
+real negatives that gave casts of up to 12-16 levels of 255 in one colour; with the roll's
+base, one or two. VetroScan remembers the base locked, even after closing; for another film
+press **New roll** and each strip measures its own again.
+
 **Take care:**
 
 - In **Photo** and **Film** a new scan takes the place of the photos you see (the app asks

@@ -2019,6 +2019,74 @@ fn films_reduce_the_colour_noise_by_default_and_remember_the_tick() {
 }
 
 #[test]
+fn the_base_of_a_roll_is_locked_used_and_remembered() {
+    let lock = "Blocca la base dell'ultima striscia";
+    let (mut ui, _) = with_adapter();
+    ui.send(Message::Pane(crate::Pane::Scan));
+    assert!(!ui.shows("Rullino"), "not on the glass");
+    ui.click("Pellicola");
+    ui.send(Message::Dpi(200));
+    assert!(ui.shows("Rullino"));
+    // Nothing scanned yet: nothing to lock.
+    assert!(ui.click_messages(lock).is_empty());
+    // A strip: its own base, from the gaps between its frames.
+    ui.click("Scansiona foto");
+    assert_eq!(ui.app.pages.len(), 2, "{}", ui.app.note);
+    let own = ui.app.strip_base.expect("the base between the frames");
+    let first: Vec<Vec<u16>> = ui
+        .app
+        .pages
+        .iter()
+        .map(|p| p.raw16.as_deref().expect("16 bits").to_vec())
+        .collect();
+    ui.click(lock);
+    assert_eq!(ui.app.roll_base, Some(own));
+    assert!(ui.shows("Nuovo rullino"));
+    assert!(!ui.shows(lock));
+    assert!(ui.app.note.contains("bloccata"), "{}", ui.app.note);
+    assert_eq!(ui.app.prefs().film.roll_base, Some(own));
+    // The next strip of the roll: the same base, the same pictures (the
+    // made-up strip is the same each time).
+    ui.send(Message::Scan);
+    assert_eq!(ui.question(), Some("Fare una nuova scansione?"));
+    ui.click("Scansiona");
+    assert_eq!(ui.app.pages.len(), 2, "{}", ui.app.note);
+    let again: Vec<Vec<u16>> = ui
+        .app
+        .pages
+        .iter()
+        .map(|p| p.raw16.as_deref().expect("16 bits").to_vec())
+        .collect();
+    assert_eq!(again, first);
+    // A base locked on another strip of the roll, a little denser: it is
+    // the one used, not this strip's own (which is not measured again).
+    let other = own.map(|b| b * 0.85);
+    ui.app.roll_base = Some(other);
+    ui.send(Message::Scan);
+    ui.click("Scansiona");
+    assert_eq!(ui.app.pages.len(), 2, "{}", ui.app.note);
+    assert_ne!(
+        ui.app.pages[0].raw16.as_deref().expect("16 bits"),
+        &first[0][..]
+    );
+    assert_eq!(ui.app.strip_base, Some(own));
+    // Remembered: the app opened again has it.
+    let (mut reopened, _) = with_adapter();
+    assert_eq!(reopened.app.roll_base, Some(other));
+    reopened.click("Pellicola");
+    assert!(reopened.shows("Nuovo rullino"));
+    // "Nuovo rullino": each strip its own base again, forgotten too.
+    ui.click("Nuovo rullino");
+    assert_eq!(ui.app.roll_base, None);
+    assert_eq!(ui.app.prefs().film.roll_base, None);
+    assert!(ui.shows("Rullino") && ui.shows(lock));
+    assert!(
+        ui.click_messages(lock).is_empty(),
+        "the last strip was the old roll's"
+    );
+}
+
+#[test]
 fn the_scanners_stripes_go_from_films_too() {
     // A strip scanned with the stripes on the negative, the tick off then
     // on (each in its own run: a second scan would ask to replace).

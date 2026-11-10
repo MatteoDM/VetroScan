@@ -805,6 +805,7 @@ impl Settings {
             destripe: Some(self.destripe),
             double: Some(self.double),
             colour_noise: Some(self.colour_noise),
+            roll_base: None,
             adjust: prefs::StoredAdjust {
                 temperature: a.temperature,
                 tint: a.tint,
@@ -1921,6 +1922,10 @@ enum Message {
     Double(bool),
     /// "Riduci il rumore di colore" (films).
     ColourNoise(bool),
+    /// "Blocca la base": the base of the last strip becomes the roll's.
+    LockBase,
+    /// "Nuovo rullino": each strip measures its own base again.
+    NewRoll,
     /// "Misura le righe": a strip of a white sheet at each resolution.
     MeasureStripes,
     /// Back to the stripes the scanner's model declares.
@@ -2146,6 +2151,16 @@ impl Bench {
     }
 }
 
+/// A scan of negatives developed ([`App::develop`]): the picture at 8 bits
+/// and at 16, its measures and the base found between its frames.
+type Developed = (Image, Option<Vec<u16>>, Option<Negative>, Option<[f32; 3]>);
+
+/// A film base read back from the preferences: a transmission per channel,
+/// above nothing and at most the lamp's.
+fn valid_base(base: [f32; 3]) -> bool {
+    base.iter().all(|b| b.is_finite() && *b > 0.0 && *b <= 1.0)
+}
+
 /// What belongs to where the scans come from, the glass or the adapter's
 /// area: its preview, the area chosen and the originals found on it.
 /// Documento and Foto share the glass's.
@@ -2199,6 +2214,13 @@ struct App {
     /// How the negatives of the preview become their picture: the full
     /// scans take the same measures, for the same picture.
     negative: Option<Negative>,
+    /// The base of the roll in the adapter, locked: every strip scanned is
+    /// measured from it, so the frames of one roll come out alike (their
+    /// highlights and black stay their own). None: each strip its own.
+    roll_base: Option<[f32; 3]>,
+    /// The base measured in the gaps between the frames of the last strip
+    /// developed, what "Blocca la base" locks.
+    strip_base: Option<[f32; 3]>,
     /// "Pellicola" was chosen with the adapter not plugged in, as last
     /// heard: switch when the scanner's state says it is.
     film_wanted: bool,
@@ -2361,6 +2383,8 @@ impl App {
                 film_preview: None,
                 doubled: false,
                 negative: None,
+                roll_base: stored.film.roll_base.filter(|b| valid_base(*b)),
+                strip_base: None,
                 film_wanted: false,
                 tab: Tab::Preview,
                 pane: Pane::Scan,
@@ -2761,24 +2785,84 @@ impl App {
         raw
     }
 
+    /// "Rullino", films only: the base of the roll locked and shown, or
+    /// the base of the last strip to lock.
+    fn roll_view(&self) -> Element<'_, Message> {
+        let base = |b: [f32; 3]| {
+            let [r, g, b] = b.map(|v| i18n::decimal(format!("{v:.3}")));
+            trf(
+                "Base: R {r} · G {g} · B {b}",
+                &[("r", &r), ("g", &g), ("b", &b)],
+            )
+        };
+        let idle = self.busy.is_none();
+        let mut block = column![text(tr("Rullino")).size(13)].spacing(4);
+        match self.roll_base {
+            Some(b) => {
+                block = block
+                    .push(text(base(b)).size(12))
+                    .push(
+                        text(tr(
+                            "Bloccata: ogni striscia usa questa base e misura da sé solo \
+                             luci e neri, così i fotogrammi dello stesso rullino vengono uguali.",
+                        ))
+                        .size(11),
+                    )
+                    .push(
+                        button(text(tr("Nuovo rullino")).size(13))
+                            .style(button::secondary)
+                            .on_press_maybe(idle.then_some(Message::NewRoll)),
+                    );
+            }
+            None => {
+                block = block.push(
+                    text(tr(
+                        "Ogni striscia misura la sua base negli spazi tra i fotogrammi. \
+                         Bloccala per usarla in tutte le strisce dello stesso rullino.",
+                    ))
+                    .size(11),
+                );
+                if let Some(b) = self.strip_base {
+                    block = block.push(text(base(b)).size(12));
+                }
+                block = block.push(
+                    button(text(tr("Blocca la base dell'ultima striscia")).size(13))
+                        .style(button::secondary)
+                        .on_press_maybe(
+                            (idle && self.strip_base.is_some()).then_some(Message::LockBase),
+                        ),
+                );
+            }
+        }
+        block.into()
+    }
+
     /// A scan of negatives turned into its picture, with `measured` (the
-    /// preview's) or measures of its own: the picture at 8 bits and at 16,
-    /// and the measures. Without film to measure, the scan as it is.
+    /// preview's) or measures of its own, from the `roll`'s base if locked:
+    /// the picture at 8 bits and at 16, the measures and the base found in
+    /// the gaps between its frames (none with a base given). Without film
+    /// to measure, the scan as it is.
     fn develop(
         image: Image,
         samples16: Option<Vec<u16>>,
         measured: Option<Negative>,
+        roll: Option<[f32; 3]>,
         colour_noise: bool,
-    ) -> (Image, Option<Vec<u16>>, Option<Negative>) {
+    ) -> Developed {
         let (w, h) = (image.width, image.height);
         let deep: Cow<[u16]> = match &samples16 {
             Some(s) if s.len() == w * h * 3 => Cow::Borrowed(s),
             _ => Cow::Owned(image.data.iter().map(|&v| u16::from(v) * 257).collect()),
         };
-        let negative =
-            measured.or_else(|| film::measure_strip(&deep, w, h, image.dpi).map(|(n, _)| n));
+        let (negative, gaps) = match measured {
+            Some(n) => (Some(n), None),
+            None => match film::measure_strip_with(&deep, w, h, image.dpi, roll) {
+                Some(s) => (Some(s.negative), s.gaps),
+                None => (None, None),
+            },
+        };
         let Some(n) = negative else {
-            return (image, samples16, None);
+            return (image, samples16, None, None);
         };
         let mut positive = n.positive(&deep);
         // Measured on the picture itself: as much as it needs, or none.
@@ -2789,7 +2873,7 @@ impl App {
             data: positive.iter().map(|&v| (v >> 8) as u8).collect(),
             ..image
         };
-        (picture, Some(positive), Some(n))
+        (picture, Some(positive), Some(n), gaps)
     }
 
     /// Switches to `kind`, with films in the adapter or not (only Foto has
@@ -3767,7 +3851,10 @@ impl App {
             stripes: self.measured.clone(),
             document: self.document.to_stored(),
             photo: self.photo.to_stored(),
-            film: self.film_settings.to_stored(),
+            film: prefs::StoredMode {
+                roll_base: self.roll_base,
+                ..self.film_settings.to_stored()
+            },
             lamp_off_minutes: self.lamp_off,
             language: self.language.key().into(),
             epson_firmware: self.epson_firmware.clone(),
@@ -4382,6 +4469,7 @@ impl App {
                 self.document = Settings::document();
                 self.photo = Settings::photo();
                 self.film_settings = Settings::film();
+                self.roll_base = None;
                 self.start_mode = StartMode::Last;
                 self.custom_folder = None;
                 self.document_name = d.document_name;
@@ -4508,6 +4596,24 @@ impl App {
             Message::AutoCrop(on) => self.settings_mut().auto_crop = on,
             Message::Destripe(on) => self.settings_mut().destripe = on,
             Message::ColourNoise(on) => self.settings_mut().colour_noise = on,
+            Message::LockBase => {
+                if let Some(base) = self.strip_base.filter(|_| self.filming()) {
+                    self.roll_base = Some(base);
+                    // The preview's measures were from another base.
+                    self.negative = None;
+                    self.note =
+                        tr("Base del rullino bloccata: le prossime strisce useranno questa").into();
+                }
+            }
+            Message::NewRoll => {
+                // The last strip belongs to the roll taken out.
+                self.strip_base = None;
+                if self.roll_base.take().is_some() {
+                    self.negative = None;
+                    self.note =
+                        tr("Nuovo rullino: ogni striscia misura di nuovo la sua base").into();
+                }
+            }
             Message::Double(on) => self.settings_mut().double = on,
             Message::MeasureStripes => {
                 if self.busy.is_none()
@@ -5485,9 +5591,12 @@ impl App {
                 let film = self.filming();
                 let transmission = film.then(|| at_dpi(image.clone(), PREVIEW_DPI));
                 let image = if film {
-                    let (picture, _, negative) =
-                        Self::develop(image, samples16, None, colour_noise);
+                    let (picture, _, negative, gaps) =
+                        Self::develop(image, samples16, None, self.roll_base, colour_noise);
                     self.negative = negative;
+                    if gaps.is_some() {
+                        self.strip_base = gaps;
+                    }
                     picture
                 } else {
                     image
@@ -5553,8 +5662,16 @@ impl App {
                         transmission: transmission.clone(),
                     });
                 let (image, samples16) = if film {
-                    let (picture, deep, _) =
-                        Self::develop(image, samples16, self.negative, colour_noise);
+                    let (picture, deep, _, gaps) = Self::develop(
+                        image,
+                        samples16,
+                        self.negative,
+                        self.roll_base,
+                        colour_noise,
+                    );
+                    if gaps.is_some() {
+                        self.strip_base = gaps;
+                    }
                     (picture, deep)
                 } else {
                     (image, samples16)
@@ -6896,6 +7013,7 @@ impl App {
                         ))
                         .size(11),
                     );
+                pane = pane.push(self.roll_view());
             }
             if let Some(double) = self.double_dpi().filter(|_| !self.filming()) {
                 pane = pane

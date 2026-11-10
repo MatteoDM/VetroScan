@@ -453,6 +453,36 @@ pub fn measure_strip(
     height: usize,
     dpi: u16,
 ) -> Option<(Negative, Vec<Found>)> {
+    measure_strip_with(samples, width, height, dpi, None).map(|s| (s.negative, s.frames))
+}
+
+/// The measures of a strip of negatives ([`measure_strip_with`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Strip {
+    /// How the strip becomes its picture.
+    pub negative: Negative,
+    /// Its frames, in reading order.
+    pub frames: Vec<Found>,
+    /// The base measured in the gaps between the frames ([`base_between`]):
+    /// bare film, what a roll's base is taken from. `None` with a base
+    /// given, or with no gap in view (the base then found on the film
+    /// itself, [`base_auto`], less sure).
+    pub gaps: Option<[f32; 3]>,
+}
+
+/// A strip of negatives as [`measure_strip`], with the film's `base` if
+/// known: the base of the roll it belongs to, measured once, so that the
+/// frames of one roll come out alike. The base given is used as it is; the
+/// highlights and the black are the strip's own, measured inside its
+/// frames (they follow the scenes, the base does not). Without a base, the
+/// one in the gaps between the frames.
+pub fn measure_strip_with(
+    samples: &[u16],
+    width: usize,
+    height: usize,
+    dpi: u16,
+    base: Option<[f32; 3]>,
+) -> Option<Strip> {
     if samples.len() != width * height * 3 {
         return None;
     }
@@ -464,9 +494,16 @@ pub fn measure_strip(
         data: samples.iter().map(|&v| (v >> 8) as u8).collect(),
     };
     let found = frames(&image, Film::Negative);
-    let base = base_between(samples, width, &found);
-    let negative = Negative::measure(&inside(samples, width, &found), base)?;
-    Some((negative, found))
+    let gaps = match base {
+        Some(_) => None,
+        None => base_between(samples, width, &found),
+    };
+    let negative = Negative::measure(&inside(samples, width, &found), base.or(gaps))?;
+    Some(Strip {
+        negative,
+        frames: found,
+        gaps,
+    })
 }
 
 /// The pictures in a preview of the holder (linear RGB, as the scanner
@@ -1093,6 +1130,41 @@ mod tests {
         assert!(film.chunks_exact(3).all(|p| p[0] > 600));
         assert_eq!(inside(&samples, image.width, &[]), samples);
         assert!(measure_strip(&samples, image.width + 1, image.height, 150).is_none());
+    }
+
+    /// A roll's base, given: used as it is, not the strip's own; the
+    /// highlights and the black still measured on the strip.
+    #[test]
+    fn a_strip_measured_with_the_base_of_its_roll() {
+        let (image, _) = strip(0.0, 3, 0.0);
+        let samples: Vec<u16> = image.data.iter().map(|&v| u16::from(v) * 257).collect();
+        let (w, h, dpi) = (image.width, image.height, image.dpi);
+        let own = measure_strip_with(&samples, w, h, dpi, None).expect("film");
+        let gaps = own.gaps.expect("the base between the frames");
+        assert_eq!(own.negative.base, gaps);
+        // The same base given: the same measures.
+        let same = measure_strip_with(&samples, w, h, dpi, Some(gaps)).expect("film");
+        assert_eq!(same.negative, own.negative);
+        assert_eq!(same.gaps, None, "not measured with a base given");
+        // A roll's base a little denser than this strip's gaps (another
+        // frame of the roll, another day): it is the one used, and the
+        // levels are measured from it, on this strip.
+        let roll = gaps.map(|b| b * 0.9);
+        let locked = measure_strip_with(&samples, w, h, dpi, Some(roll)).expect("film");
+        assert_eq!(locked.negative.base, roll);
+        assert_eq!(locked.frames, own.frames);
+        let expected = Negative::measure(&inside(&samples, w, &own.frames), Some(roll)).unwrap();
+        assert_eq!(locked.negative, expected);
+        // From a denser base every density is lower: the highlights too.
+        for c in 0..3 {
+            assert!(locked.negative.high[c] < own.negative.high[c], "{c}");
+        }
+        // A single frame has no gap: no base of its own to lock.
+        let (one, _) = strip(0.0, 1, 0.0);
+        let one16: Vec<u16> = one.data.iter().map(|&v| u16::from(v) * 257).collect();
+        if let Some(s) = measure_strip_with(&one16, one.width, one.height, one.dpi, None) {
+            assert_eq!(s.gaps, None);
+        }
     }
 
     #[test]
