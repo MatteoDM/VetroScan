@@ -510,11 +510,66 @@ fn when_the_lamp_goes_off_is_chosen_and_remembered() {
         ui.send(Message::Pane(crate::Pane::Prefs));
         assert!(ui.shows("Lampada"));
         assert_eq!(ui.app.lamp_off, 2, "the default");
-        ui.send(Message::LampAfter(LampAfter(0)));
+        ui.send(Message::LampAfter(LampAfter::app(0)));
         std::mem::forget(ui);
     }
     let (app, _) = App::new();
     assert_eq!(app.lamp_off, 0);
+    testing::clean_up();
+}
+
+#[test]
+fn the_lamps_choices_and_note_come_from_the_scanner() {
+    use crate::LampAfter;
+    use scanner_api::Scanner as _;
+    // The made-up flatbed switches its lamp off by itself after 15 minutes
+    // and warms up in 30 seconds: its time closes the choices, and the
+    // note says both.
+    let mut ui = Ui::new();
+    ui.send(Message::Pane(crate::Pane::Prefs));
+    let minutes: Vec<u8> = ui.app.lamp_choices().iter().map(|c| c.minutes).collect();
+    assert_eq!(minutes, [0, 1, 2, 5, 10, 15]);
+    assert_eq!(
+        ui.app
+            .lamp_choices()
+            .last()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("Dopo 15 minuti (la spegne lo scanner)")
+    );
+    let note = ui.app.lamp_note();
+    assert!(note.contains("circa 30 secondi"), "{note}");
+    assert!(note.contains("da solo dopo 15 minuti"), "{note}");
+    assert!(ui.shows(&note));
+    // No scanner's name in what it says.
+    let said = ui.app.lamp_choices().into_iter().map(|c| c.to_string());
+    assert!(said.chain([note]).all(|t| !t.contains("HP")));
+    std::mem::forget(ui);
+    testing::clean_up();
+
+    // One whose lamp has no timer of its own: the app's times only, and
+    // nothing said of a timer.
+    let flatbed = FakeScanner::flatbed();
+    let caps = flatbed.capabilities().clone();
+    let mut ui = Ui::with_scanners(vec![FakeScanner::with(scanner_api::Capabilities {
+        model: "Lampada senza timer".into(),
+        lamp: caps.lamp.map(|l| scanner_api::LampInfo {
+            switches_off_after: None,
+            ..l
+        }),
+        ..caps
+    })]);
+    ui.send(Message::Pane(crate::Pane::Prefs));
+    assert!(ui.shows("Lampada"));
+    let choices = ui.app.lamp_choices();
+    assert_eq!(choices.last(), Some(&LampAfter::app(10)));
+    assert!(choices.iter().all(|c| !c.by_scanner));
+    let note = ui.app.lamp_note();
+    assert!(!note.contains("da solo dopo"), "{note}");
+    assert!(ui.shows(&note));
+    // A made-up scanner is not on USB: no row about Windows' own app.
+    assert!(!ui.shows("Usa i tasti dello scanner solo con questa app"));
+    std::mem::forget(ui);
     testing::clean_up();
 }
 

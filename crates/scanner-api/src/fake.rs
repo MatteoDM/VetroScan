@@ -247,6 +247,7 @@ impl FakeScanner {
         Self::with(Capabilities {
             manufacturer: "Test".into(),
             model: "Flatbed A4".into(),
+            usb: None,
             glass_inches: (8.5, 11.7),
             resolutions: vec![200, 300, 600, 1200, 2400],
             modes: vec![ColourMode::Colour, ColourMode::Grey, ColourMode::Lineart],
@@ -259,6 +260,8 @@ impl FakeScanner {
             ],
             lamp: Some(LampInfo {
                 warm_up: Duration::from_secs(30),
+                // Made up: the app offers it as its longest choice.
+                switches_off_after: Some(Duration::from_secs(15 * 60)),
             }),
             tone: Tone {
                 white: [196.0, 186.0, 184.0],
@@ -284,6 +287,7 @@ impl FakeScanner {
         Self::with(Capabilities {
             manufacturer: "Test".into(),
             model: "Flatbed A3".into(),
+            usb: None,
             glass_inches: (11.7, 16.5),
             resolutions: vec![150, 300, 600, 1200],
             modes: vec![ColourMode::Colour, ColourMode::Grey],

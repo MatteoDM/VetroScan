@@ -486,33 +486,35 @@ struct PageLayout {
     margin: u8,
 }
 
-/// The chip switches the lamp off by itself after this many minutes (the
-/// HP driver's timer, set at every start-up): the longest choice.
-const LAMP_SCANNER: u8 = 13;
-
-/// When the lamp goes off: minutes without scanning.
+/// When the app switches the lamp off, minutes without scans: one of its
+/// own times, or the scanner's own, where it declares one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct LampAfter(u8);
+struct LampAfter {
+    minutes: u8,
+    /// The time after which the scanner switches it off by itself.
+    by_scanner: bool,
+}
 
-const LAMP_CHOICES: [LampAfter; 6] = [
-    LampAfter(0),
-    LampAfter(1),
-    LampAfter(2),
-    LampAfter(5),
-    LampAfter(10),
-    LampAfter(LAMP_SCANNER),
-];
+impl LampAfter {
+    const fn app(minutes: u8) -> Self {
+        Self {
+            minutes,
+            by_scanner: false,
+        }
+    }
+}
+
+/// The app's own times; the scanner's, when it has one, is added as the
+/// longest, and the app's that are not shorter are left out.
+const LAMP_CHOICES: [u8; 5] = [0, 1, 2, 5, 10];
 
 impl std::fmt::Display for LampAfter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.0 {
-            0 => f.write_str("Appena finita la scansione"),
-            1 => f.write_str("Dopo 1 minuto"),
-            LAMP_SCANNER => f.write_str(&trf(
-                "Dopo {m} minuti (come il driver HP)",
-                &[("m", &LAMP_SCANNER)],
-            )),
-            m => f.write_str(&trf("Dopo {m} minuti", &[("m", &m)])),
+        match (self.minutes, self.by_scanner) {
+            (m, true) => f.write_str(&trf("Dopo {m} minuti (la spegne lo scanner)", &[("m", &m)])),
+            (0, _) => f.write_str("Appena finita la scansione"),
+            (1, _) => f.write_str("Dopo 1 minuto"),
+            (m, _) => f.write_str(&trf("Dopo {m} minuti", &[("m", &m)])),
         }
     }
 }
@@ -1713,7 +1715,7 @@ impl Field {
             Self::Brightness => tr("Luminosità"),
             Self::Contrast => tr("Contrasto"),
             Self::Saturation => tr("Saturazione"),
-            Self::Sharpen => tr("Nitidezza (1,5 = come HP)"),
+            Self::Sharpen => tr("Nitidezza (1,5 = predefinita)"),
             Self::Threshold => tr("Soglia (più alta = più nero)"),
         }
     }
@@ -2274,9 +2276,6 @@ struct App {
     measured: std::collections::BTreeMap<String, Vec<prefs::StoredStripes>>,
     /// "Misura le righe" running.
     measuring: Option<Measuring>,
-    /// The Epson 4490's firmware chosen in the preferences file (not in the
-    /// interface yet: kept as it is when the preferences are saved).
-    epson_firmware: String,
     /// Print the next photo when it arrives (photocopy).
     print_next: bool,
     /// Whether Windows leaves the buttons alone (None: nothing to set).
@@ -2431,9 +2430,8 @@ impl App {
                 button_actions: stored.buttons.clone(),
                 measured: stored.stripes.clone(),
                 measuring: None,
-                epson_firmware: stored.epson_firmware.clone(),
                 print_next: false,
-                wia_quiet: wia::quiet(),
+                wia_quiet: None,
                 saved: stored.clone(),
                 preview: None,
                 preview_view: View::default(),
@@ -2480,7 +2478,7 @@ impl App {
                 pdf_estimate: None,
                 estimating: false,
                 limit_draft: None,
-                lamp_off: stored.lamp_off_minutes.min(LAMP_SCANNER),
+                lamp_off: stored.lamp_off_minutes,
                 language: {
                     let choice = i18n::LangChoice::from_key(&stored.language);
                     i18n::set(choice.resolve());
@@ -3978,7 +3976,6 @@ impl App {
             },
             lamp_off_minutes: self.lamp_off,
             language: self.language.key().into(),
-            epson_firmware: self.epson_firmware.clone(),
         }
     }
 
@@ -4064,6 +4061,49 @@ impl App {
                     .to_string()
             })
             .collect()
+    }
+
+    /// After how many minutes the scanner switches its lamp off by itself,
+    /// if it declares it.
+    fn lamp_by_scanner(&self) -> Option<u8> {
+        let after = self.caps.lamp?.switches_off_after?;
+        Some(u8::try_from(after.as_secs().div_ceil(60)).unwrap_or(u8::MAX))
+    }
+
+    /// The choices of when to switch the lamp off: the app's times shorter
+    /// than the scanner's own, then the scanner's.
+    fn lamp_choices(&self) -> Vec<LampAfter> {
+        let own = self.lamp_by_scanner();
+        let mut choices: Vec<LampAfter> = LAMP_CHOICES
+            .into_iter()
+            .filter(|&m| own.is_none_or(|o| m < o))
+            .map(LampAfter::app)
+            .collect();
+        choices.extend(own.map(|minutes| LampAfter {
+            minutes,
+            by_scanner: true,
+        }));
+        choices
+    }
+
+    /// What the lamp's choice means, with the scanner's warm-up and its
+    /// own timer, where it declares one.
+    fn lamp_note(&self) -> String {
+        let warm_up = self.caps.lamp.map_or(0, |l| l.warm_up.as_secs());
+        let mut note = trf(
+            "Senza scansioni per questo tempo l'app spegne la lampada, e la spegne sempre \
+             chiudendosi. Riaccenderla costa circa {s} secondi di riscaldamento alla \
+             scansione dopo.",
+            &[("s", &warm_up)],
+        );
+        if let Some(m) = self.lamp_by_scanner() {
+            note.push(' ');
+            note.push_str(&trf(
+                "Lo scanner la spegne comunque da solo dopo {m} minuti.",
+                &[("m", &m)],
+            ));
+        }
+        note
     }
 
     /// Tells the scanner thread when to switch the lamp off.
@@ -4525,10 +4565,11 @@ impl App {
             Message::StartMode(mode) => self.start_mode = mode,
             Message::WiaQuiet(on) => {
                 self.note = tr("Conferma la richiesta di Windows (amministratore)…").into();
-                return Task::perform(async move { wia::set_quiet(on) }, Message::WiaDone);
+                let usb = self.caps.usb;
+                return Task::perform(async move { wia::set_quiet(usb, on) }, Message::WiaDone);
             }
             Message::WiaDone(result) => {
-                self.wia_quiet = wia::quiet();
+                self.wia_quiet = wia::quiet(self.caps.usb);
                 self.note = match result {
                     Ok(()) if self.wia_quiet == Some(true) => {
                         tr("Windows non apre più la sua app ai tasti dello scanner").into()
@@ -5243,8 +5284,8 @@ impl App {
                 }
             }
             Message::Close(id) => return iced::window::close(id),
-            Message::LampAfter(LampAfter(minutes)) => {
-                self.lamp_off = minutes;
+            Message::LampAfter(choice) => {
+                self.lamp_off = choice.minutes;
                 self.send_lamp_timer();
             }
             Message::PageShow(i) if self.editor.is_some() => self.open_editor(i),
@@ -5578,6 +5619,7 @@ impl App {
                 self.caps = *caps;
                 self.device = Some(device);
                 self.devices = devices;
+                self.wia_quiet = wia::quiet(self.caps.usb);
                 self.send_lamp_timer();
             }
             Event::Status(status) => {
@@ -7109,7 +7151,7 @@ impl App {
                          più memoria.",
                         )
                     } else {
-                        tr("8 bit: come il driver HP. Per foto e RAW meglio 16 bit.")
+                        tr("8 bit: file più leggeri. Per foto e RAW meglio 16 bit.")
                     })
                     .size(11),
                 );
@@ -7776,13 +7818,10 @@ impl App {
     }
 
     /// Whether Windows opens its own scan app on a button press, and the
-    /// switch (Windows only, with the HP driver).
+    /// switch (Windows only, with a driver of the scanner's maker installed
+    /// for its USB id).
     fn wia_row(&self) -> Element<'_, Message> {
-        let hp_usb = self
-            .device
-            .as_ref()
-            .is_some_and(|d| d.backend == hp3770_core::rts8822::BACKEND);
-        match self.wia_quiet.filter(|_| hp_usb) {
+        match self.wia_quiet {
             None => Space::new().into(),
             Some(quiet) => column![
                 text(if quiet {
@@ -7856,22 +7895,17 @@ impl App {
                 .push(labelled(
                     tr("Spegnila"),
                     pick_list(
-                        LAMP_CHOICES,
-                        Some(LampAfter(self.lamp_off)),
+                        self.lamp_choices(),
+                        Some(LampAfter {
+                            minutes: self.lamp_off,
+                            by_scanner: Some(self.lamp_off) == self.lamp_by_scanner(),
+                        }),
                         Message::LampAfter,
                     )
                     .width(Length::Fill)
                     .into(),
                 ))
-                .push(
-                    text(tr(
-                        "Senza scansioni per questo tempo l'app spegne la lampada, e la \
-                         spegne sempre chiudendosi. Riaccenderla costa circa 10 secondi di \
-                         riscaldamento alla scansione dopo. Lo scanner la spegne comunque da \
-                         solo dopo 13 minuti.",
-                    ))
-                    .size(11),
-                );
+                .push(text(self.lamp_note()).size(11));
         }
         col.into()
     }

@@ -37,7 +37,7 @@ pub use usbscan::UsbscanTransport;
 use protocol::FirmwareOutcome;
 use scanner_api::{
     ButtonInfo, Capabilities, ColourMode, DeviceStatus, Error, Progress, Result, ScanRequest,
-    ScanResult, SuggestedAction, Tone,
+    ScanResult, SuggestedAction, Tone, UsbId,
 };
 use std::fmt;
 use std::path::PathBuf;
@@ -144,6 +144,10 @@ pub fn capabilities() -> Capabilities {
     Capabilities {
         manufacturer: "Epson".into(),
         model: "Perfection 4490 Photo".into(),
+        usb: Some(UsbId {
+            vendor: VENDOR_ID,
+            product: PRODUCT_ID,
+        }),
         // 216 x 297 mm.
         glass_inches: (8.5, 11.7),
         // Provisional: optical 4800 dpi across; which ones the native

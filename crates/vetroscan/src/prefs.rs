@@ -204,10 +204,6 @@ pub struct Prefs {
     /// The stripes measured on each scanner ("HP Scanjet 3770"), in place
     /// of what its model declares.
     pub stripes: BTreeMap<String, Vec<StoredStripes>>,
-    /// A copy of `esfw54.bin`, the Epson Perfection 4490's firmware, tried
-    /// before the embedded one and the places Epson's drivers use; empty:
-    /// none. Not in the interface yet: edited in the file.
-    pub epson_firmware: String,
 }
 
 impl Default for Prefs {
@@ -244,7 +240,6 @@ impl Default for Prefs {
             lamp_off_minutes: 2,
             language: "automatica".into(),
             stripes: BTreeMap::new(),
-            epson_firmware: String::new(),
         }
     }
 }
@@ -455,5 +450,10 @@ mod tests {
         let old: Prefs = serde_json::from_str(r#"{"theme":"scuro"}"#).unwrap();
         assert_eq!(old.theme, "scuro");
         assert_eq!(old.photo.dpi, 600);
+        // One of 0.5-0.6 with the Epson firmware's path, which is no
+        // longer a preference (the driver finds its firmware itself).
+        let epson: Prefs =
+            serde_json::from_str(r#"{"theme":"scuro","epson_firmware":"C:\\esfw54.bin"}"#).unwrap();
+        assert_eq!(epson.theme, "scuro");
     }
 }

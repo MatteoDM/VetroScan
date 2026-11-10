@@ -21,7 +21,7 @@ use scan_imaging::Mode;
 use scanner_api::{
     Adapter, ButtonInfo, Capabilities, ColourCorrection, ColourMatrix, ColourMode, DeviceStatus,
     Error, LampInfo, LampState, Progress, ScanRequest, ScanResult, Scanner, Source, Stripes,
-    SuggestedAction,
+    SuggestedAction, UsbId,
 };
 
 /// Name of this backend in the [`scanner_api::Registry`].
@@ -33,6 +33,10 @@ pub fn capabilities(profile: &Profile) -> Capabilities {
     Capabilities {
         manufacturer: d.manufacturer.into(),
         model: d.name.into(),
+        usb: Some(UsbId {
+            vendor: d.vendor_id,
+            product: d.product_id,
+        }),
         glass_inches: d.glass_inches(),
         resolutions: d.resolutions.to_vec(),
         modes: vec![ColourMode::Colour, ColourMode::Grey, ColourMode::Lineart],
@@ -48,6 +52,10 @@ pub fn capabilities(profile: &Profile) -> Capabilities {
         buttons: d.buttons.iter().map(|&b| button_info(b)).collect(),
         lamp: Some(LampInfo {
             warm_up: scan::LAMP_WARMUP,
+            // The chip's own timer, set at every start-up.
+            switches_off_after: Some(std::time::Duration::from_secs(
+                60 * u64::from(profile.lamp_timer_minutes),
+            )),
         }),
         tone: profile.tone(),
         // The glass's, and the films': slides are scanned with the

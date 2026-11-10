@@ -35,9 +35,11 @@ on the hardware are in `docs/architecture-plan.md`; read the phase you work on f
   scanner needs becomes a capability, or stays in its driver; never an
   `if backend == …` or a text that names a brand in the app. Before adding a feature, ask how
   it works on a scanner without it and on a different scanner (the Epson 4490 is next; the
-  made-up scanners in `fake.rs` stand in for others in the e2e). Known leftovers to remove, not
-  to copy: `wia_row` checks the HP backend; texts say "come il driver HP" (lamp timeout, 8
-  bits) and "1,5 = come HP" (sharpness); the Epson firmware's path is an app preference.
+  made-up scanners in `fake.rs` stand in for others in the e2e). Scanner-specific facts the app
+  needs are declared, as `Capabilities::usb` (the Windows buttons row) and
+  `LampInfo::switches_off_after` (the lamp's choices) are. Still from the HP 3770, as generic
+  defaults: `scan_imaging::convert::HP_SHARPEN` and `DEFAULT_THRESHOLD` (tuned against HP's
+  driver); a new scanner may want its own.
 - **Capabilities rule**: everything in the app tied to a function of the scanner exists only if
   its `Capabilities` declare it, asked in one place (`App::caps` and helpers). A new function of
   the contract comes with its `Capabilities` field, the app's branch, and an e2e with a made-up

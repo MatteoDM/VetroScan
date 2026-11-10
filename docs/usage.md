@@ -273,7 +273,7 @@ scanned is changed in the **Adjust** tab, with **Mode** at the top while the pag
 
 Only for scanners that give 16 bits, like the HP 3770.
 
-- **8 bits per channel**: like the HP driver. Fine for documents.
+- **8 bits per channel**: smaller files. Fine for documents.
 - **16 bits per channel**: the scanner sends 65,536 shades per colour instead of 256. Shadows
   and gradients stay smooth even after strong curves and corrections. It takes more memory
   (about three times) and it is the default in Photo.
@@ -707,11 +707,12 @@ pages a note says which button adds a page (or scans a photo).
 
 ### Windows: the buttons and Windows' app
 
-With the HP driver installed, at every button press Windows also opens its own scanning app,
-which takes the scanner away from this one. In the **Preferences**, press **Use the scanner
-buttons with this app only** and confirm as administrator: Windows stops reacting to the
-buttons. **Give the buttons back to Windows** puts everything back as it was. The button only
-appears with the HP driver; with WinUSB the problem does not arise.
+With the scanner maker's own driver installed (for the HP 3770, HP's), at every button press
+Windows also opens its own scanning app, which takes the scanner away from this one. In the
+**Preferences**, press **Use the scanner buttons with this app only** and confirm as
+administrator: Windows stops reacting to the buttons. **Give the buttons back to Windows** puts
+everything back as it was. The button only appears when Windows has such a driver for the
+scanner in use (found by its USB id); with WinUSB the problem does not arise.
 
 ### Linux and macOS
 
@@ -749,14 +750,16 @@ The fourth tab on the right. Every change is saved by itself.
 - **Scanner**: with several scanners connected, **Use** chooses which one.
 - **Scanner buttons in Document / in Photo**: what each button of the scanner in use does in
   the mode you are in. To set the other mode, go to it first. Only for a scanner with buttons.
-- On **Windows**, with the HP driver: **Use the scanner buttons with this app only** (see
-  above).
+- On **Windows**, with the scanner maker's driver installed: **Use the scanner buttons with
+  this app only** (see above).
 - **Lamp · Switch it off**: after how long without scans the app switches the lamp off: *As
   soon as the scan is over* (actually after 15 seconds, so that photos acquired one after the
-  other do not each wait for the lamp), after 1, 2 (default), 5 or 10 minutes, or after 13
-  like the HP driver. When it closes the app always switches it off. A lamp switched off
-  switches on again by itself at the next scan, with about 10 seconds of warm-up. The scanner
-  switches it off by itself after 13 minutes anyway, even if the app closes badly. Only for a
+  other do not each wait for the lamp), after 1, 2 (default), 5 or 10 minutes, or, for a
+  scanner that switches its lamp off by itself, after that time (*the scanner switches it
+  off*: 13 minutes on the HP 3770). When it closes the app always switches it off. A lamp
+  switched off switches on again by itself at the next scan, with the warm-up the scanner
+  declares (about 10 seconds on the HP 3770), as the note below the choice says. A scanner
+  with its own timer switches the lamp off anyway, even if the app closes badly. Only for a
   scanner with a lamp.
 - **Settings**: says which file they are saved in; **Restore factory settings** puts
   everything back as at the first start (modes, folder, names, buttons, theme, lamp). The

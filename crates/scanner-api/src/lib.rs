@@ -69,6 +69,10 @@ pub struct Capabilities {
     pub manufacturer: String,
     /// The model, as shown to the user ("Scanjet 3770").
     pub model: String,
+    /// Its USB vendor and product id, for what the system keeps about it
+    /// under that id (on Windows, the events of its maker's driver); `None`
+    /// for a scanner that is not on USB.
+    pub usb: Option<UsbId>,
     /// The glass, width and height, inches.
     pub glass_inches: (f64, f64),
     /// The resolutions it scans at, dpi, smallest first.
@@ -131,6 +135,7 @@ impl Capabilities {
         Self {
             manufacturer: String::new(),
             model: "Nessuno scanner".into(),
+            usb: None,
             glass_inches: (8.27, 11.69),
             resolutions: vec![300],
             modes: vec![ColourMode::Colour],
@@ -295,11 +300,21 @@ pub enum SuggestedAction {
     None,
 }
 
+/// A scanner's USB vendor and product id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct UsbId {
+    pub vendor: u16,
+    pub product: u16,
+}
+
 /// A lamp the host switches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LampInfo {
     /// How long it takes to warm up from off.
     pub warm_up: Duration,
+    /// After how long without scans the scanner switches it off by itself,
+    /// if it does: waiting longer on the host is pointless.
+    pub switches_off_after: Option<Duration>,
 }
 
 /// How a scanner is.

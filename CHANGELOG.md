@@ -17,6 +17,19 @@ GitHub; here they are in English.
 
 ## [Unreleased]
 
+### Changed
+- **Lamp · Switch it off** follows the scanner in use: its longest choice is the time after
+  which the scanner switches its lamp off by itself, where it does (*the scanner switches it
+  off*: 13 minutes on the HP 3770, as before), and the note says the scanner's own warm-up.
+  The texts on 8 bits and on sharpness no longer compare them with HP's driver.
+- On Windows, **Use the scanner buttons with this app only** is offered for any USB scanner
+  whose maker's driver Windows has, found by its USB id, no longer only for the HP 3770.
+
+### Removed
+- The Epson Perfection 4490 firmware's path in the preferences file (`epson_firmware`, never
+  in the interface): the firmware is inside the program, and a copy of `esfw54.bin` put in the
+  settings folder is still taken first.
+
 ## [0.6.0] - 2026-11-10
 
 ### Added
