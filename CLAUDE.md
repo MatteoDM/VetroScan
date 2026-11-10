@@ -28,6 +28,16 @@ on the hardware are in `docs/architecture-plan.md`; read the phase you work on f
 
 ## Rules of the project
 
+- **Multi-scanner, always**: VetroScan is an app for any scanner, not the HP 3770's app. The
+  app (`vetroscan`), the imaging and the export know no scanner by name: a scanner is a driver
+  behind `trait Scanner`, registered in `worker::registry()` (the one place the app names
+  drivers), and everything the app does with it comes from what it declares. What only one
+  scanner needs becomes a capability, or stays in its driver; never an
+  `if backend == …` or a text that names a brand in the app. Before adding a feature, ask how
+  it works on a scanner without it and on a different scanner (the Epson 4490 is next; the
+  made-up scanners in `fake.rs` stand in for others in the e2e). Known leftovers to remove, not
+  to copy: `wia_row` checks the HP backend; texts say "come il driver HP" (lamp timeout, 8
+  bits) and "1,5 = come HP" (sharpness); the Epson firmware's path is an app preference.
 - **Capabilities rule**: everything in the app tied to a function of the scanner exists only if
   its `Capabilities` declare it, asked in one place (`App::caps` and helpers). A new function of
   the contract comes with its `Capabilities` field, the app's branch, and an e2e with a made-up
