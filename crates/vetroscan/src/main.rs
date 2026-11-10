@@ -7165,7 +7165,8 @@ impl App {
                         )
                         .push(
                             text(tr(
-                                "La correzione che lo scanner dichiara per questa pellicola.                                  Senza, i colori come li legge il sensore.",
+                                "La correzione che lo scanner dichiara per questa pellicola. \
+                                 Senza, i colori come li legge il sensore.",
                             ))
                             .size(11),
                         );
