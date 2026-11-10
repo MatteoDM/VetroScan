@@ -433,6 +433,50 @@ fn closing_asks_about_the_work_of_every_way_of_working_and_saves_each() {
 }
 
 #[test]
+fn closing_saves_every_photo_and_the_dialog_says_so() {
+    let mut ui = Ui::new();
+    ui.send(Message::Kind(Kind::Photo));
+    ui.send(Message::AutoCrop(false));
+    ui.scan(1);
+    ui.send(Message::PageDuplicate(0));
+    assert_eq!(ui.app.pages.len(), 2);
+    // One name asked, two files written: the dialog says it.
+    let (filter, title) = ui.app.save_labels();
+    assert_eq!(filter, "Un file per foto");
+    assert_eq!(
+        title,
+        "Salva le 2 foto: un file per foto, con il numero in fondo al nome"
+    );
+    ui.send(Message::CloseRequested(iced::window::Id::unique()));
+    assert!(ui
+        .app
+        .confirm
+        .as_ref()
+        .is_some_and(|c| c.body.contains("Le 2 foto acquisite")));
+    ui.send(Message::ConfirmSave);
+    ui.settle();
+    assert_eq!(ui.saved().len(), 2, "{:?} {}", ui.saved(), ui.app.note);
+    assert!(ui.closed);
+}
+
+#[test]
+fn the_save_dialog_says_one_file_or_one_file_per_page() {
+    let mut ui = document(3);
+    ui.send(Message::Output(crate::Output::Pdf));
+    assert_eq!(ui.app.save_labels().1, "Salva le 3 pagine in un solo file");
+    ui.send(Message::Output(crate::Output::Image(
+        vetroscan_export::ImageFormat::Png,
+    )));
+    assert_eq!(
+        ui.app.save_labels(),
+        (
+            "Un file per pagina",
+            "Salva le 3 pagine: un file per pagina, con il numero in fondo al nome".to_string()
+        )
+    );
+}
+
+#[test]
 fn closing_with_nothing_to_lose_closes_at_once() {
     let mut ui = Ui::new();
     ui.send(Message::CloseRequested(iced::window::Id::unique()));

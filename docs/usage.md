@@ -615,6 +615,11 @@ instance `photo.jpg`, come `photo-01.jpg`, `photo-02.jpg`… in the same folder.
 and RAW the files are called `photo-001.tif`, `photo-002.tif`… Typing a name that ends in
 **`.zip`**, the pages all go instead into a single ZIP archive, as PNG images.
 
+The save window asks for one name only, but its title says what happens: for example
+*Save the 2 photos: one file per photo, with the number at the end of the name*, or *Save the
+3 pages in one file* for a PDF. Closing the app with scans not saved, **Save…** in the
+question saves them all in the same way, mode by mode.
+
 **Black and white** is not saved as JPEG or AVIF (they would spoil the edges of the letters),
 nor at 16 bits: the **Output** tab does not offer them.
 

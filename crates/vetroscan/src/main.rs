@@ -2499,6 +2499,41 @@ impl App {
         )
     }
 
+    /// The save dialog's file type and title: whether the pages (or
+    /// photos) go into one file or one file each, so that a dialog asking
+    /// for one name does not look like it saves one scan only.
+    fn save_labels(&self) -> (&'static str, String) {
+        let n = self.pages.len();
+        let document = self.kind == Kind::Document;
+        let one_file = matches!(self.settings().output, Output::Pdf | Output::TiffPages);
+        match (n, one_file, document) {
+            (0 | 1, _, true) => (tr("Documento"), tr("Salva la pagina").into()),
+            (0 | 1, _, false) => (tr("Immagine"), tr("Salva la foto").into()),
+            (n, true, true) => (
+                tr("Documento"),
+                trf("Salva le {n} pagine in un solo file", &[("n", &n)]),
+            ),
+            (n, true, false) => (
+                tr("Documento"),
+                trf("Salva le {n} foto in un solo file", &[("n", &n)]),
+            ),
+            (n, false, true) => (
+                tr("Un file per pagina"),
+                trf(
+                    "Salva le {n} pagine: un file per pagina, con il numero in fondo al nome",
+                    &[("n", &n)],
+                ),
+            ),
+            (n, false, false) => (
+                tr("Un file per foto"),
+                trf(
+                    "Salva le {n} foto: un file per foto, con il numero in fondo al nome",
+                    &[("n", &n)],
+                ),
+            ),
+        }
+    }
+
     /// What the question says is lost: "Le 3 pagine acquisite non sono
     /// salvate e andranno perse."
     fn lost_sentence(&self, n: usize) -> String {
@@ -4839,13 +4874,8 @@ impl App {
             Message::Save => {
                 let output = self.settings().output;
                 let ext = output.extension();
-                let (prefix, filter) = match (self.kind, output) {
-                    (Kind::Document, Output::Image(_)) if self.pages.len() > 1 => {
-                        (self.name(), tr("Un file per pagina"))
-                    }
-                    (Kind::Document, _) => (self.name(), tr("Documento")),
-                    (Kind::Photo, _) => (self.name(), tr("Immagine")),
-                };
+                let (filter, title) = self.save_labels();
+                let prefix = self.name();
                 let folder = self.folder();
                 let _ = std::fs::create_dir_all(&folder);
                 let file = Self::free_name(&folder, prefix, ext);
@@ -4856,6 +4886,7 @@ impl App {
                 return Task::perform(
                     async move {
                         rfd::AsyncFileDialog::new()
+                            .set_title(title)
                             .set_directory(folder)
                             .add_filter(filter, &[ext])
                             .set_file_name(file)
