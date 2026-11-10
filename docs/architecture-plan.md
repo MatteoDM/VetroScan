@@ -1180,7 +1180,15 @@ what it measures. One gap: the stripes are declared per resolution, not per sour
         about 0.12) is above it as well, as the saturation of 8 November showed.
       So a longer line is worth it only merged with a normal pass that keeps the light parts:
       this step, the normal line for everything brighter than the longer pass's ceiling, the
-      longer one below it, scaled by the ratio measured between the two.
+      longer one below it, scaled by the ratio measured between the two. **Tried as a
+      prototype the same night, and set aside by Matteo** (notes in `captures/tma/note.txt`,
+      `scansioni/tma/confronto_doppia_ombre.png`): merged pairs gave the shadows 1.25-1.4 times
+      the signal/noise, visible only lifted at 100 %; but the passes move between them by
+      0.3-1.3 rows untouched, each slide differently, and half a pixel left made one zone
+      worse; the light between passes differs by 5-10 %; and the hand-over on the light parts
+      could not be seen (the two slides lie under the ceiling). Too much risk of double edges
+      or a change of tone in the picture for a gain seen only lifted. Back to it only with a
+      sub-pixel alignment per frame proven on slides with bright parts.
 6. **The colour of films, per source** (new, from HP's driver, 10 November 2026): HP's WIA
    driver (`hpxp3770.dll`, its resource `HPSJ3770`, Huffman-compressed, decoded in
    `captures/tma/driver_hp`) corrects every source with a 3x3 colour matrix: the glass's
