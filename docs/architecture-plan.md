@@ -1143,10 +1143,20 @@ what it measures. One gap: the stripes are declared per resolution, not per sour
       `TA_StripToScan` values is the 3770's is inferred, 1800 or 1920 would cut the negatives'
       window). The area becomes 76.2-183.0 mm (or HP's, without the slot), checked with both
       holders; the frames' detection and the e2e follow;
-   2. **slides in the contract and the app**: `Source::Slide` among the 3770 adapter's
-      sources, scanned with the negatives' longer line (measured above, on lines already run),
-      `Slide` in `film` for the picture; Pellicola gets the choice Negativi / Diapositive only
-      where the adapter declares both; an e2e with and without;
+   2. **slides in the contract and the app** · **done on 10 November 2026** (in code and
+      tests; on the scanner through the app still to be tried with Matteo's slides):
+      `Source::Slide` among the 3770 adapter's sources, the driver asking the negatives'
+      longer line for it too (`session_request`, so the same guard on 600/1200 dpi; `tma-scan
+      --film slide` as well); no stripes declared for slides (none could be measured on the two
+      slides, their pictures too busy: to measure on a slide with an even sky). Imaging:
+      `film::Measures` (a negative's or a slide's) and `film::measure_slides`, the levels
+      taken inside the slides found (`inside`): on real slides the mounts are 116-224 samples,
+      above the opaque level, so they would be the black. App: **Nel supporto** Negativi /
+      Diapositive in Pellicola only where the adapter declares both (an adapter with slides
+      only gets them without asking), kept in `StoredMode::slides`; Rullino for negatives
+      only; the page scanned whole remembers its film for "Separa". The made-up scanner has
+      `with_slides` (two slides in the holder, `Controls::load` for the strip); e2e with and
+      without the choice;
    3. **more than one exposure** (step 4): a normal and a longer pass merged, for the shadows
       beyond density 2.5; only on line periods already run, measured before.
 6. **The colour of films, per source** (new, from HP's driver, 10 November 2026): HP's WIA
@@ -1191,7 +1201,7 @@ what it measures. One gap: the stripes are declared per resolution, not per sour
 | 7 · new name + final check (done) | 0.3.0 | medium: updates and preferences | yes |
 | 8 · other HP (postponed) | to be decided | high | no: testers needed |
 | 9 · other brands (postponed) | to be decided | medium | eSCL yes, with a network scanner |
-| 10 · slides and negatives on the 3770 (negatives done, slides open) | to be decided | medium | yes: the 3770's own adapter |
+| 10 · slides and negatives on the 3770 (negatives done; slides in the app, phase 13 step 5.2) | to be decided | medium | yes: the 3770's own adapter |
 | 11 · precise moves from the keyboard (done) | to be decided | low | yes |
 | 12 · Epson Perfection 4490 Photo, native, plug and play (waiting for the scanner) | to be decided | high: protocol unknown, two carriages | no: the scanner (firmware inside the program) |
-| 13 · films done professionally, for every scanner (steps 1-3 done) | to be decided | low (1-3, 5.1-5.2, 6), medium (4, 5.3: the motor) | 1-3, 5.1-5.2, 6 yes; 4 needs the 3770's captures |
+| 13 · films done professionally, for every scanner (steps 1-3, 5.1-5.2 done) | to be decided | low (1-3, 5.1-5.2, 6), medium (4, 5.3: the motor) | 1-3, 5.1-5.2, 6 yes; 4 needs the 3770's captures |

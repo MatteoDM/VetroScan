@@ -43,7 +43,7 @@ use iced::{Alignment, Element, Length, Point, Size, Subscription, Task, Theme};
 use scan_imaging::adjust::{self, Adjustments};
 use scan_imaging::convert;
 use scan_imaging::detect::{self, Found};
-use scan_imaging::film::{self, Film, Negative};
+use scan_imaging::film::{self, Film, Measures};
 use scan_imaging::stripes;
 use scan_imaging::transform::{self, Transform};
 use scan_imaging::{Format, Image, Mode};
@@ -806,6 +806,7 @@ impl Settings {
             double: Some(self.double),
             colour_noise: Some(self.colour_noise),
             roll_base: None,
+            slides: false,
             adjust: prefs::StoredAdjust {
                 temperature: a.temperature,
                 tint: a.tint,
@@ -1192,6 +1193,22 @@ impl std::fmt::Display for StartMode {
             Self::Last => tr("L'ultimo usato"),
             Self::Document => tr("Documento"),
             Self::Photo => tr("Foto"),
+        })
+    }
+}
+
+/// What lies in the film adapter's holder, as Pellicola asks it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Holder {
+    Negatives,
+    Slides,
+}
+
+impl std::fmt::Display for Holder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Negatives => tr("Negativi"),
+            Self::Slides => tr("Diapositive"),
         })
     }
 }
@@ -1926,6 +1943,8 @@ enum Message {
     LockBase,
     /// "Nuovo rullino": each strip measures its own base again.
     NewRoll,
+    /// Pellicola: slides in the holder (true) or negatives.
+    Slides(bool),
     /// "Misura le righe": a strip of a white sheet at each resolution.
     MeasureStripes,
     /// Back to the stripes the scanner's model declares.
@@ -2104,6 +2123,8 @@ struct Whole {
     /// Films: the scan as the scanner saw it, before it became the
     /// positive, at [`PREVIEW_DPI`]; the frames are found on that.
     transmission: Option<Arc<Image>>,
+    /// Which film it was, for finding its frames again.
+    film: Film,
 }
 
 /// Largest single pass for several originals; beyond it each is scanned
@@ -2151,9 +2172,10 @@ impl Bench {
     }
 }
 
-/// A scan of negatives developed ([`App::develop`]): the picture at 8 bits
-/// and at 16, its measures and the base found between its frames.
-type Developed = (Image, Option<Vec<u16>>, Option<Negative>, Option<[f32; 3]>);
+/// A scan of films developed ([`App::develop`]): the picture at 8 bits
+/// and at 16, its measures and, for negatives, the base found between its
+/// frames.
+type Developed = (Image, Option<Vec<u16>>, Option<Measures>, Option<[f32; 3]>);
 
 /// A film base read back from the preferences: a transmission per channel,
 /// above nothing and at most the lamp's.
@@ -2171,7 +2193,7 @@ struct Bed {
     selection: Option<Selection>,
     found: Vec<Found>,
     film_preview: Option<Image>,
-    negative: Option<Negative>,
+    measures: Option<Measures>,
 }
 
 // --------------------------------------------------------------------- app
@@ -2211,9 +2233,13 @@ struct App {
     /// The scan running was asked at twice the resolution chosen
     /// (`Settings::double`): it is halved when it comes.
     doubled: bool,
-    /// How the negatives of the preview become their picture: the full
-    /// scans take the same measures, for the same picture.
-    negative: Option<Negative>,
+    /// How the films of the preview become their picture: the full scans
+    /// take the same measures, for the same picture.
+    measures: Option<Measures>,
+    /// "Diapositive" chosen in Pellicola: slides in the holder rather than
+    /// negatives (asked only of an adapter that takes both, see
+    /// `film_kind`).
+    slides: bool,
     /// The base of the roll in the adapter, locked: every strip scanned is
     /// measured from it, so the frames of one roll come out alike (their
     /// highlights and black stay their own). None: each strip its own.
@@ -2382,7 +2408,8 @@ impl App {
                 .fresh_look(),
                 film_preview: None,
                 doubled: false,
-                negative: None,
+                measures: None,
+                slides: stored.film.slides,
                 roll_base: stored.film.roll_base.filter(|b| valid_base(*b)),
                 strip_base: None,
                 film_wanted: false,
@@ -2668,7 +2695,7 @@ impl App {
         }
     }
 
-    /// Whether the scans are of negatives in the adapter: Foto with
+    /// Whether the scans are of films in the adapter: Foto with
     /// "Pellicola" chosen. (Its work stays there to be saved with a
     /// scanner without the adapter; such a scanner does not scan in it,
     /// see `start`.)
@@ -2756,18 +2783,79 @@ impl App {
             selection: std::mem::replace(&mut self.selection, other.selection),
             found: std::mem::replace(&mut self.found, other.found),
             film_preview: std::mem::replace(&mut self.film_preview, other.film_preview),
-            negative: std::mem::replace(&mut self.negative, other.negative),
+            measures: std::mem::replace(&mut self.measures, other.measures),
         };
         self.mm_draft = None;
     }
 
     /// Where the scans come from.
     fn source(&self) -> Source {
-        if self.filming() {
-            Source::Negative
-        } else {
-            Source::Glass
+        if !self.filming() {
+            return Source::Glass;
         }
+        match self.film_kind() {
+            Film::Slide => Source::Slide,
+            Film::Negative => Source::Negative,
+        }
+    }
+
+    /// The film in the adapter: slides if chosen and the adapter takes
+    /// them, or if it takes nothing else; else negatives.
+    fn film_kind(&self) -> Film {
+        let slides = self.caps.offers(Source::Slide);
+        if slides && (self.slides || !self.caps.offers(Source::Negative)) {
+            Film::Slide
+        } else {
+            Film::Negative
+        }
+    }
+
+    /// Whether the scanner's adapter takes any film.
+    fn offers_films(&self) -> bool {
+        self.caps.offers(Source::Negative) || self.caps.offers(Source::Slide)
+    }
+
+    /// "Negativi" or "Diapositive" chosen. Measures and frames found were
+    /// of the other film: they go (the photos scanned stay). Not during a
+    /// scan.
+    fn set_slides(&mut self, slides: bool) {
+        if self.busy.is_some() || self.slides == slides {
+            return;
+        }
+        self.slides = slides;
+        if !self.filming() {
+            return;
+        }
+        self.measures = None;
+        self.found.clear();
+        self.film_preview = None;
+        self.note = match self.film_kind() {
+            Film::Slide => tr("Diapositive nel supporto: ognuna diventa un'immagine"),
+            Film::Negative => tr("Negativi nel supporto: ogni fotogramma diventa un'immagine"),
+        }
+        .into();
+    }
+
+    /// "Negativi" or "Diapositive", for an adapter that takes both.
+    fn holder_view(&self) -> Option<Element<'_, Message>> {
+        if !(self.caps.offers(Source::Slide) && self.caps.offers(Source::Negative)) {
+            return None;
+        }
+        let chosen = match self.film_kind() {
+            Film::Slide => Holder::Slides,
+            Film::Negative => Holder::Negatives,
+        };
+        // During a scan the choice stays (see `set_slides`).
+        Some(labelled(
+            tr("Nel supporto"),
+            pick_list(
+                [Holder::Negatives, Holder::Slides],
+                Some(chosen),
+                |h: Holder| Message::Slides(h == Holder::Slides),
+            )
+            .width(Length::Fill)
+            .into(),
+        ))
     }
 
     /// Whether the scanner says its film adapter is plugged in.
@@ -2837,15 +2925,16 @@ impl App {
         block.into()
     }
 
-    /// A scan of negatives turned into its picture, with `measured` (the
-    /// preview's) or measures of its own, from the `roll`'s base if locked:
-    /// the picture at 8 bits and at 16, the measures and the base found in
-    /// the gaps between its frames (none with a base given). Without film
-    /// to measure, the scan as it is.
+    /// A scan of `film` turned into its picture, with `measured` (the
+    /// preview's) or measures of its own (a negative's from the `roll`'s
+    /// base if locked): the picture at 8 bits and at 16, the measures and,
+    /// for negatives, the base found in the gaps between its frames (none
+    /// with a base given). Without film to measure, the scan as it is.
     fn develop(
+        film: Film,
         image: Image,
         samples16: Option<Vec<u16>>,
-        measured: Option<Negative>,
+        measured: Option<Measures>,
         roll: Option<[f32; 3]>,
         colour_noise: bool,
     ) -> Developed {
@@ -2854,17 +2943,23 @@ impl App {
             Some(s) if s.len() == w * h * 3 => Cow::Borrowed(s),
             _ => Cow::Owned(image.data.iter().map(|&v| u16::from(v) * 257).collect()),
         };
-        let (negative, gaps) = match measured {
-            Some(n) => (Some(n), None),
-            None => match film::measure_strip_with(&deep, w, h, image.dpi, roll) {
-                Some(s) => (Some(s.negative), s.gaps),
-                None => (None, None),
-            },
+        let (measures, gaps) = match (measured, film) {
+            (Some(m), _) => (Some(m), None),
+            (None, Film::Negative) => {
+                match film::measure_strip_with(&deep, w, h, image.dpi, roll) {
+                    Some(s) => (Some(Measures::Negative(s.negative)), s.gaps),
+                    None => (None, None),
+                }
+            }
+            (None, Film::Slide) => (
+                film::measure_slides(&deep, w, h, image.dpi).map(|(s, _)| Measures::Slide(s)),
+                None,
+            ),
         };
-        let Some(n) = negative else {
+        let Some(m) = measures else {
             return (image, samples16, None, None);
         };
-        let mut positive = n.positive(&deep);
+        let mut positive = m.positive(&deep);
         // Measured on the picture itself: as much as it needs, or none.
         if colour_noise {
             scan_imaging::chroma::reduce_auto(&mut positive, w);
@@ -2873,7 +2968,7 @@ impl App {
             data: positive.iter().map(|&v| (v >> 8) as u8).collect(),
             ..image
         };
-        (picture, Some(positive), Some(n), gaps)
+        (picture, Some(positive), Some(m), gaps)
     }
 
     /// Switches to `kind`, with films in the adapter or not (only Foto has
@@ -3335,7 +3430,7 @@ impl App {
         // A RAW file always gets the 16-bit samples, when there are some.
         let s = self.settings();
         let raw = matches!(s.output, Output::Raw(_));
-        // A negative becomes its picture from the 16-bit samples.
+        // A film becomes its picture from the 16-bit samples.
         let film = self.filming();
         let depth = if self.depth() == 16 || ((raw || film) && self.offers_16bit()) {
             16
@@ -3541,7 +3636,7 @@ impl App {
         }
         // The frames of a film kept from a scanner with the adapter, shown
         // with one without it: there to save, not to scan.
-        if self.filming() && !self.caps.offers(Source::Negative) {
+        if self.filming() && !self.caps.offers(self.source()) {
             self.redo = None;
             self.redo_auto = false;
             self.note = tr(
@@ -3689,8 +3784,9 @@ impl App {
     /// The originals of a page scanned whole (the frames of a film, the
     /// photos on the glass), in pixels of the scan at [`PREVIEW_DPI`].
     fn originals(page: &Page) -> Vec<Found> {
-        match page.whole.as_ref().and_then(|w| w.transmission.as_ref()) {
-            Some(t) => film::frames(t, Film::Negative),
+        let whole = page.whole.as_ref();
+        match whole.and_then(|w| w.transmission.as_ref().map(|t| (t, w.film))) {
+            Some((t, kind)) => film::frames(t, kind),
             None => detect::objects(&at_dpi((*page.raw.full).clone(), PREVIEW_DPI)),
         }
     }
@@ -3853,6 +3949,7 @@ impl App {
             photo: self.photo.to_stored(),
             film: prefs::StoredMode {
                 roll_base: self.roll_base,
+                slides: self.slides,
                 ..self.film_settings.to_stored()
             },
             lamp_off_minutes: self.lamp_off,
@@ -4470,6 +4567,7 @@ impl App {
                 self.photo = Settings::photo();
                 self.film_settings = Settings::film();
                 self.roll_base = None;
+                self.slides = false;
                 self.start_mode = StartMode::Last;
                 self.custom_folder = None;
                 self.document_name = d.document_name;
@@ -4597,19 +4695,21 @@ impl App {
             Message::Destripe(on) => self.settings_mut().destripe = on,
             Message::ColourNoise(on) => self.settings_mut().colour_noise = on,
             Message::LockBase => {
-                if let Some(base) = self.strip_base.filter(|_| self.filming()) {
+                let negatives = self.filming() && self.film_kind() == Film::Negative;
+                if let Some(base) = self.strip_base.filter(|_| negatives) {
                     self.roll_base = Some(base);
                     // The preview's measures were from another base.
-                    self.negative = None;
+                    self.measures = None;
                     self.note =
                         tr("Base del rullino bloccata: le prossime strisce useranno questa").into();
                 }
             }
+            Message::Slides(slides) => self.set_slides(slides),
             Message::NewRoll => {
                 // The last strip belongs to the roll taken out.
                 self.strip_base = None;
                 if self.roll_base.take().is_some() {
-                    self.negative = None;
+                    self.measures = None;
                     self.note =
                         tr("Nuovo rullino: ogni striscia misura di nuovo la sua base").into();
                 }
@@ -4647,7 +4747,7 @@ impl App {
             }
             Message::Detect => {
                 if let Some(transmission) = &self.film_preview {
-                    self.found = film::frames(transmission, Film::Negative);
+                    self.found = film::frames(transmission, self.film_kind());
                     self.note = Self::frames_note(self.found.len());
                 } else if let Some((raw, _, _)) = &self.preview {
                     self.found = detect::objects(&raw.full);
@@ -5586,14 +5686,15 @@ impl App {
         match purpose {
             Purpose::Preview => {
                 self.close_editor(true);
-                // Negatives: their picture shown, their frames found on the
+                // Films: their picture shown, their frames found on the
                 // film as the scanner saw it.
                 let film = self.filming();
+                let kind = self.film_kind();
                 let transmission = film.then(|| at_dpi(image.clone(), PREVIEW_DPI));
                 let image = if film {
-                    let (picture, _, negative, gaps) =
-                        Self::develop(image, samples16, None, self.roll_base, colour_noise);
-                    self.negative = negative;
+                    let (picture, _, measures, gaps) =
+                        Self::develop(kind, image, samples16, None, self.roll_base, colour_noise);
+                    self.measures = measures;
                     if gaps.is_some() {
                         self.strip_base = gaps;
                     }
@@ -5607,7 +5708,7 @@ impl App {
                 let shown = render(&raw.proxy, &settings, &settings.adjust, &raw.tone);
                 let picture = Picture::from_rgb(shown.width, shown.height, &shown.to_rgb());
                 self.found = match &transmission {
-                    Some(t) => film::frames(t, Film::Negative),
+                    Some(t) => film::frames(t, kind),
                     None => detect::objects(&raw.full),
                 };
                 self.film_preview = transmission;
@@ -5619,7 +5720,7 @@ impl App {
                 } else {
                     0
                 };
-                self.note = match (film, self.negative) {
+                self.note = match (film, self.measures) {
                     (true, None) => {
                         tr("Anteprima pronta: nessuna pellicola riconosciuta nel supporto").into()
                     }
@@ -5641,6 +5742,7 @@ impl App {
             Purpose::Page => {
                 let mut job = self.job.take();
                 let film = self.filming();
+                let kind = self.film_kind();
                 let whole = job.as_ref().is_some_and(|j| j.crops.is_empty());
                 // A film scanned whole: the frames are found on it as the
                 // scanner saw it, now (without a preview) or with "Separa".
@@ -5649,7 +5751,7 @@ impl App {
                 if let (Some(j), Some(t)) = (job.as_mut(), &transmission) {
                     if self.settings().auto_crop && self.selection.is_none() && self.redo.is_none()
                     {
-                        j.crops = Self::on_bed(film::frames(t, Film::Negative), j.area, image.dpi);
+                        j.crops = Self::on_bed(film::frames(t, kind), j.area, image.dpi);
                         self.batch.1 = j.crops.len().max(1);
                     }
                 }
@@ -5660,12 +5762,14 @@ impl App {
                     .map(|area| Whole {
                         area,
                         transmission: transmission.clone(),
+                        film: kind,
                     });
                 let (image, samples16) = if film {
                     let (picture, deep, _, gaps) = Self::develop(
+                        kind,
                         image,
                         samples16,
-                        self.negative,
+                        self.measures,
                         self.roll_base,
                         colour_noise,
                     );
@@ -6069,7 +6173,7 @@ impl App {
         .spacing(2);
         // Films only for a scanner with an adapter for them (with its cable
         // unplugged a press says so), or while frames scanned are there.
-        if self.caps.offers(Source::Negative) || self.filming() || self.has_work(Work::Film) {
+        if self.offers_films() || self.filming() || self.has_work(Work::Film) {
             segments = segments.push(segment(
                 tr("Pellicola"),
                 Some(Message::Film),
@@ -6936,6 +7040,9 @@ impl App {
             ),
         ]
         .spacing(10);
+        if let Some(holder) = self.holder_view().filter(|_| self.filming()) {
+            pane = pane.push(holder);
+        }
         // A page shown: what it is in is changed in its editor.
         if let Some(i) = self.shown_key().filter(|_| self.editing_page()) {
             pane = pane.push(
@@ -7013,7 +7120,9 @@ impl App {
                         ))
                         .size(11),
                     );
-                pane = pane.push(self.roll_view());
+                if self.film_kind() == Film::Negative {
+                    pane = pane.push(self.roll_view());
+                }
             }
             if let Some(double) = self.double_dpi().filter(|_| !self.filming()) {
                 pane = pane

@@ -8,7 +8,10 @@
 //! [`FakeScanner::a3`], a different one (A3 glass, up to 1200 dpi, two
 //! buttons, no lamp), so tests can see the application adapt.
 //! [`FakeScanner::with_adapter`] is the first with an adapter for negatives
-//! too, a strip of two frames in its holder ([`film`]).
+//! too, a strip of two frames in its holder ([`film`]);
+//! [`FakeScanner::with_slides`] one for slides and negatives, two slides in
+//! its holder ([`slides`]) until a test puts the strip in
+//! ([`Controls::load`]).
 
 use crate::{
     check, Adapter, Backend, ButtonInfo, Capabilities, ColourMode, DeviceInfo, DeviceStatus, Error,
@@ -87,9 +90,44 @@ pub fn film(x: f64, y: f64) -> [f64; 3] {
     BASE
 }
 
+/// The slides in the adapter's holder of [`FakeScanner::with_slides`]:
+/// left, top, width, height (inches from the adapter's top left corner),
+/// two 35 mm pictures across the holder (35 x 23.4 mm), one above the
+/// other, each in its opaque mount.
+pub const SLIDES: [[f64; 4]; 2] = [[0.175, 0.6, 1.378, 0.921], [0.175, 2.1, 1.378, 0.921]];
+
+/// The transmission of the adapter's area with slides in the holder (as
+/// [`film`]): the lamp in the slot at the top, the slides' pictures (a
+/// scene lighter across, in a warm colour), the opaque mounts and holder
+/// everywhere else.
+pub fn slides(x: f64, y: f64) -> [f64; 3] {
+    if y < 0.33 {
+        return [1.0; 3];
+    }
+    for [left, top, width, height] in SLIDES {
+        let (u, v) = ((x - left) / width, (y - top) / height);
+        if (0.0..1.0).contains(&u) && (0.0..1.0).contains(&v) {
+            let stripe = if (v * 6.0) as i32 % 2 == 0 { 1.0 } else { 0.7 };
+            let light = (0.05 + 0.8 * u) * stripe;
+            return [0.8, 0.6, 0.4].map(|c| c * light);
+        }
+    }
+    [0.002; 3]
+}
+
+/// What lies in the adapter's holder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Holder {
+    /// A strip of negatives ([`film`]).
+    #[default]
+    Strip,
+    /// Two slides ([`slides`]).
+    Slides,
+}
+
 /// The linear RGB samples of an area of the glass, or of the adapter's area
-/// for a film, at 16 bits.
-pub fn samples16(request: &ScanRequest) -> Vec<u16> {
+/// for a film (with `holder` in it), at 16 bits.
+pub fn samples16(request: &ScanRequest, holder: Holder) -> Vec<u16> {
     let a = request.area;
     let (width, height) = (a.width as usize, a.height as usize);
     let dpi = f64::from(request.dpi);
@@ -99,7 +137,11 @@ pub fn samples16(request: &ScanRequest) -> Vec<u16> {
         for col in 0..width {
             let gx = (f64::from(a.x) + col as f64 + 0.5) / dpi;
             if request.source.is_film() {
-                rgb.extend(film(gx, gy).map(|t| (t * 65535.0).round() as u16));
+                let t = match holder {
+                    Holder::Strip => film(gx, gy),
+                    Holder::Slides => slides(gx, gy),
+                };
+                rgb.extend(t.map(|t| (t * 65535.0).round() as u16));
             } else {
                 rgb.extend(glass(gx, gy).map(|v| u16::from(v) * 257));
             }
@@ -109,8 +151,11 @@ pub fn samples16(request: &ScanRequest) -> Vec<u16> {
 }
 
 /// The linear RGB samples of an area, 8 bits ([`samples16`]).
-pub fn samples(request: &ScanRequest) -> Vec<u8> {
-    samples16(request).iter().map(|&v| (v >> 8) as u8).collect()
+pub fn samples(request: &ScanRequest, holder: Holder) -> Vec<u8> {
+    samples16(request, holder)
+        .iter()
+        .map(|&v| (v >> 8) as u8)
+        .collect()
 }
 
 /// What a test (or the user, through the application) does to the made-up
@@ -123,6 +168,8 @@ pub struct Controls {
     adapter_out: Arc<AtomicBool>,
     /// Stripes on the scans of the glass, thousandths (0: none).
     stripes: Arc<AtomicU32>,
+    /// Slides in the adapter's holder rather than the strip.
+    slides: Arc<AtomicBool>,
 }
 
 impl Controls {
@@ -153,6 +200,21 @@ impl Controls {
     /// declared. 0 takes them away.
     pub fn stripes(&self, thousandths: u32) {
         self.stripes.store(thousandths, Ordering::SeqCst);
+    }
+
+    /// Puts `holder` in the adapter (the strip, or the slides).
+    pub fn load(&self, holder: Holder) {
+        self.slides
+            .store(holder == Holder::Slides, Ordering::SeqCst);
+    }
+
+    /// What is in the adapter's holder.
+    pub fn holder(&self) -> Holder {
+        if self.slides.load(Ordering::SeqCst) {
+            Holder::Slides
+        } else {
+            Holder::Strip
+        }
     }
 
     /// Whether the lamp is on.
@@ -252,6 +314,19 @@ impl FakeScanner {
         s
     }
 
+    /// [`Self::with_adapter`] taking slides as well as negatives, as the HP
+    /// 3770's (no stripes declared for slides: not measured on any), with
+    /// two slides in its holder ([`slides`]).
+    pub fn with_slides() -> Self {
+        let mut s = Self::with_adapter();
+        s.caps.model = "Flatbed A4 slides".into();
+        if let Some(a) = s.caps.transparency.as_mut() {
+            a.sources = vec![Source::Slide, Source::Negative];
+        }
+        s.controls.load(Holder::Slides);
+        s
+    }
+
     /// A made-up scanner that can do what `caps` says.
     pub fn with(caps: Capabilities) -> Self {
         let controls = Controls::default();
@@ -346,7 +421,7 @@ impl Scanner for FakeScanner {
         if self.caps.lamp.is_some() {
             self.controls.lamp_on.store(true, Ordering::SeqCst);
         }
-        let mut deep = samples16(request);
+        let mut deep = samples16(request, self.controls.holder());
         let amplitude = f64::from(self.controls.stripes.load(Ordering::SeqCst)) / 1000.0;
         if let Some(repeat) = self.caps.stripes_at(request.source, request.dpi) {
             if amplitude > 0.0 {
@@ -582,6 +657,45 @@ mod tests {
         s.controls().unplug_adapter(true);
         assert_eq!(s.status().unwrap().adapter, Some(false));
         assert!(matches!(s.scan(&film, go), Err(Error::Other(_))));
+        // Slides: not taken by this adapter.
+        let slide = ScanRequest {
+            source: Source::Slide,
+            ..film
+        };
+        s.controls().unplug_adapter(false);
+        assert!(matches!(s.scan(&slide, go), Err(Error::InvalidRequest(_))));
+    }
+
+    /// An adapter for slides and negatives: what it scans is what lies in
+    /// its holder, whichever film the request says.
+    #[test]
+    fn slides_in_the_holder_until_the_strip_goes_in() {
+        let mut s = FakeScanner::with_slides();
+        let go = &mut |_| true;
+        assert!(s.caps.offers(Source::Slide) && s.caps.offers(Source::Negative));
+        assert_eq!(s.caps.stripes_at(Source::Slide, 600), None);
+        let (w, h) = s.caps.bed_pixels(Source::Slide, 600).unwrap();
+        let slide = ScanRequest {
+            source: Source::Slide,
+            area: Area {
+                x: 0,
+                y: 0,
+                width: w,
+                height: h,
+            },
+            ..request(600, 16)
+        };
+        let deep = s.scan(&slide, go).unwrap().samples16.unwrap();
+        let at = |deep: &[u16], x: usize, y: usize| deep[(y * w as usize + x) * 3..][..3].to_vec();
+        assert_eq!(at(&deep, 510, 60), [65535; 3], "the slot: the lamp");
+        // In the first slide, at a quarter across: its warm picture.
+        let p = at(&deep, 450, 600);
+        assert!(p[0] > p[1] && p[1] > p[2] && p[2] > 1000, "{p:?}");
+        assert!(at(&deep, 510, 285).iter().all(|&v| v < 200), "the mount");
+        s.controls().load(Holder::Strip);
+        let deep = s.scan(&slide, go).unwrap().samples16.unwrap();
+        let base = BASE.map(|t| (t * 65535.0).round() as u16);
+        assert_eq!(at(&deep, 510, 285), base, "the strip's base");
     }
 
     #[test]

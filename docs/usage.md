@@ -110,16 +110,24 @@ does not inherit by mistake the colours of the session before. A look to reuse i
 
 With a scanner that has an adapter for films a third button appears, **Film**. The HP 3770
 has one in its lid: the light panel, with the holder for two slides or a strip of negatives.
-VetroScan scans **negatives** with it (slides not yet):
+VetroScan scans both **negatives** and **slides** with it:
 
-1. put the strip in the holder and the holder on the glass, as the HP manual shows, and plug
-   the adapter's cable in at the back of the scanner;
-2. choose **Film** (with the cable unplugged a message says so);
+1. put the strip or the slides in their holder and the holder on the glass, as the HP manual
+   shows, and plug the adapter's cable in at the back of the scanner;
+2. choose **Film** (with the cable unplugged a message says so) and, in the **Scan** tab,
+   what is **In the holder**: **Negatives** or **Slides** (the choice shows only for an
+   adapter that takes both; VetroScan remembers it);
 3. **Scan photo**, straight away: Film has no preview (the adapter's area is small and full
    of frames, and a preview would only add a lamp warm-up). The scan covers the adapter's
-   area, turns the negatives into positives with their natural colours and, with the
-   **automatic crop** on (the default), finds the frames in it: one image for each frame, as
-   the photos in Photo. **Redo** on a frame scans that frame only.
+   area, turns the negatives into positives with their natural colours (slides are positives
+   already: they are only stretched to the full range, one black and one white for the three
+   colours, so that their colours stay the film's) and, with the **automatic crop** on (the
+   default), finds the frames or the slides in it: one image for each, as the photos in
+   Photo. **Redo** on a frame scans that frame only.
+
+Slides are scanned as negatives are on the HP 3770, with the longer exposure of its negatives'
+modes: measured on real slides, it halves the noise in their dark parts (where a slide is far
+denser than a negative), for about 20 seconds more; nothing came out burnt in the light parts.
 
 With the automatic crop off you get the whole strip as one image; **Split the frames**, on the
 viewer, shows the frames found on it, to correct, then cuts it into one image per frame,
@@ -144,8 +152,8 @@ Two ticks in the **Scan** tab clean a film's picture:
 - **Remove the scanner's stripes** (off by default): the faint horizontal lines the HP 3770
   leaves on every scan, taken away from the negative before it becomes a positive.
 
-Below them, **Roll**: the film's **base**, the orange of the bare film, which sets how each
-colour is turned into the positive. By default each strip measures its own, in the gaps
+Below them, for negatives only, **Roll**: the film's **base**, the orange of the bare film,
+which sets how each colour is turned into the positive. By default each strip measures its own, in the gaps
 between its frames. The frames of one roll all have the same base, so once a strip with at
 least two frames has been scanned you can press **Lock the base of the last strip**: the base
 is shown (red, green and blue, as the share of the lamp's light the bare film lets through)

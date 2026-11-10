@@ -76,8 +76,9 @@ enum Command {
     /// scans the adapter's whole area in colour at 16 bits. Saves the
     /// picture (NAME.png) and the chip's samples (NAME-16bit.png). With
     /// --film the picture is the positive (`scan_imaging::film`), measured
-    /// on the frames found in the holder (`film::frames`); without, the
-    /// light as it came through.
+    /// on the frames found in the holder (`film::frames`), scanned with the
+    /// negatives' longer line (600 and 1200 dpi only); without, the light
+    /// as it came through, with the glass's line.
     /// Remove the lid's white backing first.
     TmaScan {
         /// Output file (PNG, or PPM if the name ends in .ppm).
@@ -861,7 +862,8 @@ fn tma_scan(
     let request = Request {
         linear: true,
         transparency: true,
-        negative: film == Some(FilmArg::Negative),
+        // Films with the negatives' longer line, slides too (as the driver).
+        negative: film.is_some(),
         depth: 16,
         adjust: Adjustments {
             sharpen: 0.0,

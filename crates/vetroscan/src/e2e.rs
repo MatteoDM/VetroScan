@@ -1606,7 +1606,7 @@ fn a_strip_of_negatives_becomes_a_picture_per_frame() {
     // Back to the glass: its preview again.
     ui.click("Foto");
     assert!(ui.shows("Anteprima"));
-    assert!(ui.app.found.is_empty() && ui.app.negative.is_none());
+    assert!(ui.app.found.is_empty() && ui.app.measures.is_none());
 }
 
 /// Whether every original in `a` has one in `b` with its centre within
@@ -2084,6 +2084,112 @@ fn the_base_of_a_roll_is_locked_used_and_remembered() {
         ui.click_messages(lock).is_empty(),
         "the last strip was the old roll's"
     );
+}
+
+/// The made-up flatbed whose adapter takes slides and negatives, two
+/// slides in its holder, and the handle on it.
+fn with_slides() -> (Ui, scanner_api::fake::Controls) {
+    let scanner = FakeScanner::with_slides();
+    let controls = scanner.controls();
+    (Ui::with_scanners(vec![scanner]), controls)
+}
+
+/// The grey of a picture's middle row at `x`.
+fn grey_at(full: &scan_imaging::Image, x: usize) -> u32 {
+    let i = (full.height / 2 * full.width + x) * 3;
+    full.data[i..i + 3].iter().map(|&v| u32::from(v)).sum()
+}
+
+#[test]
+fn slides_are_chosen_scanned_as_positives_and_remembered() {
+    use scanner_api::Source;
+    let (mut ui, controls) = with_slides();
+    ui.send(Message::Pane(crate::Pane::Scan));
+    assert!(!ui.shows("Nel supporto"), "not on the glass");
+    ui.click("Pellicola");
+    ui.send(Message::Dpi(200));
+    // Negatives first, as before; the choice is there.
+    assert_eq!(ui.app.request().source, Source::Negative);
+    assert!(ui.shows("Nel supporto") && ui.shows("Rullino"));
+    ui.send(Message::Slides(true));
+    assert_eq!(ui.app.film_kind(), scan_imaging::film::Film::Slide);
+    let request = ui.app.request();
+    assert_eq!(request.source, Source::Slide);
+    assert_eq!(request.depth, 16, "a slide is stretched from 16 bits");
+    assert!(!ui.shows("Rullino"), "a slide has no base to lock");
+    assert!(ui.app.note.contains("Diapositive"), "{}", ui.app.note);
+    assert!(ui.app.prefs().film.slides);
+    // One scan, a picture for each slide, lying as in the holder.
+    ui.click("Scansiona foto");
+    assert_eq!(ui.app.pages.len(), 2, "{}", ui.app.note);
+    for page in &ui.app.pages {
+        let full = &page.raw.full;
+        assert_eq!(page.raw.tone, scan_imaging::film::TONE);
+        assert!(full.width > full.height, "{} x {}", full.width, full.height);
+        // The made-up scene lets more light through to the right: a
+        // positive, brighter there (a negative's inversion would make it
+        // darker).
+        let (left, right) = (
+            grey_at(full, full.width / 5),
+            grey_at(full, full.width * 4 / 5),
+        );
+        assert!(right > left + 60, "{left} then {right}");
+        // Stretched to the full range: the brightest film is near white.
+        let deep = page.raw16.as_deref().expect("16 bits");
+        assert!(deep.iter().copied().max().unwrap() > 60000);
+    }
+    assert!(ui.app.measures.is_none(), "no preview for films");
+    // Remembered: the app opened again scans slides.
+    let (mut reopened, _) = with_slides();
+    assert!(reopened.app.slides);
+    reopened.click("Pellicola");
+    assert_eq!(reopened.app.request().source, Source::Slide);
+    // Back to negatives (the strip put in the holder): the slides scanned
+    // stay, the next scan is of the strip, in their place when asked.
+    ui.send(Message::Slides(false));
+    assert_eq!(ui.app.request().source, Source::Negative);
+    assert_eq!(ui.app.pages.len(), 2);
+    assert!(ui.shows("Rullino"));
+    assert!(!ui.app.prefs().film.slides);
+    controls.load(scanner_api::fake::Holder::Strip);
+    ui.send(Message::Scan);
+    assert_eq!(ui.question(), Some("Fare una nuova scansione?"));
+    ui.click("Scansiona");
+    assert_eq!(ui.app.pages.len(), 2, "{}", ui.app.note);
+    for page in &ui.app.pages {
+        let full = &page.raw.full;
+        assert!(full.height > full.width, "the strip's frames stand up");
+    }
+    assert!(ui.app.strip_base.is_some(), "the strip's base");
+    // Not during a scan: the choice stays.
+    ui.app.busy = Some((crate::Purpose::Page, None));
+    ui.send(Message::Slides(true));
+    assert!(!ui.app.slides);
+}
+
+/// Where the adapter takes one film only, there is no choice: its film.
+#[test]
+fn an_adapter_for_one_film_has_no_choice() {
+    use scanner_api::{Scanner, Source};
+    let (mut ui, _) = with_adapter();
+    ui.send(Message::Pane(crate::Pane::Scan));
+    ui.click("Pellicola");
+    assert!(!ui.shows("Nel supporto"));
+    // Slides chosen on another scanner: negatives here all the same.
+    ui.app.slides = true;
+    assert_eq!(ui.app.request().source, Source::Negative);
+    assert!(ui.shows("Rullino"));
+    // An adapter for slides only: slides, without asking.
+    let mut caps = FakeScanner::with_slides().capabilities().clone();
+    if let Some(a) = caps.transparency.as_mut() {
+        a.sources = vec![Source::Slide];
+    }
+    let mut ui = Ui::with_scanners(vec![FakeScanner::with(caps)]);
+    ui.send(Message::Pane(crate::Pane::Scan));
+    ui.click("Pellicola");
+    assert!(ui.app.filming());
+    assert_eq!(ui.app.request().source, Source::Slide);
+    assert!(!ui.shows("Nel supporto") && !ui.shows("Rullino"));
 }
 
 #[test]

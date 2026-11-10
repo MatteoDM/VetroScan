@@ -35,6 +35,12 @@ GitHub; here they are in English.
   prints the one between its frames.
 - `hp3770 tma-scan --height MM` scans further down the adapter (10-130 mm from the top of its
   area), to measure where its light ends.
+- **Slides with the HP 3770's adapter**: in **Film**, **In the holder** chooses **Negatives**
+  or **Slides** (only for an adapter that takes both; remembered). Slides come out as they
+  are, stretched to the full range with one black and one white for the three colours, each
+  slide found in the scan its own image, measured inside the slide, away from the mount. They
+  are scanned with the negatives' longer exposure, which on real slides halved the noise in
+  their dark parts for about 20 seconds more. **Roll** is for negatives only.
 
 ### Changed
 - **Remove the scanner's stripes** now also works in **Film**: the HP 3770 leaves the same
@@ -49,6 +55,8 @@ GitHub; here they are in English.
 - The HP 3770's adapter is scanned 11 mm further down, to 183 mm from the top of the glass
   (HP's own area): its light reaches there with the slides' holder, and the second slide was
   cut by about 5 mm. A strip of negatives takes about a tenth longer.
+- `hp3770 tma-scan --film slide` scans with the negatives' longer line, as the app does, no
+  longer with the glass's (without `--film`, the glass's as before).
 
 ## [0.5.0] - 2026-11-10
 

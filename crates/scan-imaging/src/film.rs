@@ -506,6 +506,51 @@ pub fn measure_strip_with(
     })
 }
 
+/// How a film becomes its picture, whichever it is: taken once (on the
+/// preview, or on the scan) and applied as they are to every scan of it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Measures {
+    /// A negative's: its base, highlights and black.
+    Negative(Negative),
+    /// A slide's: its black and white.
+    Slide(Slide),
+}
+
+impl Measures {
+    /// The film's linear RGB `samples` turned into its picture, linear.
+    pub fn positive(&self, samples: &[u16]) -> Vec<u16> {
+        match self {
+            Measures::Negative(n) => n.positive(samples),
+            Measures::Slide(s) => s.positive(samples),
+        }
+    }
+}
+
+/// Slides scanned in the adapter's holder (16-bit linear RGB `samples`,
+/// `width` x `height` pixels at `dpi`): the slides found ([`frames`]) and
+/// their measures, taken inside them ([`inside`], away from the edges of
+/// the mounts). `None` with too little film.
+pub fn measure_slides(
+    samples: &[u16],
+    width: usize,
+    height: usize,
+    dpi: u16,
+) -> Option<(Slide, Vec<Found>)> {
+    if samples.len() != width * height * 3 {
+        return None;
+    }
+    let image = Image {
+        width,
+        height,
+        dpi,
+        format: Format::Rgb,
+        data: samples.iter().map(|&v| (v >> 8) as u8).collect(),
+    };
+    let found = frames(&image, Film::Slide);
+    let slide = Slide::measure(&inside(samples, width, &found))?;
+    Some((slide, found))
+}
+
 /// The pictures in a preview of the holder (linear RGB, as the scanner
 /// gives it), in reading order: each slide, or each frame of the strips of
 /// 35 mm negatives. A slot left empty, or the leader of a strip never
@@ -1250,5 +1295,41 @@ mod tests {
         for (f, e) in found.iter().zip(&slides) {
             near(f, e, mm);
         }
+    }
+
+    /// Slides are measured inside the slides found: the dark bevel of a
+    /// mount around the picture is not the picture's black.
+    #[test]
+    fn slides_measured_inside_their_mounts() {
+        let mm = 150.0 / 25.4;
+        let mut image = holder(700, 400);
+        let window = |cx: f32, inset: f32| Found {
+            cx,
+            cy: 200.0,
+            width: (34.0 - inset) * mm,
+            height: (23.0 - inset) * mm,
+            angle: 0.0,
+        };
+        for cx in [200.0, 450.0] {
+            // A rim 1 mm wide, darker than the picture, lighter than the
+            // holder: film to `is_film`, not lit to `frames`.
+            paint(&mut image, &window(cx, 0.0), |_, _| [3, 3, 3]);
+            paint(&mut image, &window(cx, 2.0), picture);
+        }
+        let samples: Vec<u16> = image.data.iter().map(|&v| u16::from(v) * 257).collect();
+        let (w, h) = (image.width, image.height);
+        let (slide, found) = measure_slides(&samples, w, h, image.dpi).expect("film");
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert_eq!(Some(slide), Slide::measure(&inside(&samples, w, &found)));
+        // All of it: the rim, or the holder, would be the black.
+        let whole = Slide::measure(&samples).unwrap();
+        assert!(whole.black <= 3 * 257, "{whole:?}");
+        assert!(slide.black > 3 * 257, "{slide:?}");
+        let measures = Measures::Slide(slide);
+        assert_eq!(measures.positive(&samples), slide.positive(&samples));
+        // Nothing but an opaque holder: nothing to measure.
+        let empty = vec![50; w * h * 3];
+        assert_eq!(measure_slides(&empty, w, h, image.dpi), None);
+        assert_eq!(measure_slides(&samples, w, h + 1, image.dpi), None);
     }
 }

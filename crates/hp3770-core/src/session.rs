@@ -47,10 +47,11 @@ pub struct Request {
     /// [`crate::profile::Transparency::area`]). Experimental: checked on
     /// one scanner, no capture of the HP driver to compare with.
     pub transparency: bool,
-    /// With [`Request::transparency`], negatives: the scan modes for
-    /// negatives (a line about six times as long, an exposure per colour;
+    /// With [`Request::transparency`], the scan modes for negatives (a
+    /// line about six times as long, an exposure per colour;
     /// [`crate::scan_modes::negative_mode`]), for the calibration and the
-    /// scan alike.
+    /// scan alike. The driver asks them for slides too
+    /// ([`crate::rts8822::session_request`]): less noise in their shadows.
     pub negative: bool,
 }
 

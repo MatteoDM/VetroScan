@@ -36,11 +36,12 @@ pub fn capabilities(profile: &Profile) -> Capabilities {
         resolutions: d.resolutions.to_vec(),
         modes: vec![ColourMode::Colour, ColourMode::Grey, ColourMode::Lineart],
         depths: vec![8, 16],
-        // The 3770's adapter in its lid (the "TMA"). Negatives only for now:
-        // slides are not tried yet (phase 10 of docs/architecture-plan.md).
+        // The 3770's adapter in its lid (the "TMA"): slides and negatives,
+        // both with the negatives' longer line (`session_request`), at the
+        // resolutions it was run at.
         transparency: profile.transparency.as_ref().map(|t| Adapter {
             area_inches: (f64::from(t.area[2]) / 254.0, f64::from(t.area[3]) / 254.0),
-            sources: vec![Source::Negative],
+            sources: vec![Source::Slide, Source::Negative],
             resolutions: crate::scan_modes::NEGATIVE_RESOLUTIONS.to_vec(),
         }),
         buttons: d.buttons.iter().map(|&b| button_info(b)).collect(),
@@ -48,7 +49,9 @@ pub fn capabilities(profile: &Profile) -> Capabilities {
             warm_up: scan::LAMP_WARMUP,
         }),
         tone: profile.tone(),
-        // The glass's, and the films' for each film the adapter takes.
+        // The glass's, and the negatives' (measured on negatives; on the
+        // two slides scanned none was found to measure, their pictures too
+        // busy: not declared for slides until measured on one).
         stripes: d
             .stripes
             .iter()
@@ -161,7 +164,10 @@ pub fn session_request(request: &ScanRequest, fast_travel: bool, profile: &Profi
         depth: request.depth,
         fast_travel,
         transparency: film,
-        negative: request.source == Source::Negative,
+        // Slides too: the longer line halves the noise in their shadows
+        // (measured on 10 November 2026 against the glass's line, which is
+        // HP's for slides), nothing saturated.
+        negative: film,
         ..Request::new(
             request.dpi,
             geometry::Area {
@@ -347,14 +353,16 @@ mod tests {
         let labels: Vec<_> = c.buttons.iter().map(|b| b.label.as_str()).collect();
         assert_eq!(labels, ["Scan", "Copy", "Instant Share"]);
         assert_eq!(c.tone, HP3770.tone());
-        // The adapter for negatives, its area the light measured in the lid
-        // (down to 183 mm: the slides' holder reaches further than the
-        // negatives').
+        // The adapter for slides and negatives, its area the light measured
+        // in the lid (down to 183 mm: the slides' holder reaches further
+        // than the negatives').
         let adapter = c.transparency.as_ref().expect("an adapter");
-        assert_eq!(adapter.sources, [Source::Negative]);
-        assert!(c.offers(Source::Negative) && !c.offers(Source::Slide));
+        assert_eq!(adapter.sources, [Source::Slide, Source::Negative]);
+        assert!(c.offers(Source::Negative) && c.offers(Source::Slide));
         assert_eq!(c.bed_pixels(Source::Negative, 200), Some((346, 841)));
+        assert_eq!(c.bed_pixels(Source::Slide, 200), Some((346, 841)));
         assert_eq!(c.resolutions_for(Source::Negative), [600, 1200]);
+        assert_eq!(c.resolutions_for(Source::Slide), [600, 1200]);
         // The stripes, per source: the glass's, and the films' measured at
         // both film resolutions.
         assert_eq!(c.stripes_at(Source::Glass, 300), Some(10));
@@ -432,6 +440,25 @@ mod tests {
             (r.area.x, r.area.y, r.area.width, r.area.height),
             (cli.x, cli.y, cli.width, cli.height)
         );
+        // Slides: the same area, the same longer line (so the same guard on
+        // the resolutions, in `session::scan`).
+        let slide = session_request(
+            &ScanRequest {
+                source: Source::Slide,
+                dpi: 1200,
+                area: scanner_api::Area {
+                    x: 0,
+                    y: 0,
+                    width: w,
+                    height: h,
+                },
+                depth: 16,
+            },
+            true,
+            &HP3770,
+        );
+        assert!(slide.transparency && slide.negative);
+        assert_eq!(slide.area, r.area);
     }
 
     /// The samples of the contract are the chip's untouched: processing them
