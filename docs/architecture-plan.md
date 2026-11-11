@@ -968,8 +968,17 @@ on `usbscan` by itself.
   films; once a WIA scan had switched it back (`1E 77`, `1E A2 01`), the replay of the 300 dpi
   scan ran whole in 14 s and gave the same photo, colours aligned, but darker and warmer than
   Epson's driver: the shading table and `1E 42` sent were the capture's, not computed from that
-  day's calibration. Next: switching the lamp as the driver does, then computing what the
-  capture only replays (shading, then the parameters for any area and resolution).
+  day's calibration. **The calibration computed by us** (same night): the shading table is, per
+  column and channel, a white byte `floor((white − K) / 2^lw)` and a dark byte
+  `floor((dark − dark_min) / 2^ld)`, K and the minimum dark in `1E 42`, the two scales in byte 15
+  of `1E 41`, and the black pixels' means in the `1E 42` before the white calibration (notes in
+  `captures/epson4490/06-formato-dati.md`; dark byte, minimum dark and scales exact on six
+  captures, the white byte about 1 unit off because the driver's way of leaving out dusty lines
+  is not known). `replay` computes them from its own calibration reads (`C`, `X41`, `X42`,
+  `X42B`, `XT` steps): the image came out as Epson's driver's of the same photo, at the same
+  moment (means equal, WIA = 0.994 × ours + 0.4 per channel, 2 levels apart on average, the
+  noise between two scans). Next: switching the lamp as the driver does, then computing the
+  parameters (`1E 57`, `1E 41`, the motor's) for any area and resolution.
 - **More captures and the data format**: the glass through WIA (150-1200 dpi, colour, grey,
   black and white, a cancelled scan), Epson Scan (2400 and 4800 dpi, 48 bits), a negative with
   and without Digital ICE, a slide, the lamp (it switches itself off after about 15 minutes);
