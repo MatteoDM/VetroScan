@@ -109,8 +109,10 @@ pub fn checksum(payload: &[u8]) -> u8 {
 /// 4. in place of the last byte, the [`checksum`], then [`ACK`];
 /// 5. `1B 16`, [`ACK`]; `80`, [`ACK`].
 ///
-/// Any other answer stops it with an error. Whether the scanner leaves the
-/// bus and comes back after the last step is not known yet.
+/// Any other answer stops it with an error. Captured from Epson's driver on
+/// 11 November 2026, byte for byte the same; the scanner stays on the bus
+/// after `80`, and answers its next command only after about 9 s (it sets
+/// itself up), within [`crate::BULK_TIMEOUT`].
 pub fn upload_firmware(t: &mut dyn Transport, image: &[u8]) -> Result<()> {
     firmware::check_image(image).map_err(Error::Other)?;
     let payload = &image[HEADER_LEN..];

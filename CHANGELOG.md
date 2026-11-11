@@ -17,6 +17,12 @@ GitHub; here they are in English.
 
 ## [Unreleased]
 
+### Changed
+- VetroScan sends the Epson Perfection 4490 Photo its firmware when it opens the scanner and
+  the firmware is not running (on Linux and macOS, where no Epson driver sends it at
+  switch-on): a capture of Epson's driver showed the same bytes. `VETROSCAN_EPSON_UPLOAD` is no longer needed, and
+  no longer read. It still does not scan.
+
 ## [0.7.0] - 2026-11-11
 
 ### Added

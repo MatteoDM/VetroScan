@@ -663,7 +663,7 @@ coloured lines (blue, green, red) the same distance apart.
   does the same on a saved scan. Declared per source since (phase 13, point 2); at 600 dpi
   measured the same day on a film: every 5.0 lines, 2-3 levels in a blue sky.
 
-## Phase 12 · the Epson Perfection 4490 Photo · waiting for the scanner
+## Phase 12 · the Epson Perfection 4490 Photo · the scanner arrived on 11 November 2026
 
 Added on 9 November 2026: Matteo is getting an Epson Perfection 4490 Photo, the first scanner
 besides the HP 3770 (phases 8–9 were postponed only for lack of hardware). Researched before
@@ -911,12 +911,11 @@ pushed): the crate **`crates/epson-gt-x750`**, in the app's `Registry` after the
   `VID:PID`) on any USBPcap root hub, and `Start-CapNew`/`Stop-CapNew` capture the devices that
   connect from then on (the power-on upload).
 
-- **The upload waits for the capture**: `UPLOAD_CONFIRMED` is `false`, so opening the 4490
-  (VetroScan does it by itself, to read the buttons) sends nothing but `1B 03`: with the
-  firmware running (sent by Epson's driver) it opens, otherwise it answers an error saying
-  how to send it. It is sent only with `VETROSCAN_EPSON_UPLOAD=1` or **`epson4490 upload`**.
-  Once the capture shows the same bytes, `UPLOAD_CONFIRMED` becomes `true` and the 4490 is
-  plug and play.
+- **The upload waited for the capture**: `UPLOAD_CONFIRMED` was `false`, so opening the 4490
+  sent nothing but `1B 03`, and the firmware went out only with `VETROSCAN_EPSON_UPLOAD=1` or
+  `epson4490 upload`. **Confirmed on 11 November 2026** (below, "First captures"):
+  `UPLOAD_CONFIRMED` is `true` and the variable is gone, so opening a 4490 whose firmware is
+  not running sends it.
 - A command **`epson4490`** (a binary of the crate, not in the packages): `list`, `firmware`
   (which copy would be sent, no scanner needed), `probe` (list, firmware, state; nothing sent
   but `1B 03`), `upload [--firmware FILE]`.
@@ -925,14 +924,33 @@ pushed): the crate **`crates/epson-gt-x750`**, in the app's `Registry` after the
 - The udev rule `packaging/linux/70-epson-4490.rules` in the deb, rpm and AUR packages, and the
   post-install trigger for a scanner already plugged in.
 
-**Still open in milestone 1** (all of it needs the scanner):
-- the power-on capture confirms the upload's bytes (the checksum in place of the last byte),
-  says whether Epson's driver sends the firmware at plug-in, and whether the scanner leaves the
-  bus and comes back after `80` (the backend does not wait for that yet); then
-  `UPLOAD_CONFIRMED`;
-- both copies (Windows driver and AVASYS) tried on the scanner (`epson4490 upload --firmware`);
+**Still open in milestone 1**:
+- ~~the power-on capture confirms the upload's bytes~~ · **done on 11 November 2026** (below);
+- our own upload tried on the scanner, with both copies (Windows driver and AVASYS,
+  `epson4490 upload --firmware`): on Windows Epson's driver sends the firmware first, so this
+  needs the scanner without it (Linux, or WinUSB);
 - what `1B 03`'s second byte, the lamp, the adapter and the buttons look like (the status shows
   only ready/busy).
+
+### First captures (11 November 2026)
+
+Notes and captures in `captures/epson4490` (`05-catture.md`, outside the repository). Both
+transport locks released before switching it on. Windows 11 bound Epson's `es54.inf` 3.2.4.1
+on `usbscan` by itself.
+- **Descriptors**: USB 2.0, class `ff/ff/ff`, `bcdDevice` 1.00, self-powered, one interface
+  with two bulk endpoints, `0x81` IN and `0x02` OUT, 512 bytes; no serial number.
+- **The firmware upload**: Epson's driver sends it **at plug-in** (17 ms after the scanner
+  appears, no program opening it): `1B 03` → `28 00` (bit `0x10` clear), `1B 06` → `06`,
+  `01 00 01 00`, the file after its 256-byte header in writes of 65,520 + 16 bytes, `D9` (the
+  8-bit sum of those bytes, in place of the file's last byte `F8`) → `06`, `1B 16` → `06`,
+  `80` → `06`. Byte for byte what `protocol::upload_firmware` sends (12 bytes of the first write
+  were cut by the capture's length, the sum covers them). The scanner **stays on the bus**,
+  and answers its next command only after about 8.8 s (it sets itself up; our timeout is 30 s).
+- **At rest, Epson's WIA service polls `1E 85` every second**, answered `00` (one byte; perhaps
+  the buttons, to be seen by pressing one). Our backend reaches the scanner through the same
+  `usbscan`, so with Epson's driver installed our exchanges could mix with its polls: to be
+  understood before any command longer than `1B 03` (whether `usbscan`'s handle is exclusive,
+  stopping the WIA service, or WinUSB in its place).
 
 **Left for after the capture, on purpose**: "firmware missing" shown by the app as a state of
 its own, and the firmware's path in the Preferences window (today an error at opening that
@@ -1253,5 +1271,5 @@ what it measures. One gap: the stripes are declared per resolution, not per sour
 | 9 · other brands (postponed) | to be decided | medium | eSCL yes, with a network scanner |
 | 10 · slides and negatives on the 3770 (done: negatives; slides through phase 13 step 5.2) | 0.5.0 (negatives), 0.6.0 (slides) | medium | yes: the 3770's own adapter |
 | 11 · precise moves from the keyboard (done) | 0.4.0 | low | yes |
-| 12 · Epson Perfection 4490 Photo, native, plug and play (milestone 1 written without the scanner; the rest waits for it) | 0.5.0 (milestone 1, experimental); the rest to be decided | high: protocol unknown, two carriages | no: the scanner (firmware inside the program) |
+| 12 · Epson Perfection 4490 Photo, native, plug and play (milestone 1 written without the scanner; arrived 11 November 2026, the firmware upload confirmed by a capture; the rest under way) | 0.5.0 (milestone 1, experimental); the rest to be decided | high: protocol unknown, two carriages | no: the scanner (firmware inside the program) |
 | 13 · films done professionally, for every scanner (done: 1-3, 5.1-5.2, 6 for slides; 5.3 set aside; 4 stalled without HP's captures; open: 7, 8) | 0.6.0 (1-3, 5.1-5.2, 6); 7, 8 to be decided | low (1-3, 5.1-5.2, 6, 7 in software, 8), medium (4, 5.3: the motor) | 1-3, 5.1-5.2, 6, 7 in software, 8 yes; 4 needs the 3770's captures |
