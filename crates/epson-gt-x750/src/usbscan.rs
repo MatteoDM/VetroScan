@@ -8,8 +8,13 @@
 //! this transport; `DeviceIoControl` is used only to read the USB ids and
 //! set the timeouts. Structures and IOCTL codes from `usbscan.h` (Windows
 //! DDK).
+//!
+//! While it is open the transport holds the scanner's STI lock
+//! ([`crate::sti`]), so Windows' image service does not poll the scanner in
+//! between.
 #![allow(unsafe_code)]
 
+use crate::sti::StiLock;
 use crate::{Found, Link, Transport, BULK_TIMEOUT, PRODUCT_ID, VENDOR_ID};
 use scanner_api::{Error, Result};
 use std::ffi::c_void;
@@ -152,6 +157,8 @@ pub(crate) fn list() -> Vec<Found> {
 pub struct UsbscanTransport {
     handle: Handle,
     index: u32,
+    /// Released after the handle is closed (fields drop in order).
+    lock: Option<StiLock>,
 }
 
 // SAFETY: the handle is owned by the transport and closed once; Win32 file
@@ -163,13 +170,15 @@ impl fmt::Debug for UsbscanTransport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("UsbscanTransport")
             .field("path", &path_of(self.index))
+            .field("lock", &self.lock)
             .finish_non_exhaustive()
     }
 }
 
 impl UsbscanTransport {
     /// Opens `\\.\UsbscanN` (`location`, as [`list`] gives it), if it is
-    /// the Epson 4490.
+    /// the Epson 4490, and takes its STI lock; a lock another program holds
+    /// (Epson Scan scanning) is an [`Error::Busy`].
     pub fn open(location: &str) -> Result<Self> {
         let n: u32 = location
             .strip_prefix(r"\\.\Usbscan")
@@ -198,7 +207,17 @@ impl UsbscanTransport {
                 0,
             )
         };
-        Ok(Self { handle, index: n })
+        let lock = StiLock::take(&path_of(n))?;
+        Ok(Self {
+            handle,
+            index: n,
+            lock,
+        })
+    }
+
+    /// Whether the transport holds the scanner's STI lock.
+    pub fn locked(&self) -> bool {
+        self.lock.is_some()
     }
 }
 

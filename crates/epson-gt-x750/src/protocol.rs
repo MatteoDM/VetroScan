@@ -29,6 +29,11 @@ pub const FIRMWARE_END: [u8; 2] = [0x1B, 0x16];
 /// Sent alone after [`FIRMWARE_END`] (starts the firmware); answered by
 /// [`ACK`].
 pub const FIRMWARE_RUN: u8 = 0x80;
+/// Asks which button is pressed: one byte comes back, `00` none, else the
+/// button's number (captured on 11 November 2026: `01` Start, `02` Scan to
+/// PDF, `03` Scan to E-mail, `04` Copy, each read for about 2 s after a
+/// press). Epson's driver asks it every second.
+pub const GET_BUTTONS: [u8; 2] = [0x1E, 0x85];
 /// The longest write of the firmware's bytes, as Epson's driver does them.
 pub const FIRMWARE_CHUNK: usize = 0xFFF0;
 
@@ -89,6 +94,14 @@ pub fn state(t: &mut dyn Transport) -> Result<State> {
     let mut answer = [0u8; 2];
     read_exact(t, &mut answer, "state (1B 03)")?;
     Ok(State(answer))
+}
+
+/// The button pressed ([`GET_BUTTONS`]): 0 for none, else 1-4.
+pub fn button(t: &mut dyn Transport) -> Result<u8> {
+    t.bulk_out(&GET_BUTTONS)?;
+    let mut answer = [0u8];
+    read_exact(t, &mut answer, "buttons (1E 85)")?;
+    Ok(answer[0])
 }
 
 /// The 8-bit sum the scanner checks: of the payload's bytes but the last,

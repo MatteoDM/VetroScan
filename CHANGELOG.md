@@ -22,6 +22,10 @@ GitHub; here they are in English.
   the firmware is not running (on Linux and macOS, where no Epson driver sends it at
   switch-on): a capture of Epson's driver showed the same bytes. `VETROSCAN_EPSON_UPLOAD` is no longer needed, and
   no longer read. It still does not scan.
+- The Epson Perfection 4490's four buttons (Start, Scan to PDF, Scan to E-mail, Copy) reach
+  VetroScan. On Windows with Epson's driver, VetroScan takes the scanner for itself while it has
+  it open, so Windows stops asking it for its buttons in between: Epson Scan cannot use the
+  scanner meanwhile, and if Epson Scan is scanning, VetroScan says the scanner is busy.
 
 ## [0.7.0] - 2026-11-11
 

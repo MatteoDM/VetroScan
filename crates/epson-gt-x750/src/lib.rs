@@ -28,6 +28,8 @@ pub mod guard;
 mod nusb_backend;
 pub mod protocol;
 #[cfg(windows)]
+mod sti;
+#[cfg(windows)]
 mod usbscan;
 
 pub use nusb_backend::NusbTransport;
@@ -155,8 +157,8 @@ pub fn capabilities() -> Capabilities {
         // It has an adapter in its lid (slides, negatives, 6 x 12 cm), not
         // driven yet: not declared, so the application offers no films.
         transparency: None,
-        // Provisional: how the scanner reports them is not known yet
-        // (`poll_buttons` answers none).
+        // Read with `1E 85` (`poll_buttons`), in this order: the scanner
+        // answers 1-4 (captured on 11 November 2026).
         buttons: vec![
             button("start", "Start", SuggestedAction::Scan),
             button("pdf", "Scan to PDF", SuggestedAction::Scan),
@@ -335,10 +337,15 @@ impl scanner_api::Scanner for Gt4490 {
         ))
     }
 
-    /// None: how the scanner reports its buttons is not known yet, and
-    /// nothing is sent to ask.
+    /// The button pressed, as `1E 85` reads it: its number 1-4 is the
+    /// place in [`capabilities`]' buttons plus one (Start, PDF, E-mail,
+    /// Copy, as captured). Any other answer is none.
     fn poll_buttons(&mut self) -> Result<u32> {
-        Ok(0)
+        let n = protocol::button(&mut self.transport)?;
+        Ok(match n {
+            1..=4 => 1 << (n - 1),
+            _ => 0,
+        })
     }
 }
 
@@ -390,12 +397,36 @@ mod tests {
         };
         let e = s.scan(&request, &mut |_| true).unwrap_err();
         assert!(e.to_string().contains("not implemented yet"), "{e}");
-        assert_eq!(s.poll_buttons(), Ok(0));
         assert_eq!(s.lamp_off(), Err(Error::Unsupported("lamp_off")));
         // Only the 1B 03 of the opening went out (the mock would have
         // failed any read after).
         let e = s.status().unwrap_err();
         assert!(e.to_string().contains("no answer left"), "{e}");
+    }
+
+    #[test]
+    fn the_buttons_are_read_with_1e_85() {
+        // Opening (1B 03), then none, Start, Copy, PDF, E-mail and an
+        // unknown answer, as 1E 85 gives them.
+        let t = Mock::answering(&[&[0x10, 0x00], &[0], &[1], &[4], &[2], &[3], &[9]]);
+        let mut s = Gt4490::start(Box::new(t), || panic!("no firmware needed")).unwrap();
+        let bits: Vec<u32> = (0..6).map(|_| s.poll_buttons().unwrap()).collect();
+        assert_eq!(bits, [0, 0b0001, 0b1000, 0b0010, 0b0100, 0]);
+        // In the order of the capabilities' buttons.
+        let ids: Vec<&str> = s
+            .capabilities()
+            .buttons
+            .iter()
+            .map(|b| b.id.as_str())
+            .collect();
+        assert_eq!(ids, ["start", "pdf", "email", "copy"]);
+    }
+
+    #[test]
+    fn a_button_poll_sends_1e_85_and_reads_one_byte() {
+        let mut t = Mock::answering(&[&[2]]);
+        assert_eq!(protocol::button(&mut t), Ok(2));
+        assert_eq!(t.writes, vec![protocol::GET_BUTTONS.to_vec()]);
     }
 
     #[test]

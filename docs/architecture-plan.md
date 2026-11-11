@@ -929,8 +929,8 @@ pushed): the crate **`crates/epson-gt-x750`**, in the app's `Registry` after the
 - our own upload tried on the scanner, with both copies (Windows driver and AVASYS,
   `epson4490 upload --firmware`): on Windows Epson's driver sends the firmware first, so this
   needs the scanner without it (Linux, or WinUSB);
-- what `1B 03`'s second byte, the lamp, the adapter and the buttons look like (the status shows
-  only ready/busy).
+- what `1B 03`'s second byte, the lamp and the adapter look like (the status shows only
+  ready/busy); the buttons · **done on 12 November 2026** (below).
 
 ### First captures (11 November 2026)
 
@@ -946,11 +946,26 @@ on `usbscan` by itself.
   `80` → `06`. Byte for byte what `protocol::upload_firmware` sends (12 bytes of the first write
   were cut by the capture's length, the sum covers them). The scanner **stays on the bus**,
   and answers its next command only after about 8.8 s (it sets itself up; our timeout is 30 s).
-- **At rest, Epson's WIA service polls `1E 85` every second**, answered `00` (one byte; perhaps
-  the buttons, to be seen by pressing one). Our backend reaches the scanner through the same
-  `usbscan`, so with Epson's driver installed our exchanges could mix with its polls: to be
-  understood before any command longer than `1B 03` (whether `usbscan`'s handle is exclusive,
-  stopping the WIA service, or WinUSB in its place).
+- **At rest, Windows' image service polls `1E 85` every second**: the **buttons**, one byte,
+  `00` none, `01` Start, `02` Scan to PDF, `03` Scan to E-mail, `04` Copy (pressed one by one by
+  Matteo; each read for about 2 s). Epson's driver key declares the scanner needs polling
+  (`Capabilities` 0x13), so `stisvc` asks through the same `usbscan` our backend uses: our
+  exchanges could fall between its. **During a scan it does not poll**: the device's STI lock.
+  Tried on the scanner (12 November 2026): a program holding the lock (`StiCreateInstanceW`,
+  `IStillImageW::CreateDevice`, `IStiDevice::LockDevice`) stops the polling at once, and it starts
+  again when released. So **the backend holds the STI lock while it has the 4490 open through
+  `usbscan`** (`sti.rs`; nothing on Linux and macOS, where no service polls it), and reads the
+  buttons itself (`poll_buttons`, `1E 85`, let through by the guard; `epson4490 buttons`). Checked
+  with a capture: only our `1E 85` every 200 ms while it held the lock, Windows' polls before and
+  after; the four buttons read right. While VetroScan has the scanner open, Epson Scan cannot
+  use it and Windows does not see its buttons; a lock another program holds (Epson Scan
+  scanning) makes opening fail after 5 s as busy.
+- **More captures and the data format**: the glass through WIA (150-1200 dpi, colour, grey,
+  black and white, a cancelled scan), Epson Scan (2400 and 4800 dpi, 48 bits), a negative with
+  and without Digital ICE, a slide, the lamp (it switches itself off after about 15 minutes);
+  the image data decoded (interleaved RGB, 8 or 16 bits, the colours some lines apart, the
+  scanner applying shading and gamma from tables the computer loads). Notes in
+  `captures/epson4490` (`05-catture.md`, `06-formato-dati.md`).
 
 **Left for after the capture, on purpose**: "firmware missing" shown by the app as a state of
 its own, and the firmware's path in the Preferences window (today an error at opening that

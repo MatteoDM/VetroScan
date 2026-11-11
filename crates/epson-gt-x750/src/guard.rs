@@ -10,7 +10,8 @@
 //! `1E 48` start a scan. Rather than a list of what is forbidden, the guard
 //! lets through a list of what is known to move nothing:
 //!
-//! * `1B 03` (state) and `1E 86` (the two positions), read-only;
+//! * `1B 03` (state), `1E 86` (the two positions) and `1E 85` (the button
+//!   pressed, seen in a capture), read-only;
 //! * the firmware upload: `1B 06`, then only its own data (the length
 //!   `01 00 01 00`, 65,536 bytes, the checksum), `1B 16`, and `80` right
 //!   after `1B 16`.
@@ -20,7 +21,7 @@
 //! shown it, and then added here on purpose.
 
 use crate::firmware::PAYLOAD_LEN;
-use crate::protocol::{FIRMWARE_BEGIN, FIRMWARE_END, FIRMWARE_RUN, GET_STATE};
+use crate::protocol::{FIRMWARE_BEGIN, FIRMWARE_END, FIRMWARE_RUN, GET_BUTTONS, GET_STATE};
 use crate::Transport;
 use scanner_api::{Error, Result};
 
@@ -94,7 +95,7 @@ impl<T: Transport> Guarded<T> {
             _ => {}
         }
         match data {
-            d if d == GET_STATE || d == GET_POSITIONS => Ok(Stage::Idle),
+            d if d == GET_STATE || d == GET_POSITIONS || d == GET_BUTTONS => Ok(Stage::Idle),
             d if d == FIRMWARE_BEGIN => Ok(Stage::Length),
             d if d == FIRMWARE_END => Ok(Stage::Run),
             _ => Err(refusal(data)),
@@ -188,9 +189,14 @@ mod tests {
         let mut t = guarded(&[]);
         t.bulk_out(&GET_STATE).unwrap();
         t.bulk_out(&GET_POSITIONS).unwrap();
+        t.bulk_out(&GET_BUTTONS).unwrap();
         assert_eq!(
             t.inner().writes,
-            vec![GET_STATE.to_vec(), GET_POSITIONS.to_vec()]
+            vec![
+                GET_STATE.to_vec(),
+                GET_POSITIONS.to_vec(),
+                GET_BUTTONS.to_vec()
+            ]
         );
     }
 

@@ -8,6 +8,7 @@
 //! epson4490 firmware [--firmware F]    which esfw54.bin would be sent, no scanner needed
 //! epson4490 probe                      list, firmware, then the state (1B 03) of the first
 //! epson4490 upload [--firmware F]      sends the firmware if it is not running
+//! epson4490 buttons [SECONDS]          reads the buttons (1E 85) for a while, 10 s by default
 //! ```
 
 use epson_gt_x750::guard::Guarded;
@@ -17,13 +18,13 @@ use scanner_api::Error;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const USAGE: &str =
-    "usage: epson4490 list | firmware [--firmware FILE] | probe | upload [--firmware FILE]";
+const USAGE: &str = "usage: epson4490 list | firmware [--firmware FILE] | probe |                      upload [--firmware FILE] | buttons [SECONDS]";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut firmware_path = None;
     let mut command = None;
+    let mut seconds = None;
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
@@ -36,6 +37,12 @@ fn main() -> ExitCode {
                 return ExitCode::SUCCESS;
             }
             c if command.is_none() && !c.starts_with('-') => command = Some(c.to_owned()),
+            n if command.as_deref() == Some("buttons") && seconds.is_none() => {
+                match n.parse::<u64>() {
+                    Ok(n) => seconds = Some(n),
+                    Err(_) => return usage(),
+                }
+            }
             _ => return usage(),
         }
     }
@@ -47,6 +54,7 @@ fn main() -> ExitCode {
         Some("firmware") => show_firmware(firmware_path.as_deref()),
         Some("probe") => probe(firmware_path.as_deref()),
         Some("upload") => upload(firmware_path),
+        Some("buttons") => buttons(seconds.unwrap_or(10)),
         _ => return usage(),
     };
     match result {
@@ -101,7 +109,7 @@ fn open_first() -> Result<Guarded<Box<dyn Transport>>, Error> {
     {
         match epson_gt_x750::open(&f.location) {
             Ok(t) => {
-                println!("opened {} {}", f.link, f.location);
+                println!("opened {} {} ({t:?})", f.link, f.location);
                 return Ok(Guarded::new(t));
             }
             Err(e) => last = e,
@@ -153,6 +161,31 @@ fn upload(path: Option<PathBuf>) -> Result<(), Error> {
             "state (1B 03) not read after the upload ({e}): the scanner may have left the bus \
              and come back; run `epson4490 probe`"
         ),
+    }
+    Ok(())
+}
+
+/// The button names, in the order of the backend's capabilities.
+const BUTTONS: [&str; 4] = ["Start", "Scan to PDF", "Scan to E-mail", "Copy"];
+
+fn buttons(seconds: u64) -> Result<(), Error> {
+    let mut t = open_first()?;
+    println!("state (1B 03): {}", describe(protocol::state(&mut t)?));
+    println!("reading the buttons (1E 85) for {seconds} s: press them");
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+    let mut last = 0;
+    while std::time::Instant::now() < end {
+        let n = protocol::button(&mut t)?;
+        if n != last {
+            let name = match n {
+                0 => "none",
+                1..=4 => BUTTONS[usize::from(n) - 1],
+                _ => "unknown",
+            };
+            println!("1E 85 -> {n:02X} ({name})");
+            last = n;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
     }
     Ok(())
 }
