@@ -960,6 +960,16 @@ on `usbscan` by itself.
   after; the four buttons read right. While VetroScan has the scanner open, Epson Scan cannot
   use it and Windows does not see its buttons; a lock another program holds (Epson Scan
   scanning) makes opening fail after 5 s as busy.
+- **The first scan of ours** (12 November 2026): `epson4490 replay SCRIPT OUT --move` sends
+  the bytes of a script made from a capture (`captures/epson4490/tools/script.py`), compares every
+  answer with the capture's and stops at the first that differs (the status polls wait for the
+  captured answer; four read-only answers may differ). The first try stopped by itself before the
+  lamp or the carriage: `1E A1` is the lamp lit (`01` glass, `02` lid), still the lid's after the
+  films; once a WIA scan had switched it back (`1E 77`, `1E A2 01`), the replay of the 300 dpi
+  scan ran whole in 14 s and gave the same photo, colours aligned, but darker and warmer than
+  Epson's driver: the shading table and `1E 42` sent were the capture's, not computed from that
+  day's calibration. Next: switching the lamp as the driver does, then computing what the
+  capture only replays (shading, then the parameters for any area and resolution).
 - **More captures and the data format**: the glass through WIA (150-1200 dpi, colour, grey,
   black and white, a cancelled scan), Epson Scan (2400 and 4800 dpi, 48 bits), a negative with
   and without Digital ICE, a slide, the lamp (it switches itself off after about 15 minutes);
