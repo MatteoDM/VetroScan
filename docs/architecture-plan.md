@@ -1123,9 +1123,14 @@ native scan computes any area at 100, 200, 300, 400, 600, 1200 dpi (`scan.rs`), 
    WIA's, so reading it at every scan is what makes it right.
 2. **The glass's height**: the app's preview of the whole glass at 200 dpi (2,340 lines of
    11.7 in) would end at step 29,603, past the furthest captured (29,587, capture 07): the guard
-   refuses it. Decided: declare the glass 297 mm (11.69 in, A4's length, what WIA scanned) in
-   `capabilities()`; a WIA capture of the whole glass, with the next captures, says whether the
-   last millimetre can be read, and moves `MAX_READ_END` if so.
+   refuses it. **Done** (12 November): the `Capabilities` say 11.69 in (296.9 mm,
+   `GLASS_INCHES`; even 297 mm, 2,339 lines at 200 dpi, ended 4 steps further), so the whole
+   glass at every resolution covered stays within the captures (a test); the guard keeps the
+   user guide's 11.7 in for the area and the furthest captured step for the carriage, which
+   lets WIA's own A4 (3,508 lines at 300) through. Left for the next captures: a WIA scan of the
+   whole glass (does the last millimetre read?) and one at 600 dpi of the whole width, which
+   needs a line time (4224 µs) captured at 100 and 300 dpi but not at 600: until then the guard
+   refuses wider than 4,992 pixels at 600 dpi (211 mm), with a message.
 3. **Linear samples**: the contract wants linear colour (the app applies the `Tone`, and films
    need the shadows), while the scan loads WIA's curves (gamma 1/1.8 in `1E B3`, the tone table
    `1E 84` type 02). Decided: linear tables (the identity in both), never sent so far

@@ -57,6 +57,12 @@ pub const VENDOR_ID: u16 = 0x04B8;
 pub const PRODUCT_ID: u16 = 0x0119;
 /// Name of this backend in the [`scanner_api::Registry`].
 pub const BACKEND: &str = "epson-gt-x750";
+/// The glass, width and height in inches: 8.5 in (216 mm, Epson's user guide) by 11.69 in
+/// (296.9 mm). The user guide's 11.7 in would let a scan of the whole glass end a few motor steps
+/// further than any capture did (WIA's A4 scans, captures 06 and 07, 29,587 steps from home);
+/// 11.69 in keeps the whole height inside them at every resolution. A capture of the whole glass
+/// may give that millimetre back later.
+pub const GLASS_INCHES: (f64, f64) = (8.5, 11.69);
 /// Timeout of a bulk transfer.
 pub const BULK_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -153,8 +159,7 @@ pub fn capabilities() -> Capabilities {
             vendor: VENDOR_ID,
             product: PRODUCT_ID,
         }),
-        // 216 x 297 mm.
-        glass_inches: (8.5, 11.7),
+        glass_inches: GLASS_INCHES,
         // Provisional: optical 4800 dpi across; which ones the native
         // protocol takes is not known.
         resolutions: vec![150, 300, 600, 1200, 2400, 4800],
@@ -375,7 +380,9 @@ mod tests {
         assert_eq!(models.len(), 1);
         let caps = &models[0];
         assert_eq!(caps.name(), "Epson Perfection 4490 Photo");
-        assert_eq!(caps.glass_inches, (8.5, 11.7));
+        assert_eq!(caps.glass_inches, GLASS_INCHES);
+        // A line less than WIA's A4 at 300 dpi (capture 07).
+        assert_eq!(caps.glass_pixels(300).1, 3507);
         assert_eq!(caps.depths, vec![8, 16]);
         assert_eq!(caps.buttons.len(), 4);
         assert!(caps.lamp.is_none());

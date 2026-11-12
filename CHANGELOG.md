@@ -26,6 +26,8 @@ GitHub; here they are in English.
   VetroScan. On Windows with Epson's driver, VetroScan takes the scanner for itself while it has
   it open, so Windows stops asking it for its buttons in between: Epson Scan cannot use the
   scanner meanwhile, and if Epson Scan is scanning, VetroScan says the scanner is busy.
+- The Epson Perfection 4490's glass is 216 x 296.9 mm in VetroScan (the user guide's 297.2 mm,
+  less the last fraction of a millimetre no scan with Epson's driver was seen reaching).
 
 ## [0.7.0] - 2026-11-11
 

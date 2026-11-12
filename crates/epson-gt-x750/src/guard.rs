@@ -67,8 +67,10 @@ pub const LINE_TIMES: [(u32, u32); 7] = [
 /// 300 dpi).
 pub const MAX_READ_END: u32 = 29_587;
 
-/// The glass, in tenths of an inch (216 x 297 mm).
-pub const GLASS_TENTHS: (u32, u32) = (85, 117);
+/// The glass as Epson's user guide gives it (216 x 297 mm, 8.5 x 11.7 in): no area outside it.
+/// The application is offered a little less (`crate::GLASS_INCHES`), so that its whole glass
+/// stays within the furthest read captured.
+pub const PHYSICAL_GLASS_INCHES: (f64, f64) = (8.5, 11.7);
 
 /// The x origin's corrections the scanner may give (4800ths of an inch):
 /// Matteo's 4490 has -93; a value far from it is more likely a wrong answer.
@@ -108,8 +110,10 @@ pub fn check_request(r: &Request) -> Result<()> {
             r.dpi, r.bits
         ));
     }
-    let (gw, gh) = GLASS_TENTHS;
-    let (max_w, max_h) = (gw * r.dpi / 10, gh * r.dpi / 10);
+    // The physical glass, counted as the application counts pixels; how far the carriage may
+    // go is `check_plan`'s.
+    let px = |inches: f64| (inches * f64::from(r.dpi)).round() as u32;
+    let (max_w, max_h) = (px(PHYSICAL_GLASS_INCHES.0), px(PHYSICAL_GLASS_INCHES.1));
     if r.width == 0 || r.height == 0 || r.x + r.width > max_w || r.y + r.height > max_h {
         return refuse(format!(
             "the area {}x{} at {},{} is not inside the glass ({max_w} x {max_h} pixels at {} dpi)",
@@ -592,12 +596,13 @@ mod tests {
         assert!(check_request(&Request::new(300, 2000, 0, 551, 100, 8)).is_err());
         assert!(check_request(&Request::new(300, 2000, 0, 550, 100, 8)).is_ok());
         assert!(check_request(&Request::new(300, 0, 3500, 100, 11, 8)).is_err());
+        assert!(check_request(&Request::new(300, 0, 3500, 100, 10, 8)).is_ok());
         // The whole width at 600 dpi: 14 x 384 pixels read, a line time of 4224 µs, captured
         // at 300 and 100 dpi but not at 600. A4's width keeps 3840 µs.
         let e = refused(plan(600, 0, 0, 5100, 1000, 8));
         assert!(e.contains("line time"), "{e}");
         assert!(check_plan(&plan(600, 0, 0, 4961, 1000, 8).unwrap()).is_ok());
-        // The bottom of the glass, further than any capture.
+        // The last line of the physical glass: past the furthest capture.
         let e = refused(plan(300, 0, 3400, 591, 110, 8));
         assert!(e.contains("further"), "{e}");
         // No start move: never needed on the glass at the resolutions covered (the near
@@ -617,6 +622,25 @@ mod tests {
         // A wild x correction.
         let p = Plan::new(Request::new(300, 0, 0, 591, 591, 8), XCorrection(2000)).unwrap();
         assert!(check_plan(&p).is_err());
+    }
+
+    /// The whole glass's height at every resolution covered, from the top: the app's preview
+    /// (200 dpi) and the longest scans. The whole width too, but at 600 dpi (step 2 of "What
+    /// is left": a line time never captured there).
+    #[test]
+    fn the_whole_glass_is_accepted() {
+        let caps = crate::capabilities();
+        for (dpi, bits) in COVERED {
+            let (w, h) = caps.glass_pixels(dpi as u16);
+            let full = plan(dpi, 0, 0, w, h, bits).unwrap();
+            let ok = check_plan(&full);
+            if dpi == 600 {
+                assert!(ok.unwrap_err().to_string().contains("line time"), "{dpi}");
+                assert!(check_plan(&plan(dpi, 0, 0, 4992, h, bits).unwrap()).is_ok());
+            } else {
+                assert!(ok.is_ok(), "{dpi} dpi, {w} x {h}: {ok:?}");
+            }
+        }
     }
 
     #[test]
