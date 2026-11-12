@@ -21,6 +21,7 @@
 //! `--tone linear` loads identity tables in place of WIA's curves (to be measured).
 //! `--cancel-after N` stops the scan after N blocks of image, as the app's Cancel does.
 //! `epson4490 drain` reads what a scanner stopped half-way still has to send, then its state.
+//! `epson4490 lamp-off` switches the lamp off (`1E A2 00`), as the application's lamp timer.
 //! Without `--move` it only prints the plan and what the guard says of it. A lamp taken to be
 //! cold (switched on, or no scan for 14 minutes; the time of the last scan is kept in the
 //! temporary folder, `epson4490-lamp.txt`) gets two minutes before the calibration.
@@ -47,7 +48,7 @@ use std::process::ExitCode;
 
 const USAGE: &str = "usage: epson4490 list | firmware [--firmware FILE] | probe | \
                      upload [--firmware FILE] | buttons [SECONDS] | replay SCRIPT OUT --move | \
-                     scan DPI X Y W H OUT.png [--bits 16] [--tone wia|linear] [--raw FILE] [--cancel-after BLOCKS] --move   (X Y W H in mm) | drain";
+                     scan DPI X Y W H OUT.png [--bits 16] [--tone wia|linear] [--raw FILE] [--cancel-after BLOCKS] --move   (X Y W H in mm) | drain | lamp-off";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -115,6 +116,7 @@ fn main() -> ExitCode {
         Some("upload") => upload(firmware_path),
         Some("buttons") => buttons(seconds.unwrap_or(10)),
         Some("drain") => drain(),
+        Some("lamp-off") => lamp_off(),
         Some("replay") if operands.len() == 2 && moves => replay(&operands[0], &operands[1]),
         Some("replay") if operands.len() == 2 => {
             eprintln!("epson4490: replay moves the carriage: add --move to run it");
@@ -249,6 +251,16 @@ fn upload(path: Option<PathBuf>) -> Result<(), Error> {
              and come back; run `epson4490 probe`"
         ),
     }
+    Ok(())
+}
+
+/// Switches the lamp off (`1E A2 00`), as the application's lamp timer does.
+fn lamp_off() -> Result<(), Error> {
+    let mut t = open_first()?;
+    println!("state (1B 03): {}", describe(protocol::state(&mut t)?));
+    protocol::lamp_off(&mut t)?;
+    println!("lamp off (1E A2 00): answered 06");
+    println!("state (1B 03): {}", describe(protocol::state(&mut t)?));
     Ok(())
 }
 

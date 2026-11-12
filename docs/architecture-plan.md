@@ -1171,8 +1171,13 @@ native scan computes any area at 100, 200, 300, 400, 600, 1200 dpi (`scan.rs`), 
    read what is left (`epson4490 drain` reads it), to be looked at.
 6. **The lamp in the app**: `lamp_off` with `1E A2 00` (already sent in every calibration) and
    `LampInfo { warm_up, switches_off_after: about 15 minutes }` (capture 21), so the app offers
-   its lamp choices. `DeviceStatus::lamp` stays `None`: `1E A1` says which lamp is selected, not
-   whether it is lit.
+   its lamp choices. **Done** (12 November, evening): outside a scan the guard lets through
+   `1E A2 00` only; tried on the scanner (`epson4490 lamp-off`): answered `06`, the lamp went
+   off (Matteo saw it), `1B 03` stayed `18 81`. Learnt: switched off so, `1E A1` answers
+   `00` (no lamp), while after the scanner's own 15 minutes it still answers `01`; the scan
+   now takes `00` at the opening as a lamp off, lights it with its usual `1E A2 01`, polls
+   `1E A1` until `01` (as Epson's driver did for the lid's lamp, capture 25; here at once) and
+   gives it the two minutes. Tried: the scan came out normal. `DeviceStatus::lamp` stays `None`.
 7. The e2e of the made-up 4490 with these `Capabilities`.
 
 **B. The glass complete** (milestone 3, second half)

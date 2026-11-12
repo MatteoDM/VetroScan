@@ -210,15 +210,54 @@ fn wait_04(t: &mut dyn Transport) -> Result<()> {
 
 /// `1E A1`: the lamp in use, `01` for the glass's.
 fn lamp_is_the_glass(t: &mut dyn Transport) -> Result<()> {
-    let a = ask(t, [0x1E, 0xA1], 1)?;
-    if a[0] != 0x01 {
-        return Err(other(format!(
-            "1E A1 answered {:02X}: the lid's lamp is in use (after films), not the glass's; \
-             a scan of the glass with Epson's driver switches it back",
-            a[0]
-        )));
+    match lamp_in_use(t)? {
+        0x01 => Ok(()),
+        other_ => Err(lamp_error(other_)),
     }
-    Ok(())
+}
+
+/// `1E A1`'s answer: `01` the glass's lamp, `02` the lid's (after films, capture 25), `00`
+/// none: switched off by the host with `1E A2 00` (12 November 2026; switched off by the
+/// scanner itself after 15 minutes idle it still answers `01`).
+fn lamp_in_use(t: &mut dyn Transport) -> Result<u8> {
+    Ok(ask(t, [0x1E, 0xA1], 1)?[0])
+}
+
+fn lamp_error(answer: u8) -> Error {
+    other(format!(
+        "1E A1 answered {answer:02X}: the lid's lamp is in use (after films), not the glass's; \
+         a scan of the glass with Epson's driver switches it back"
+    ))
+}
+
+/// At the opening: the glass's lamp, or none (`00`: switched off by the host, lit again by
+/// the scan's `1E A2 01`). Whether it was off.
+fn lamp_glass_or_off(t: &mut dyn Transport) -> Result<bool> {
+    match lamp_in_use(t)? {
+        0x01 => Ok(false),
+        0x00 => Ok(true),
+        other_ => Err(lamp_error(other_)),
+    }
+}
+
+/// After `1E A2 01` on a lamp that was off: `1E A1` polled until the glass's (`01`), as
+/// Epson's driver did after lighting it when the lid's was in use (capture 25: about 8 s).
+fn wait_lamp_lit(t: &mut dyn Transport, log: &mut dyn FnMut(String)) -> Result<()> {
+    let start = Instant::now();
+    loop {
+        let a = lamp_in_use(t)?;
+        if a == 0x01 {
+            log(format!(
+                "1E A1: the glass's lamp after {:.1} s",
+                start.elapsed().as_secs_f64()
+            ));
+            return Ok(());
+        }
+        if start.elapsed() > Duration::from_secs(30) {
+            return Err(lamp_error(a));
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
 }
 
 /// The set-up before every read: `1E 31` (the `1E 92` answer back), `1E 11`,
@@ -439,15 +478,16 @@ fn run<T: Transport>(
             String::from_utf8_lossy(IDENTITY)
         )));
     }
+    let mut lamp_was_off = false;
     for _ in 0..2 {
         wait_ready(g, log)?;
-        lamp_is_the_glass(g)?;
+        lamp_was_off |= lamp_glass_or_off(g)?;
     }
     wait_ready(g, log)?;
     command(g, [0x1B, 0x40])?;
     ask(g, [0x1E, 0x53], 42)?;
     wait_ready(g, log)?;
-    lamp_is_the_glass(g)?;
+    lamp_was_off |= lamp_glass_or_off(g)?;
     let gamma = curves.gamma();
     for channel in 0..3u8 {
         command(g, [0x1E, 0xB3])?;
@@ -455,16 +495,19 @@ fn run<T: Transport>(
         g.bulk_out(&gamma)?;
     }
     wait_ready(g, log)?;
-    lamp_is_the_glass(g)?;
+    lamp_was_off |= lamp_glass_or_off(g)?;
     ask(g, [0x1E, 0x53], 42)?;
     send(g, [0x1E, 0x57], &e57)?;
     wait_ready(g, log)?;
-    lamp_is_the_glass(g)?;
+    lamp_was_off |= lamp_glass_or_off(g)?;
     send(g, [0x1E, 0xA2], &[0x01])?;
     let lit = Instant::now();
     log("lamp on (1E A2 01)".into());
+    if lamp_was_off {
+        wait_lamp_lit(g, log)?;
+    }
     let warming = warming.or(wait_ready(g, log)?);
-    if lamp_is_cold(warming.is_some(), last_used, SystemTime::now()) {
+    if lamp_was_off || lamp_is_cold(warming.is_some(), last_used, SystemTime::now()) {
         // Lit when the scanner was switched on (flagged warming) or just now.
         warm_up(g, warming.unwrap_or(lit).min(lit), log, events)?;
     }

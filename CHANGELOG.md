@@ -24,7 +24,9 @@ GitHub; here they are in English.
   within what the captures of Epson's own drivers showed the scanner doing; the image comes out
   as Epson's driver's. After the scanner has been idle for a quarter of an hour, or just switched
   on, its lamp is given two minutes to warm up first. 1200 dpi needs one scan with Epson's
-  driver after each switch-on, for now. No films yet.
+  driver after each switch-on, for now. No films yet. VetroScan switches its lamp off as for
+  the HP 3770 (the Preferences' lamp choices, up to the 15 minutes after which the scanner does
+  it by itself, and on closing).
 
 ### Changed
 - VetroScan sends the Epson Perfection 4490 Photo its firmware when it opens the scanner and

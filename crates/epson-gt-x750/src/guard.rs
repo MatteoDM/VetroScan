@@ -7,7 +7,7 @@
 //! what is allowed:
 //!
 //! * always: `1B 03` (state), `1E 86` (the two positions) and `1E 85` (the
-//!   button pressed), read-only;
+//!   button pressed), read-only; `1E A2 00`, the lamp off;
 //! * always: the firmware upload: `1B 06`, then only its own data (the length
 //!   `01 00 01 00`, 65,536 bytes, the checksum), `1B 16`, and `80` right
 //!   after `1B 16`;
@@ -316,6 +316,10 @@ impl<T: Transport> Guarded<T> {
             _ => {}
         }
         let Some(permit) = &self.permit else {
+            // Outside a scan the lamp may only be switched off (the app's lamp timer).
+            if data == crate::protocol::LAMP {
+                return idle(one(&[[0x00]]));
+            }
             return Err(refusal(data, "no scan permitted"));
         };
         let request_level = match data {
@@ -501,7 +505,7 @@ mod tests {
             &[0x1E, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10, 0],
             &[0x1E, 0x84, 0xC4, 0x09],
             &[0x1E, 0x25, 0x00],
-            &[0x1E, 0xA2],
+            &[0x1E, 0xA2, 0x01],
         ];
         let mut t = guarded(&[]);
         for m in movers {
@@ -518,6 +522,19 @@ mod tests {
         assert!(t.bulk_out(&[0x1B, 0x40]).is_err());
         assert!(t.bulk_out(&[FIRMWARE_RUN]).is_err());
         assert!(t.inner().writes.is_empty());
+    }
+
+    #[test]
+    fn the_lamp_may_only_be_switched_off_outside_a_scan() {
+        let mut t = guarded(&[]);
+        t.bulk_out(&[0x1E, 0xA2]).unwrap();
+        assert!(t.bulk_out(&[0x01]).is_err());
+        t.bulk_out(&[0x1E, 0xA2]).unwrap();
+        t.bulk_out(&[0x00]).unwrap();
+        assert_eq!(
+            t.inner().writes,
+            [vec![0x1E, 0xA2], vec![0x1E, 0xA2], vec![0x00]]
+        );
     }
 
     #[test]
@@ -707,7 +724,8 @@ mod tests {
         t.bulk_out(&[0x1E, 0x84]).unwrap();
         t.bulk_out(&tables::TONE_HEADERS[0]).unwrap();
         assert!(t.bulk_out(&[0; 8192]).is_err());
-        // The lamp, but not a third value.
+        // The lamp, but not a third value (off and on during a scan; outside one, off only:
+        // `the_lamp_may_only_be_switched_off_outside_a_scan`).
         t.bulk_out(&[0x1E, 0xA2]).unwrap();
         assert!(t.bulk_out(&[0x02]).is_err());
         // Over: moves refused again.

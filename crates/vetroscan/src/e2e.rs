@@ -2333,22 +2333,24 @@ fn a_scanner_without_a_lamp_and_16_bits_shows_neither() {
     assert!(!ui.app.note.contains("lampada"), "{}", ui.app.note);
 }
 
-/// A made-up Epson Perfection 4490, with the provisional capabilities its
-/// backend declares (phase 12): no lamp to switch, its four buttons, 16
-/// bits, no film until its adapter is driven.
+/// A made-up Epson Perfection 4490, with the capabilities its backend
+/// declares (phase 12): a lamp the app switches off (the scanner does by
+/// itself after 15 minutes), its four buttons, 16 bits, no film until its
+/// adapter is driven.
 #[test]
 fn the_epson_4490_shows_what_its_backend_declares() {
     let caps = epson_gt_x750::capabilities();
     let mut ui = Ui::with_scanners(vec![FakeScanner::with(caps.clone())]);
     assert_eq!(ui.app.caps, caps);
-    assert!(ui.shows("Pronto"));
-    assert!(!ui.shows("Pronto · lampada accesa"));
+    // The made-up scanner tells its lamp lit (the real 4490 does not say).
+    assert!(ui.shows("Pronto · lampada accesa"));
     assert!(!ui.shows("Pellicola"));
     ui.send(Message::Pane(crate::Pane::Scan));
     assert!(ui.shows("Profondità"));
     assert!(ui.shows("Tasti dello scanner"));
     ui.send(Message::Pane(crate::Pane::Prefs));
-    assert!(!ui.shows("Lampada"));
+    assert!(ui.shows("Lampada"));
+    assert!(ui.app.lamp_note().contains("da solo dopo 15 minuti"));
     for label in ["Start", "Scan to PDF", "Scan to E-mail", "Copy"] {
         assert!(ui.shows(label), "{label}");
     }

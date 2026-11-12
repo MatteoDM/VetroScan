@@ -104,6 +104,26 @@ pub fn button(t: &mut dyn Transport) -> Result<u8> {
     Ok(answer[0])
 }
 
+/// Switches the lamp: `1E A2`, `06`, the lamp (`00` off, `01` the glass's), `06`.
+pub const LAMP: [u8; 2] = [0x1E, 0xA2];
+
+/// Switches the lamp off, as every scan does before its dark calibration (`1E A2 00`). Sent
+/// alone (the application's lamp timer) it was first tried on 12 November 2026.
+pub fn lamp_off(t: &mut dyn Transport) -> Result<()> {
+    for (data, after) in [(&LAMP[..], "1E A2"), (&[0x00][..], "1E A2 00")] {
+        t.bulk_out(data)?;
+        let mut answer = [0u8];
+        read_exact(t, &mut answer, after)?;
+        if answer[0] != ACK {
+            return Err(Error::Other(format!(
+                "after {after} the scanner answered {:02X}, not 06",
+                answer[0]
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// The 8-bit sum the scanner checks: of the payload's bytes but the last,
 /// which it replaces.
 pub fn checksum(payload: &[u8]) -> u8 {

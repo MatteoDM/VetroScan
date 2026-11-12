@@ -44,8 +44,8 @@ pub use usbscan::UsbscanTransport;
 
 use protocol::FirmwareOutcome;
 use scanner_api::{
-    ButtonInfo, Capabilities, ColourMode, DeviceStatus, Error, Progress, Result, ScanRequest,
-    ScanResult, SuggestedAction, Tone, UsbId,
+    ButtonInfo, Capabilities, ColourMode, DeviceStatus, Error, LampInfo, Progress, Result,
+    ScanRequest, ScanResult, SuggestedAction, Tone, UsbId,
 };
 use std::fmt;
 use std::path::PathBuf;
@@ -178,7 +178,12 @@ pub fn capabilities() -> Capabilities {
             button("email", "Scan to E-mail", SuggestedAction::Share),
             button("copy", "Copy", SuggestedAction::Copy),
         ],
-        lamp: None,
+        // The host switches it off (`1E A2 00`) and the scanner does by itself after about
+        // 15 minutes idle (capture 21); a cold one gets two minutes (measured, `scan::WARM_UP`).
+        lamp: Some(LampInfo {
+            warm_up: scan::WARM_UP,
+            switches_off_after: Some(Duration::from_secs(15 * 60)),
+        }),
         // The scan gives linear samples (identity tables, `tables::Curves::Linear`); WIA's
         // image is them through a gamma of 1/1.8 up to full white (measured 12 November
         // 2026, 1.3 levels apart): the same here, until the tone is measured as the 3770's.
@@ -438,6 +443,13 @@ impl scanner_api::Scanner for Gt4490 {
         Ok(result_of(s, request.dpi))
     }
 
+    /// `1E A2 00`; the next scan takes the lamp to be cold.
+    fn lamp_off(&mut self) -> Result<()> {
+        protocol::lamp_off(&mut self.transport)?;
+        self.lamp_used = None;
+        Ok(())
+    }
+
     /// The button pressed, as `1E 85` reads it: its number 1-4 is the
     /// place in [`capabilities`]' buttons plus one (Start, PDF, E-mail,
     /// Copy, as captured). Any other answer is none.
@@ -465,7 +477,7 @@ mod tests {
     }
 
     #[test]
-    fn the_model_is_provisional_and_glass_only() {
+    fn the_model_is_the_glass_as_captured() {
         let models = EpsonBackend::new().models();
         assert_eq!(models.len(), 1);
         let caps = &models[0];
@@ -474,9 +486,26 @@ mod tests {
         // A line less than WIA's A4 at 300 dpi (capture 07).
         assert_eq!(caps.glass_pixels(300).1, 3507);
         assert_eq!(caps.depths, vec![8, 16]);
+        assert_eq!(caps.resolutions, vec![100, 200, 300, 400, 600, 1200]);
         assert_eq!(caps.buttons.len(), 4);
-        assert!(caps.lamp.is_none());
+        let lamp = caps.lamp.expect("a lamp the host switches off");
+        assert_eq!(lamp.warm_up, Duration::from_secs(120));
+        assert_eq!(lamp.switches_off_after, Some(Duration::from_secs(900)));
         assert!(!caps.offers(Source::Negative));
+    }
+
+    #[test]
+    fn the_lamp_is_switched_off_with_1e_a2_00() {
+        // The opening's 1B 03, then 06 twice.
+        let t = Mock::answering(&[&[0x10, 0x00], &[6], &[6]]);
+        let mut s = Gt4490::start(Box::new(t), || panic!("no firmware needed")).unwrap();
+        s.lamp_used = Some(SystemTime::now());
+        s.lamp_off().unwrap();
+        assert_eq!(s.lamp_used, None);
+        // A NAK is an error.
+        let t = Mock::answering(&[&[0x10, 0x00], &[0x15]]);
+        let mut s = Gt4490::start(Box::new(t), || panic!("no firmware needed")).unwrap();
+        assert!(s.lamp_off().is_err());
     }
 
     fn running() -> Gt4490 {
@@ -565,7 +594,6 @@ mod tests {
         // Stopped before anything is sent.
         request.source = Source::Glass;
         assert_eq!(s.scan(&request, &mut |_| false), Err(Error::Cancelled));
-        assert_eq!(s.lamp_off(), Err(Error::Unsupported("lamp_off")));
         // Only the 1B 03 of the opening went out (the mock would have
         // failed any read after).
         let e = s.status().unwrap_err();
