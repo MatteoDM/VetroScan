@@ -13,6 +13,36 @@ pub fn gamma() -> [u8; 256] {
 /// 12 bits out, rising from 0 to 4,095), as WIA sent them; no formula found.
 pub const TONE: &[u8; 8192] = include_bytes!("../tables/wia_tone.bin");
 
+/// The tables a scan loads into the scanner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Curves {
+    /// WIA's: [`gamma`] and [`TONE`], as every capture.
+    #[default]
+    Wia,
+    /// The identity in both (0..=255, 0..=4095): never sent by Epson's drivers; data the
+    /// scanner looks samples up in, harmless to the mechanics. To be measured against WIA's
+    /// (`docs/architecture-plan.md`, phase 12, "Linear samples").
+    Linear,
+}
+
+impl Curves {
+    /// The `1E B3` table, the same for the three channels.
+    pub fn gamma(self) -> [u8; 256] {
+        match self {
+            Self::Wia => gamma(),
+            Self::Linear => std::array::from_fn(|i| i as u8),
+        }
+    }
+
+    /// The `1E 84` type 02 table, the same for the three channels.
+    pub fn tone(self) -> Vec<u8> {
+        match self {
+            Self::Wia => TONE.to_vec(),
+            Self::Linear => (0..4096u16).flat_map(|v| v.to_le_bytes()).collect(),
+        }
+    }
+}
+
 /// The `1E 84` headers of the three tone tables, one per channel.
 pub const TONE_HEADERS: [[u8; 8]; 3] = [
     [0x02, 0x00, 0x00, 0x38, 0x00, 0x00, 0x20, 0x00],
@@ -42,5 +72,9 @@ mod tests {
         assert_eq!(tone[..4], [0, 12, 24, 36]);
         assert_eq!(tone[4095], 4095);
         assert!(tone.windows(2).all(|w| w[0] <= w[1]));
+        assert_eq!(Curves::Wia.tone(), TONE.to_vec());
+        assert_eq!(Curves::Linear.tone().len(), TONE.len());
+        assert_eq!(Curves::Linear.tone()[8190..], [0xFF, 0x0F]);
+        assert_eq!(Curves::Linear.gamma()[200], 200);
     }
 }

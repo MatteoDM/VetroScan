@@ -34,7 +34,8 @@ use crate::firmware::PAYLOAD_LEN;
 use crate::protocol::{FIRMWARE_BEGIN, FIRMWARE_END, FIRMWARE_RUN, GET_BUTTONS, GET_STATE};
 use crate::scan::READ_83;
 use crate::setup::{self, MoveKind, Plan, Request};
-use crate::{tables, Transport};
+use crate::tables::{self, Curves};
+use crate::Transport;
 use scanner_api::{Error, Result};
 
 /// Reads the two 16-bit positions (carriage, transparency unit): 4 bytes.
@@ -380,7 +381,12 @@ impl<T: Transport> Guarded<T> {
                 }
             }
             Expect::GammaChannel => match data {
-                [0..=2] => Ok(Some(Expect::OneOf(vec![tables::gamma().to_vec()]))),
+                [0..=2] => Ok(Some(Expect::OneOf(
+                    [Curves::Wia, Curves::Linear]
+                        .iter()
+                        .map(|c| c.gamma().to_vec())
+                        .collect(),
+                ))),
                 _ => bad("1E B3's channel"),
             },
             Expect::TableHeader => {
@@ -398,7 +404,10 @@ impl<T: Transport> Guarded<T> {
                     return Ok(Some(Expect::OneOf(tables_)));
                 }
                 if tables::TONE_HEADERS.iter().any(|h| h[..] == *data) {
-                    return Ok(Some(Expect::OneOf(vec![tables::TONE.to_vec()])));
+                    return Ok(Some(Expect::OneOf(vec![
+                        Curves::Wia.tone(),
+                        Curves::Linear.tone(),
+                    ])));
                 }
                 if setup::shading_header(p.column_count())[..] == *data {
                     return Ok(Some(Expect::Len(p.column_count() as usize * 6)));
@@ -680,6 +689,21 @@ mod tests {
         t.bulk_out(&[0x1E, 0x41]).unwrap();
         e41[0] = 0;
         assert!(t.bulk_out(&e41).is_err());
+        // WIA's curves or the identity, nothing else.
+        for curves in [Curves::Wia, Curves::Linear] {
+            t.bulk_out(&[0x1E, 0xB3]).unwrap();
+            t.bulk_out(&[1]).unwrap();
+            t.bulk_out(&curves.gamma()).unwrap();
+            t.bulk_out(&[0x1E, 0x84]).unwrap();
+            t.bulk_out(&tables::TONE_HEADERS[2]).unwrap();
+            t.bulk_out(&curves.tone()).unwrap();
+        }
+        t.bulk_out(&[0x1E, 0xB3]).unwrap();
+        t.bulk_out(&[1]).unwrap();
+        assert!(t.bulk_out(&[0x80; 256]).is_err());
+        t.bulk_out(&[0x1E, 0x84]).unwrap();
+        t.bulk_out(&tables::TONE_HEADERS[0]).unwrap();
+        assert!(t.bulk_out(&[0; 8192]).is_err());
         // The lamp, but not a third value.
         t.bulk_out(&[0x1E, 0xA2]).unwrap();
         assert!(t.bulk_out(&[0x02]).is_err());

@@ -10,7 +10,7 @@
 //! epson4490 upload [--firmware F]      sends the firmware if it is not running
 //! epson4490 buttons [SECONDS]          reads the buttons (1E 85) for a while, 10 s by default
 //! epson4490 replay SCRIPT OUT --move   replays a script made from a capture of Epson's driver
-//! epson4490 scan DPI X Y W H OUT.png [--bits 16] [--raw FILE] --move
+//! epson4490 scan DPI X Y W H OUT.png [--bits 16] [--tone wia|linear] [--raw FILE] --move
 //!                                      scans an area of the glass, in millimetres
 //! ```
 //!
@@ -18,6 +18,7 @@
 //! millimetres from the glass's corner, rounded to pixels as WIA does; the guard refuses what no
 //! capture covers (100, 200, 300, 400, 600, 1200 dpi at 8 bits, 600 at 16). OUT.png is the image
 //! realigned and cropped; `--raw` keeps the data as the scanner sent it (trailers removed).
+//! `--tone linear` loads identity tables in place of WIA's curves (to be measured).
 //! Without `--move` it only prints the plan and what the guard says of it. A lamp taken to be
 //! cold (switched on, or no scan for 14 minutes; the time of the last scan is kept in the
 //! temporary folder, `epson4490-lamp.txt`) gets two minutes before the calibration.
@@ -36,6 +37,7 @@ use epson_gt_x750::guard::{self, Guarded};
 use epson_gt_x750::protocol::{self, FirmwareOutcome, State};
 use epson_gt_x750::setup::{self, Request};
 use epson_gt_x750::shading::{black_block, Shading};
+use epson_gt_x750::tables::Curves;
 use epson_gt_x750::{firmware, Found, Transport, PRODUCT_ID, VENDOR_ID};
 use scanner_api::Error;
 use std::path::PathBuf;
@@ -43,7 +45,7 @@ use std::process::ExitCode;
 
 const USAGE: &str = "usage: epson4490 list | firmware [--firmware FILE] | probe | \
                      upload [--firmware FILE] | buttons [SECONDS] | replay SCRIPT OUT --move | \
-                     scan DPI X Y W H OUT.png [--bits 16] [--raw FILE] --move   (X Y W H in mm)";
+                     scan DPI X Y W H OUT.png [--bits 16] [--tone wia|linear] [--raw FILE] --move   (X Y W H in mm)";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -54,6 +56,7 @@ fn main() -> ExitCode {
     let mut moves = false;
     let mut bits = 8u8;
     let mut raw_path = None;
+    let mut curves = Curves::Wia;
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
@@ -64,6 +67,11 @@ fn main() -> ExitCode {
             "--move" => moves = true,
             "--bits" => match rest.next().map(|b| b.parse()) {
                 Some(Ok(b)) => bits = b,
+                _ => return usage(),
+            },
+            "--tone" => match rest.next().map(String::as_str) {
+                Some("wia") => curves = Curves::Wia,
+                Some("linear") => curves = Curves::Linear,
                 _ => return usage(),
             },
             "--raw" => match rest.next() {
@@ -118,7 +126,7 @@ fn main() -> ExitCode {
                 eprintln!("epson4490: scan moves the carriage: add --move to run it");
                 return ExitCode::from(2);
             }
-            scan(request, &operands[5], raw_path.as_deref())
+            scan(request, curves, &operands[5], raw_path.as_deref())
         }
         _ => return usage(),
     };
@@ -315,7 +323,12 @@ fn show_plan(request: Request) {
     }
 }
 
-fn scan(request: Request, out: &str, raw: Option<&std::path::Path>) -> Result<(), Error> {
+fn scan(
+    request: Request,
+    curves: Curves,
+    out: &str,
+    raw: Option<&std::path::Path>,
+) -> Result<(), Error> {
     show_plan(request);
     guard::check_request(&request)?;
     let mut t = open_first()?;
@@ -331,7 +344,10 @@ fn scan(request: Request, out: &str, raw: Option<&std::path::Path>) -> Result<()
     let s = epson_gt_x750::scan::scan_glass(
         &mut t,
         request,
-        lamp_last_used(),
+        epson_gt_x750::scan::Options {
+            last_used: lamp_last_used(),
+            curves,
+        },
         &mut |line| println!("  {:5.1} s  {line}", start.elapsed().as_secs_f64()),
         &mut |done, all| {
             let tenth = done * 10 / all.max(1);

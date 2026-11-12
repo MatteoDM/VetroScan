@@ -1133,10 +1133,16 @@ native scan computes any area at 100, 200, 300, 400, 600, 1200 dpi (`scan.rs`), 
    refuses wider than 4,992 pixels at 600 dpi (211 mm), with a message.
 3. **Linear samples**: the contract wants linear colour (the app applies the `Tone`, and films
    need the shadows), while the scan loads WIA's curves (gamma 1/1.8 in `1E B3`, the tone table
-   `1E 84` type 02). Decided: linear tables (the identity in both), never sent so far
-   (harmless to the mechanics: they are data the scanner looks samples up in), measured first
-   with pairs of scans as `scanner-measuring` says; then the 4490's `Tone` measured. If the
-   scanner turns out to need a curve (8-bit shadows), WIA's declared in `Tone` is the fallback.
+   `1E 84` type 02). Decided: linear tables (the identity in both), measured first.
+   **Measured** (12 November, `captures/epson4490/05-catture.md`, "Curve WIA o campioni
+   lineari"; `epson4490 scan --tone linear`): the identity tables give linear samples; WIA's
+   image is the tone table applied to them (1.3 levels apart on average), a gamma of 1/1.8,
+   while `1E B3` does not act on 8-bit colour; so `Tone { gamma: 1.8 }` on the linear samples
+   gives WIA's image back (1.7 levels apart). The price at 8 bits: the darkest shadows get 5
+   levels where WIA's curve had 24 (the step about twice the noise there), as on the HP 3770;
+   16-bit samples avoid it. **Matteo's choice**: linear at 8 bits like the 3770 (the contract
+   as it is; the 16 bits of step 8 for the shadows), or WIA's curve kept in the scanner, which
+   needs a new field in the contract (samples already gamma-encoded) and its branch in the app.
 4. **`Gt4490::scan`** on `scan::scan_glass`: `ScanRequest` (area in pixels at its dpi) to
    `setup::Request`; the `Capabilities` made the guard's (resolutions 100, 200, 300, 400, 600,
    1200; depths 8 only until step 8; modes colour, grey and line art, the last two made by the

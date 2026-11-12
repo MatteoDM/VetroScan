@@ -23,7 +23,8 @@ use crate::guard::Guarded;
 use crate::protocol::{State, ACK, GET_STATE};
 use crate::setup::{self, Plan, Request, XCorrection, TRAILER_LEN};
 use crate::shading::{black_block, Shading};
-use crate::{tables, Transport};
+use crate::tables::{self, Curves};
+use crate::Transport;
 use scanner_api::{Error, Result};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -315,18 +316,27 @@ fn warm_up(t: &mut dyn Transport, lit: Instant, log: &mut dyn FnMut(String)) -> 
     Ok(())
 }
 
-/// Scans `request` on the glass. `last_used` is when a scan of ours last ended (the lamp
-/// was lit then), if known: a lamp taken to be cold ([`lamp_is_cold`]) gets [`WARM_UP`]
-/// first. `log` gets a line for each phase, `progress` the image lines read and their total.
+/// How a scan is made, besides its request.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Options {
+    /// When a scan of ours last ended (the lamp was lit then), if known: a lamp taken to be
+    /// cold ([`lamp_is_cold`]) gets [`WARM_UP`] first.
+    pub last_used: Option<SystemTime>,
+    /// The tables loaded into the scanner.
+    pub curves: Curves,
+}
+
+/// Scans `request` on the glass. `log` gets a line for each phase, `progress` the image
+/// lines read and their total.
 pub fn scan_glass<T: Transport>(
     g: &mut Guarded<T>,
     request: Request,
-    last_used: Option<SystemTime>,
+    options: Options,
     log: &mut dyn FnMut(String),
     progress: &mut dyn FnMut(u32, u32),
 ) -> Result<Scanned> {
     g.permit_request(&request)?;
-    let result = run(g, request, last_used, log, progress);
+    let result = run(g, request, options, log, progress);
     g.end_scan();
     result
 }
@@ -334,10 +344,11 @@ pub fn scan_glass<T: Transport>(
 fn run<T: Transport>(
     g: &mut Guarded<T>,
     request: Request,
-    last_used: Option<SystemTime>,
+    options: Options,
     log: &mut dyn FnMut(String),
     progress: &mut dyn FnMut(u32, u32),
 ) -> Result<Scanned> {
+    let Options { last_used, curves } = options;
     let e57 = setup::request_block(&request)?;
     // The opening, as WIA's driver does it.
     let warming = wait_ready(g, log)?;
@@ -363,7 +374,7 @@ fn run<T: Transport>(
     ask(g, [0x1E, 0x53], 42)?;
     wait_ready(g, log)?;
     lamp_is_the_glass(g)?;
-    let gamma = tables::gamma();
+    let gamma = curves.gamma();
     for channel in 0..3u8 {
         command(g, [0x1E, 0xB3])?;
         g.bulk_out(&[channel])?;
@@ -492,8 +503,9 @@ fn run<T: Transport>(
             p.after_calibration
         )));
     }
+    let tone = curves.tone();
     for header in &tables::TONE_HEADERS {
-        table(g, header, tables::TONE)?;
+        table(g, header, &tone)?;
     }
 
     // The move to the lead.
@@ -657,7 +669,10 @@ mod tests {
         let r = scan_glass(
             &mut g,
             request,
-            Some(SystemTime::now()),
+            Options {
+                last_used: Some(SystemTime::now()),
+                curves: Curves::Wia,
+            },
             &mut |_| {},
             &mut |_, _| {},
         );
