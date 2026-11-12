@@ -21,7 +21,8 @@ use std::mem::size_of;
 use std::ptr::{null, null_mut};
 use std::time::Duration;
 use windows_sys::Win32::Foundation::{
-    CloseHandle, GetLastError, ERROR_IO_PENDING, GENERIC_READ, GENERIC_WRITE, HANDLE,
+    CloseHandle, GetLastError, ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND, ERROR_IO_PENDING,
+    ERROR_PATH_NOT_FOUND, ERROR_SHARING_VIOLATION, GENERIC_READ, GENERIC_WRITE, HANDLE,
     INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Storage::FileSystem::{
@@ -93,6 +94,65 @@ fn last_error(context: &str) -> Error {
     Error::Transport(format!("{context}: Windows error {code}"))
 }
 
+/// Why a `\\.\UsbscanN` could not be opened as the scanner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OpenFailure {
+    /// No device with that number (`ERROR_FILE_NOT_FOUND`): not worth
+    /// telling, most numbers are free.
+    Missing,
+    /// A Win32 call failed with this error, on the handle named.
+    Os { handle: &'static str, code: u32 },
+    /// The device answers but is another scanner (or gives no descriptor).
+    NotA3770,
+}
+
+impl OpenFailure {
+    /// The failure of the last Win32 call on `handle`.
+    fn last(handle: &'static str) -> Self {
+        // SAFETY: GetLastError has no preconditions.
+        let code = unsafe { GetLastError() };
+        if code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND {
+            Self::Missing
+        } else {
+            Self::Os { handle, code }
+        }
+    }
+}
+
+impl fmt::Display for OpenFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Self::Missing => write!(f, "no such device"),
+            Self::Os { handle, code } => {
+                let reason = match code {
+                    ERROR_ACCESS_DENIED => "access denied",
+                    ERROR_SHARING_VIOLATION => "in use by another program",
+                    _ => "cannot be opened",
+                };
+                write!(f, "{reason} (Windows error {code}, {handle})")
+            }
+            Self::NotA3770 => write!(f, "not an HP Scanjet 3770"),
+        }
+    }
+}
+
+/// The error of [`UsbscanScanner::open_first`]: no device is the scanner,
+/// with the reason of each device that exists.
+fn none_opened(failures: &[(u32, OpenFailure)]) -> Error {
+    let reasons: Vec<String> = failures
+        .iter()
+        .filter(|(_, f)| *f != OpenFailure::Missing)
+        .map(|(n, f)| format!(r"\\.\Usbscan{n}: {f}"))
+        .collect();
+    let mut msg = String::from(r"no \\.\UsbscanN device is an HP Scanjet 3770");
+    if !reasons.is_empty() {
+        msg.push_str(" (");
+        msg.push_str(&reasons.join("; "));
+        msg.push(')');
+    }
+    Error::Transport(msg)
+}
+
 fn device_path(n: u32) -> Vec<u16> {
     format!(r"\\.\Usbscan{n}")
         .encode_utf16()
@@ -104,7 +164,12 @@ fn device_path(n: u32) -> Vec<u16> {
 struct Handle(HANDLE);
 
 impl Handle {
-    fn open(n: u32, overlapped: bool) -> Option<Self> {
+    /// Opens `\\.\Usbscan{n}`; on failure, says why (`handle` names it).
+    fn open(
+        n: u32,
+        overlapped: bool,
+        handle: &'static str,
+    ) -> std::result::Result<Self, OpenFailure> {
         let path = device_path(n);
         let flags = if overlapped {
             FILE_FLAG_OVERLAPPED
@@ -123,7 +188,10 @@ impl Handle {
                 null_mut(),
             )
         };
-        (h != INVALID_HANDLE_VALUE && !h.is_null()).then_some(Self(h))
+        if h == INVALID_HANDLE_VALUE || h.is_null() {
+            return Err(OpenFailure::last(handle));
+        }
+        Ok(Self(h))
     }
 
     /// Synchronous `DeviceIoControl`. Returns the bytes written to `output`.
@@ -184,7 +252,7 @@ fn is_3770(h: &Handle) -> bool {
 /// Lists the scanners reachable through usbscan.sys.
 pub(crate) fn list() -> Vec<Found> {
     (0..MAX_DEVICES)
-        .filter(|&n| Handle::open(n, false).is_some_and(|h| is_3770(&h)))
+        .filter(|&n| Handle::open(n, false, "device").is_ok_and(|h| is_3770(&h)))
         .map(|n| Found {
             backend: Backend::Usbscan,
             location: format!(r"\\.\Usbscan{n}"),
@@ -224,29 +292,37 @@ impl fmt::Debug for UsbscanScanner {
 }
 
 impl UsbscanScanner {
-    /// Opens the first `\\.\UsbscanN` that is an HP Scanjet 3770.
+    /// Opens the first `\\.\UsbscanN` that is an HP Scanjet 3770. If none
+    /// is, the error says why each existing device was not taken (access
+    /// denied, in use by another program, another scanner).
     pub fn open_first() -> Result<Self> {
-        (0..MAX_DEVICES)
-            .find_map(|n| Self::open(n).ok())
-            .ok_or_else(|| {
-                Error::Transport("no \\\\.\\UsbscanN device is an HP Scanjet 3770".into())
-            })
+        let mut failures = Vec::new();
+        for n in 0..MAX_DEVICES {
+            match Self::try_open(n) {
+                Ok(scanner) => return Ok(scanner),
+                Err(OpenFailure::Missing) => {}
+                Err(failure) => failures.push((n, failure)),
+            }
+        }
+        Err(none_opened(&failures))
     }
 
     /// Opens `\\.\Usbscan{n}`.
     pub fn open(n: u32) -> Result<Self> {
-        let sync = Handle::open(n, false).ok_or_else(|| last_error("opening usbscan device"))?;
+        Self::try_open(n).map_err(|failure| Error::Transport(format!(r"\\.\Usbscan{n}: {failure}")))
+    }
+
+    /// Opens `\\.\Usbscan{n}`, or says why not.
+    fn try_open(n: u32) -> std::result::Result<Self, OpenFailure> {
+        let sync = Handle::open(n, false, "device")?;
         if !is_3770(&sync) {
-            return Err(Error::Transport(format!(
-                r"\\.\Usbscan{n} is not an HP Scanjet 3770"
-            )));
+            return Err(OpenFailure::NotA3770);
         }
-        let events =
-            Handle::open(n, true).ok_or_else(|| last_error("opening usbscan event handle"))?;
+        let events = Handle::open(n, true, "event handle")?;
         // SAFETY: manual-reset, initially non-signalled, unnamed event.
         let signal = unsafe { CreateEventW(null(), 1, 0, null()) };
         if signal.is_null() {
-            return Err(last_error("creating event"));
+            return Err(OpenFailure::last("event"));
         }
         let scanner = Self {
             sync,
@@ -474,5 +550,49 @@ impl Drop for UsbscanScanner {
                 GetOverlappedResult(self.events.0, &p.overlapped, &mut n, 1);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_error_says_why_each_device_was_not_taken() {
+        let failures = [
+            (0, OpenFailure::Missing),
+            (
+                1,
+                OpenFailure::Os {
+                    handle: "device",
+                    code: ERROR_ACCESS_DENIED,
+                },
+            ),
+            (
+                2,
+                OpenFailure::Os {
+                    handle: "event handle",
+                    code: ERROR_SHARING_VIOLATION,
+                },
+            ),
+            (3, OpenFailure::NotA3770),
+        ];
+        let msg = none_opened(&failures).to_string();
+        assert!(!msg.contains("Usbscan0"), "{msg}");
+        assert!(
+            msg.contains(r"\\.\Usbscan1: access denied (Windows error 5, device)"),
+            "{msg}"
+        );
+        assert!(
+            msg.contains(r"\\.\Usbscan2: in use by another program (Windows error 32"),
+            "{msg}"
+        );
+        assert!(
+            msg.contains(r"\\.\Usbscan3: not an HP Scanjet 3770"),
+            "{msg}"
+        );
+        // No device at all: the plain message.
+        let msg = none_opened(&[(0, OpenFailure::Missing)]).to_string();
+        assert!(msg.ends_with("is an HP Scanjet 3770"), "{msg}");
     }
 }

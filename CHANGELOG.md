@@ -43,6 +43,25 @@ GitHub; here they are in English.
 - The Epson Perfection 4490's glass is 216 x 296.9 mm in VetroScan (the user guide's 297.2 mm,
   less the last fraction of a millimetre no scan with Epson's driver was seen reaching).
 
+### Fixed
+- HP Scanjet 3770: a scan that fails half-way (calibration, film adapter's lamp, image data)
+  is now ended as a cancelled one is: the chip stopped, the carriage brought home and, with
+  films, the adapter's lamp switched off and the flatbed lamp on again. Before, the adapter's
+  lamp stayed lit and the carriage away from home.
+- HP Scanjet 3770: if the carriage is still moving 30 s after setting off towards the film
+  adapter's slot or the area of the scan, the scan stops there with an error instead of going
+  on with the carriage in motion.
+- HP Scanjet 3770: a scan cancelled at 200 or 300 dpi, which the scanner may keep running
+  for lack of anyone reading it, is stopped after 15 s before the carriage is parked, instead
+  of parking it on top of the running scan.
+- HP Scanjet 3770: a button press is no longer seen as all buttons held when another program
+  (Windows' scan app) resets the scanner while VetroScan reads its state.
+- HP Scanjet 3770 on Windows with HP's driver: when the scanner cannot be opened, the message
+  says why for each scanner device found (access denied, in use by another program, not an HP
+  Scanjet 3770).
+- HP Scanjet 3770: a film scan with the flatbed lamp off no longer waits 10 s for that lamp to
+  warm up; the film adapter's own lamp is waited for as before.
+
 ## [0.7.0] - 2026-11-11
 
 ### Added

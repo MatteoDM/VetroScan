@@ -6,7 +6,7 @@
 //! a [`crate::transport::ReadOnly`] transport.
 
 use crate::error::Result;
-use crate::transport::{Chip, Transport};
+use crate::transport::{buttons_from_e968, Chip, Transport};
 use std::fmt;
 
 /// Which lamp is on.
@@ -112,7 +112,7 @@ impl<T: Transport> Chip<T> {
             lamp: Lamp::from_registers(e946, e965),
             tma_attached: e968[1] & 0x02 == 0,
             tma_lamp_lit: e968[1] & 0x10 != 0,
-            buttons_held: !e968[0] & 0x3f,
+            buttons_held: buttons_from_e968(e968[0]),
             link_word,
         })
     }
@@ -180,6 +180,21 @@ mod tests {
         assert!(!s.tma_lamp_lit);
         assert_eq!(s.buttons_held, 0);
         assert_eq!(s.link_word, 0x1024);
+    }
+
+    #[test]
+    fn a_reset_chip_holds_no_button() {
+        // E968 read as 00 while another program resets the chip: bit 7 is
+        // 0, so the read is not every button held.
+        let regs = [(0xe968, 0x00), (0xe969, 0xed)];
+        let mut chip = Chip::new(Registers(regs.into_iter().collect()));
+        assert_eq!(chip.status().unwrap().buttons_held, 0);
+        assert_eq!(chip.buttons_held().unwrap(), 0);
+        // The first button pressed: bit 0 cleared, bit 7 still 1.
+        let regs = [(0xe968, 0xbe), (0xe969, 0xed)];
+        let mut chip = Chip::new(Registers(regs.into_iter().collect()));
+        assert_eq!(chip.status().unwrap().buttons_held, 0x01);
+        assert_eq!(chip.buttons_held().unwrap(), 0x01);
     }
 
     #[test]

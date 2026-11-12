@@ -128,7 +128,8 @@ impl<T: Transport> Chip<T> {
 
     /// Collects `size` bytes of image data (`RTS_GetImage_GetBuffer`): waits
     /// until the chip holds each piece, arms the DMA engine on channel 8 and
-    /// reads it.
+    /// reads it. A short bulk read goes on reading the same transfer, as
+    /// [`Chip::read_scan`] does: the DMA engine is armed once per piece.
     pub fn read_image(&mut self, size: usize) -> Result<Vec<u8>> {
         let mut image = vec![0; size];
         let mut pos = 0;
@@ -136,12 +137,15 @@ impl<T: Transport> Chip<T> {
             let piece = (size - pos).min(MAX_TRANSFER);
             self.wait_image_data(piece)?;
             self.dma_enable(DmaDirection::Read, IMAGE_CHANNEL, piece as u32, 0)?;
-            let read = self.transport_mut().bulk_in(&mut image[pos..pos + piece])?;
-            if read == 0 {
-                self.dma_cancel()?;
-                return Err(Error::Transport("no image data".into()));
+            let end = pos + piece;
+            while pos < end {
+                let read = self.transport_mut().bulk_in(&mut image[pos..end])?;
+                if read == 0 {
+                    self.dma_cancel()?;
+                    return Err(Error::Transport("no image data".into()));
+                }
+                pos += read;
             }
-            pos += read;
         }
         Ok(image)
     }

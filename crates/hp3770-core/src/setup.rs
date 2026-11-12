@@ -232,12 +232,9 @@ pub fn setup(
 
     // Exposure times (RTS_Setup_Exposure_Times). The maximum exposure of
     // each colour is the line period, the exposure 0 (see COLOUR_MODES).
-    let mut line = mode.ctpc + 1;
-    if params.depth > 8 {
-        // MultiExposureFor16BitMode: 1 (no key in the file).
-        line *= 1;
-    }
-    let line = line - 1;
+    // The line period. hp3900 multiplies it by MultiExposureFor16BitMode
+    // at 16 bits: 1 for the HP 3770 (no key in the file).
+    let line = mode.ctpc;
     // Each colour's exposure (`EXPT`, E836, E83C, E842) and maximum
     // exposure (`MEXPT`, E833, E839, E83F); without them in the mode, 0 and
     // the line period. hp3900 also sets `EXPT` to `MEXPT` where `EXPT` is
@@ -670,19 +667,7 @@ pub fn finish_scan_registers(
 /// 15000 ticks, where hp3900 would give 18000.
 pub fn set_multi_exposure(regs: &mut Registers, profile: &Profile) {
     regs.set_bits(0xdf, 0x10, 0);
-    let clock: u32 = match regs.get(0x00) & 0x0f {
-        0x00 => 0x0089_5440,
-        0x08 | 0x01 => 0x00b7_1b00,
-        0x09 => 0x00f4_2400,
-        0x02 => 0x0112_a880,
-        0x0a | 0x03 => 0x016e_3600,
-        0x0b => 0x01e8_4800,
-        0x04 => 0x0225_5100,
-        0x0c => 0x02dc_6c00,
-        0x05 => 0x044a_a200,
-        0x0d => 0x05b8_d800,
-        _ => 0x0478_f7f8,
-    };
+    let clock = motor::system_clock_hz(regs.get(0x00));
     let base_step =
         clock / (u32::from(regs.get(0x96) & 0x3f) + 1) / u32::from(profile.platform.base_speed_pps);
     let line = regs.get_lsb(0x30, 3) + 1;

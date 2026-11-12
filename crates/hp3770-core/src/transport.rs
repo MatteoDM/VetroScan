@@ -78,6 +78,20 @@ impl<T: Transport> Transport for ReadOnly<T> {
 /// The six button bits of `E968` / `E96A`.
 const BUTTON_BITS: u8 = 0x3f;
 
+/// Buttons held in a read of `E968`: the chip reports 0 for a pressed
+/// button; this returns the pressed ones as 1.
+///
+/// Bit 7 of the register is always 1 (idle `BF`). When another program
+/// (Windows' scan app, opened by WIA on a button press) resets the chip, a
+/// read can come back `00`, which would look like every button held: a read
+/// with bit 7 at 0 counts as no button.
+pub(crate) fn buttons_from_e968(raw: u8) -> u8 {
+    if raw & 0x80 == 0 {
+        return 0;
+    }
+    !raw & BUTTON_BITS
+}
+
 /// RTS8822 operations over a [`Transport`].
 #[derive(Debug)]
 pub struct Chip<T> {
@@ -201,11 +215,7 @@ impl<T: Transport> Chip<T> {
     /// chip, a read can come back `00`, which would look like every button
     /// held: such a read counts as no button.
     pub fn buttons_held(&mut self) -> Result<u8> {
-        let raw = self.read_byte(0xe968)?;
-        if raw & 0x80 == 0 {
-            return Ok(0);
-        }
-        Ok(!raw & BUTTON_BITS)
+        Ok(buttons_from_e968(self.read_byte(0xe968)?))
     }
 
     /// Buttons released since the last call (`Buttons_Released`): one bit per

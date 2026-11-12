@@ -19,6 +19,24 @@ use crate::protocol::DmaDirection;
 use crate::transport::{Chip, Transport};
 use std::time::Duration;
 
+/// Frequency in Hz of the system clock chosen by the low four bits of
+/// `E800` (the table of `Motor_Move` and `SetMultiExposure` in hp3900).
+pub(crate) fn system_clock_hz(e800: u8) -> u32 {
+    match e800 & 0x0f {
+        0x00 => 9_000_000,
+        0x08 | 0x01 => 12_000_000,
+        0x09 => 16_000_000,
+        0x02 => 18_000_000,
+        0x0a | 0x03 => 24_000_000,
+        0x0b => 32_000_000,
+        0x04 => 36_000_000,
+        0x0c => 48_000_000,
+        0x05 => 72_000_000,
+        0x0d => 96_000_000,
+        _ => 0x0478_f7f8,
+    }
+}
+
 /// Where the step tables start in the chip RAM, in units of 16 bytes
 /// (`v15f8` in hp3900): right after the three gamma tables of 256 bytes.
 /// The HP driver uses this offset in every capture.
@@ -466,19 +484,7 @@ impl<T: Transport> Chip<T> {
             cp.set_lsb(0xe4, 0, 3);
         } else {
             // Constant speed: a step length from the system clock.
-            let mut step: u32 = match cp.get(0x00) & 0x0f {
-                0x00 => 0x0089_5440,
-                0x08 | 0x01 => 0x00b7_1b00,
-                0x02 => 0x0112_a880,
-                0x0a | 0x03 => 0x016e_3600,
-                0x04 => 0x0225_5100,
-                0x0c => 0x02dc_6c00,
-                0x05 => 0x044a_a200,
-                0x0d => 0x05b8_d800,
-                0x09 => 0x00f4_2400,
-                0x0b => 0x01e8_4800,
-                _ => 0x0478_f7f8,
-            };
+            let mut step = system_clock_hz(cp.get(0x00));
             step /= u32::from(cp.get(0x96) & 0x3f) + 1;
             step = step.checked_div(motor.ctpc).unwrap_or(step);
             cp.set_lsb(0x30, step, 3);
@@ -499,11 +505,19 @@ impl<T: Transport> Chip<T> {
     /// Brings the carriage home if it is not there (`Head_ParkHome`).
     /// Waits for a running operation first. Returns `true` if it moved.
     ///
+    /// An operation still running after that wait (a scan cancelled or
+    /// failed half-way, whose data nobody reads any more) is stopped by
+    /// clearing the execution bit of `E800` from `regs`, as hp3900's
+    /// `RTS_Scanner_StopScan` does after its own 15 s wait, so that the move
+    /// is not started on top of it.
+    ///
     /// As in the HP driver there is no wait after the move beyond the 30 s
     /// of [`Chip::motor_move`] (hp3900 waits 15 s more): it is an error if
     /// the chip is still running then.
     pub fn head_park_home(&mut self, regs: &Registers, motor: &MotorMove) -> Result<bool> {
-        self.wait_scan_end(Duration::from_millis(0x3a98))?;
+        if !self.wait_scan_end(Duration::from_millis(0x3a98))? {
+            self.write_byte(0xe800, regs.get(0x00) & 0x7f)?;
+        }
         if self.head_is_at_home()? {
             return Ok(false);
         }

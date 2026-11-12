@@ -19,6 +19,22 @@ fn err(context: &str, e: impl fmt::Display) -> Error {
     Error::Transport(format!("{context}: {e}"))
 }
 
+/// Copies what a bulk IN transfer received into `buf`. The request is
+/// rounded up to whole packets, so the device could send more than `buf`
+/// holds: that is an error (the DMA size on the chip and the read disagree),
+/// not data to drop in silence.
+fn copy_bulk_in(buf: &mut [u8], received: &[u8]) -> Result<usize> {
+    let n = received.len();
+    if n > buf.len() {
+        return Err(Error::Transport(format!(
+            "bulk IN: the device sent {n} bytes, {} expected",
+            buf.len()
+        )));
+    }
+    buf[..n].copy_from_slice(received);
+    Ok(n)
+}
+
 fn is_3770(d: &DeviceInfo) -> bool {
     d.vendor_id() == VENDOR_ID && d.product_id() == PRODUCT_ID
 }
@@ -189,9 +205,8 @@ impl Transport for NusbScanner {
             .bulk_in
             .transfer_blocking(self.bulk_in.allocate(requested), BULK_TIMEOUT);
         completion.status.map_err(|e| err("bulk IN", e))?;
-        let n = completion.actual_len.min(buf.len());
-        buf[..n].copy_from_slice(&completion.buffer[..n]);
-        Ok(n)
+        let got = completion.actual_len.min(completion.buffer.len());
+        copy_bulk_in(buf, &completion.buffer[..got])
     }
 
     fn bulk_out(&mut self, data: &[u8]) -> Result<()> {
@@ -221,5 +236,21 @@ impl Transport for NusbScanner {
         };
         completion.status.map_err(|e| err("interrupt IN", e))?;
         Ok(completion.buffer.first().copied())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_bulk_in_longer_than_the_buffer_is_an_error() {
+        let mut buf = [0u8; 4];
+        assert_eq!(copy_bulk_in(&mut buf, &[1, 2, 3]).unwrap(), 3);
+        assert_eq!(buf, [1, 2, 3, 0]);
+        assert_eq!(copy_bulk_in(&mut buf, &[5, 6, 7, 8]).unwrap(), 4);
+        assert_eq!(buf, [5, 6, 7, 8]);
+        let err = copy_bulk_in(&mut buf, &[0; 5]).unwrap_err().to_string();
+        assert!(err.contains("sent 5 bytes, 4 expected"), "{err}");
     }
 }

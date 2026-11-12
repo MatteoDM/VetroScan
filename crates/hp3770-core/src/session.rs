@@ -10,10 +10,11 @@
 use crate::arrange;
 use crate::error::{Error, Result};
 use crate::geometry::{self, Area};
+use crate::init::{Link, Registers};
 use crate::motor::{park_registers, Direction, MotorPosition};
 use crate::profile::Profile;
-use crate::scan::LAMP_WARMUP;
-use crate::setup::ArrangeLine;
+use crate::scan::{Scan, LAMP_WARMUP};
+use crate::setup::{ArrangeLine, Hardware, ScanParams};
 use crate::transport::{Chip, Transport};
 use scan_imaging::adjust::{self, Adjustments};
 
@@ -149,7 +150,8 @@ pub fn fast_travel(profile: &Profile, resolution_y: u16, top: u32) -> Option<(u1
 ///
 /// `progress` is called at every stage and after every piece of image data;
 /// returning `false` cancels the scan: the chip is stopped, the carriage
-/// brought home and [`Error::Cancelled`] returned.
+/// brought home and [`Error::Cancelled`] returned. A scan that fails after
+/// the start-up is ended the same way before its error is returned.
 pub fn scan<T: Transport>(
     chip: &mut Chip<T>,
     profile: &Profile,
@@ -182,103 +184,34 @@ pub fn scan<T: Transport>(
         )));
     }
     params.triple_line = request.triple_line;
-    let gamma = geometry::identity_gamma();
     if !progress(Stage::Starting) {
         return Err(Error::Cancelled("start"));
     }
     let link = chip.link(profile)?;
     let mut init = link.registers.clone();
-    if !link.at_home {
-        chip.head_park_home(&park_registers(&init), &profile.park)?;
-    }
-    chip.prepare_scan(&mut init, profile)?;
-    if !link.lamp_was_on {
-        // The start-up switched the lamp on: let it warm up.
-        if !progress(Stage::WarmingUp) {
-            return Err(Error::Cancelled("lamp warm-up"));
-        }
-        std::thread::sleep(LAMP_WARMUP);
-    }
-    if request.transparency {
-        // The lamp is switched on and waited for in the calibration, until
-        // it lights steadily (at least [`TMA_WARMUP`] from cold).
-        if !progress(Stage::WarmingUp) {
-            return Err(Error::Cancelled("lamp warm-up"));
-        }
-    }
-    if !progress(Stage::Calibrating) {
-        if request.transparency {
-            chip.lamp_transparency(&mut init, false)?;
-            chip.lamp_flatbed(&mut init, true)?;
-        }
-        return Err(Error::Cancelled("calibration"));
-    }
-    let calibration = if request.transparency {
-        chip.calibrate_transparency(&mut init, profile, &params)?
-    } else {
-        chip.calibrate(&mut init, profile, &params)?
-    };
-    let mut report = Report {
-        warmed_up: !link.lamp_was_on,
-        gains: calibration.gain_offset.gain,
-        offsets: calibration.gain_offset.even_offset,
-        peak_buffered: 0,
-        white: calibration.white.clone().map(|t| {
-            t.chunks_exact(2)
-                .map(|w| u16::from_le_bytes([w[0], w[1]]))
-                .collect()
-        }),
-        samples16: None,
-    };
-    let tables = calibration.tables(Some(&gamma));
-    if request.fast_travel {
-        if let Some((steps, top)) = fast_travel(profile, params.resolution_y, params.top) {
-            chip.motor_move(
-                &park_registers(&init),
-                &profile.park,
-                &MotorPosition {
-                    direction: Direction::Forward,
-                    e801_bit2: false,
-                    steps,
-                },
-            )?;
-            params.top = top;
-        }
-    }
-    let mut job = chip.start_scan(
-        &init,
+    // Whatever happens after the start-up, cancelled, failed or done, the
+    // scan is ended the same way: chip stopped, carriage home, the
+    // adapter's lamp off and the flatbed lamp on again.
+    let outcome = read(
+        chip,
         profile,
-        &params,
+        request,
+        &mut params,
         &hw,
-        &calibration.gain_offset,
-        &tables,
-    )?;
-    let mut raw = Vec::with_capacity(job.total());
-    let mut piece = Vec::new();
-    let mut stopped = false;
-    while chip.read_scan(&mut job, &mut piece)? > 0 {
-        raw.extend_from_slice(&piece);
-        if !progress(Stage::Scanning {
-            done: job.bytes_read(),
-            total: job.total(),
-        }) {
-            stopped = true;
-            break;
-        }
-    }
-    report.peak_buffered = job.peak_buffered();
+        &link,
+        &mut init,
+        progress,
+    );
     progress(Stage::Finishing);
-    chip.stop_scan(&mut init, profile)?;
-    // The chip brings the carriage back by itself below 600 dpi, and not
-    // when the scan was cut short: make sure it is home.
-    chip.head_park_home(&park_registers(&init), &profile.park)?;
-    if request.transparency {
-        chip.lamp_transparency(&mut init, false)?;
-        chip.lamp_flatbed(&mut init, true)?;
-    }
-    if stopped {
-        return Err(Error::Cancelled("scan"));
-    }
+    let finished = finish(chip, &mut init, profile, request.transparency);
+    let (mut raw, job, mut report) = match (outcome, finished) {
+        (Ok(read), Ok(())) => read,
+        // A scan cancelled whose ending failed: the failure says more (the
+        // carriage may be away from home).
+        (Err(Error::Cancelled(_)), Err(e)) | (Ok(_), Err(e)) => return Err(e),
+        // The first error is the one to tell; the ending was a best effort.
+        (Err(e), _) => return Err(e),
+    };
 
     let mut height = raw.len() / job.bytes_per_line;
     raw.truncate(height * job.bytes_per_line);
@@ -309,6 +242,123 @@ pub fn scan<T: Transport>(
         report.samples16 = Some(s);
     }
     Ok((process(raw, width, height, request, profile), report))
+}
+
+/// The part of [`scan`] between the start-up and the end: preparation, lamp
+/// warm-up, calibration, the move near the area, the scan and its image
+/// data, read whole. Returns the chip's data, the scan and what was learnt;
+/// [`finish`] ends the scan however this went.
+#[allow(clippy::too_many_arguments)]
+fn read<T: Transport>(
+    chip: &mut Chip<T>,
+    profile: &Profile,
+    request: &Request,
+    params: &mut ScanParams,
+    hw: &Hardware,
+    link: &Link,
+    init: &mut Registers,
+    progress: &mut dyn FnMut(Stage) -> bool,
+) -> Result<(Vec<u8>, Scan, Report)> {
+    if !link.at_home {
+        chip.head_park_home(&park_registers(init), &profile.park)?;
+    }
+    chip.prepare_scan(init, profile)?;
+    if !link.lamp_was_on && !request.transparency {
+        // The start-up switched the lamp on: let it warm up. Not with the
+        // transparency adapter, whose calibration switches this lamp off
+        // as soon as the carriage reaches the adapter's slot.
+        if !progress(Stage::WarmingUp) {
+            return Err(Error::Cancelled("lamp warm-up"));
+        }
+        std::thread::sleep(LAMP_WARMUP);
+    }
+    if request.transparency {
+        // The lamp is switched on and waited for in the calibration, until
+        // it lights steadily (at least [`TMA_WARMUP`] from cold).
+        if !progress(Stage::WarmingUp) {
+            return Err(Error::Cancelled("lamp warm-up"));
+        }
+    }
+    if !progress(Stage::Calibrating) {
+        return Err(Error::Cancelled("calibration"));
+    }
+    let calibration = if request.transparency {
+        chip.calibrate_transparency(init, profile, params)?
+    } else {
+        chip.calibrate(init, profile, params)?
+    };
+    let mut report = Report {
+        warmed_up: !link.lamp_was_on,
+        gains: calibration.gain_offset.gain,
+        offsets: calibration.gain_offset.even_offset,
+        peak_buffered: 0,
+        white: calibration.white.clone().map(|t| {
+            t.chunks_exact(2)
+                .map(|w| u16::from_le_bytes([w[0], w[1]]))
+                .collect()
+        }),
+        samples16: None,
+    };
+    let gamma = geometry::identity_gamma();
+    let tables = calibration.tables(Some(&gamma));
+    if request.fast_travel {
+        if let Some((steps, top)) = fast_travel(profile, params.resolution_y, params.top) {
+            let moved = chip.motor_move(
+                &park_registers(init),
+                &profile.park,
+                &MotorPosition {
+                    direction: Direction::Forward,
+                    e801_bit2: false,
+                    steps,
+                },
+            )?;
+            if !moved {
+                return Err(Error::Transport(
+                    "the carriage was still moving towards the area after 30 s".into(),
+                ));
+            }
+            params.top = top;
+        }
+    }
+    let mut job = chip.start_scan(init, profile, params, hw, &calibration.gain_offset, &tables)?;
+    let mut raw = Vec::with_capacity(job.total());
+    let mut piece = Vec::new();
+    while chip.read_scan(&mut job, &mut piece)? > 0 {
+        raw.extend_from_slice(&piece);
+        if !progress(Stage::Scanning {
+            done: job.bytes_read(),
+            total: job.total(),
+        }) {
+            return Err(Error::Cancelled("scan"));
+        }
+    }
+    report.peak_buffered = job.peak_buffered();
+    Ok((raw, job, report))
+}
+
+/// Ends a scan, done, cancelled or failed at any point after the start-up:
+/// the chip stopped ([`Chip::stop_scan`]), the carriage home (the chip
+/// brings it back by itself below 600 dpi, but not when the scan was cut
+/// short or failed) and, with the transparency adapter, its lamp off and
+/// the flatbed lamp on again, as hp3900 does. Every step is tried even if
+/// an earlier one failed; the first failure is returned.
+fn finish<T: Transport>(
+    chip: &mut Chip<T>,
+    init: &mut Registers,
+    profile: &Profile,
+    transparency: bool,
+) -> Result<()> {
+    let stopped = chip.stop_scan(init, profile).map(|_| ());
+    let parked = chip
+        .head_park_home(&park_registers(init), &profile.park)
+        .map(|_| ());
+    let lamps = if transparency {
+        chip.lamp_transparency(init, false)
+            .and_then(|()| chip.lamp_flatbed(init, true))
+    } else {
+        Ok(())
+    };
+    stopped.and(parked).and(lamps)
 }
 
 /// The host side of a scan: the adjustments and the conversion of the

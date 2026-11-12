@@ -645,8 +645,9 @@ impl<T: Transport> Chip<T> {
                 let adapter = profile.transparency.as_ref().ok_or_else(|| {
                     Error::InvalidArgument("this scanner has no transparency adapter".into())
                 })?;
-                // To the slot, at the speed of the park.
-                self.motor_move(
+                // To the slot, at the speed of the park; nothing else is
+                // sent while the carriage may still be on its way.
+                let moved = self.motor_move(
                     &park_registers(init),
                     &profile.park,
                     &MotorPosition {
@@ -655,6 +656,12 @@ impl<T: Transport> Chip<T> {
                         steps: adapter.strip_steps,
                     },
                 )?;
+                if !moved {
+                    return Err(Error::Transport(
+                        "the carriage was still moving towards the adapter's slot after 30 s"
+                            .into(),
+                    ));
+                }
                 // The dark there, then the lamp on until it is steady.
                 let was_on = self.read_byte(0xe946)? & 0x20 != 0;
                 self.lamp_transparency(init, false)?;
