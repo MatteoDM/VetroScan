@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! `epson4490`: the Epson Perfection 4490 from the command line, for its
-//! first days on the desk (phase 12). But for `replay` (below), nothing it
-//! sends moves the carriage: every write goes through the backend's guard.
+//! first days on the desk (phase 12). But for `replay` (below), every write goes through the
+//! backend's guard: nothing moves the carriage but `scan`, inside what the captures cover.
 //!
 //! ```text
 //! epson4490 list                       the scanners found, nothing sent
@@ -10,7 +10,15 @@
 //! epson4490 upload [--firmware F]      sends the firmware if it is not running
 //! epson4490 buttons [SECONDS]          reads the buttons (1E 85) for a while, 10 s by default
 //! epson4490 replay SCRIPT OUT --move   replays a script made from a capture of Epson's driver
+//! epson4490 scan DPI X Y W H OUT.png [--bits 16] [--raw FILE] --move
+//!                                      scans an area of the glass, in millimetres
 //! ```
+//!
+//! `scan` computes the whole sequence from the request (`epson_gt_x750::scan`): the area in
+//! millimetres from the glass's corner, rounded to pixels as WIA does; the guard refuses what no
+//! capture covers (100, 200, 300, 400, 600, 1200 dpi at 8 bits, 600 at 16). OUT.png is the image
+//! realigned and cropped; `--raw` keeps the data as the scanner sent it (trailers removed).
+//! Without `--move` it only prints the plan and what the guard says of it.
 //!
 //! `replay` is the one command that moves the carriage, so it asks for `--move`. It sends only
 //! the bytes of its script (made by `captures/epson4490/tools/script.py` from a capture: what
@@ -22,15 +30,18 @@
 //! guard (the script is the list of what may go out), on a scanner opened like the others (on
 //! Windows with the STI lock).
 
-use epson_gt_x750::guard::Guarded;
+use epson_gt_x750::guard::{self, Guarded};
 use epson_gt_x750::protocol::{self, FirmwareOutcome, State};
+use epson_gt_x750::setup::{self, Request};
+use epson_gt_x750::shading::{black_block, Shading};
 use epson_gt_x750::{firmware, Found, Transport, PRODUCT_ID, VENDOR_ID};
 use scanner_api::Error;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: epson4490 list | firmware [--firmware FILE] | probe |                      upload [--firmware FILE] | buttons [SECONDS] | \
-                     replay SCRIPT OUT --move";
+const USAGE: &str = "usage: epson4490 list | firmware [--firmware FILE] | probe | \
+                     upload [--firmware FILE] | buttons [SECONDS] | replay SCRIPT OUT --move | \
+                     scan DPI X Y W H OUT.png [--bits 16] [--raw FILE] --move   (X Y W H in mm)";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -39,6 +50,8 @@ fn main() -> ExitCode {
     let mut seconds = None;
     let mut operands: Vec<String> = Vec::new();
     let mut moves = false;
+    let mut bits = 8u8;
+    let mut raw_path = None;
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
@@ -47,12 +60,23 @@ fn main() -> ExitCode {
                 None => return usage(),
             },
             "--move" => moves = true,
+            "--bits" => match rest.next().map(|b| b.parse()) {
+                Some(Ok(b)) => bits = b,
+                _ => return usage(),
+            },
+            "--raw" => match rest.next() {
+                Some(path) => raw_path = Some(PathBuf::from(path)),
+                None => return usage(),
+            },
             "-h" | "--help" => {
                 println!("{USAGE}");
                 return ExitCode::SUCCESS;
             }
             c if command.is_none() && !c.starts_with('-') => command = Some(c.to_owned()),
             o if command.as_deref() == Some("replay") && operands.len() < 2 => {
+                operands.push(o.to_owned())
+            }
+            o if command.as_deref() == Some("scan") && operands.len() < 6 => {
                 operands.push(o.to_owned())
             }
             n if command.as_deref() == Some("buttons") && seconds.is_none() => {
@@ -77,6 +101,22 @@ fn main() -> ExitCode {
         Some("replay") if operands.len() == 2 => {
             eprintln!("epson4490: replay moves the carriage: add --move to run it");
             return ExitCode::from(2);
+        }
+        Some("scan") if operands.len() == 6 => {
+            let request = match scan_request(&operands[..5], bits) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("epson4490: {e}");
+                    return ExitCode::from(2);
+                }
+            };
+            if !moves {
+                // Nothing sent: the plan and whether the guard would let it out.
+                show_plan(request);
+                eprintln!("epson4490: scan moves the carriage: add --move to run it");
+                return ExitCode::from(2);
+            }
+            scan(request, &operands[5], raw_path.as_deref())
         }
         _ => return usage(),
     };
@@ -213,6 +253,137 @@ fn buttons(seconds: u64) -> Result<(), Error> {
     Ok(())
 }
 
+/// The request of `DPI X Y W H` (millimetres from the glass's corner), in pixels rounded to
+/// the nearest as WIA does (40 mm at 300 dpi = 472 pixels).
+fn scan_request(args: &[String], bits: u8) -> Result<Request, String> {
+    let dpi: u32 = args[0]
+        .parse()
+        .map_err(|_| format!("{}: not a resolution", args[0]))?;
+    let mm: Vec<f64> = args[1..5]
+        .iter()
+        .map(|a| {
+            a.parse::<f64>()
+                .map_err(|_| format!("{a}: not millimetres"))
+        })
+        .collect::<Result<_, _>>()?;
+    if mm.iter().any(|v| !v.is_finite() || *v < 0.0) {
+        return Err("negative millimetres".into());
+    }
+    let px = |v: f64| (v / 25.4 * f64::from(dpi)).round() as u32;
+    Ok(Request::new(
+        dpi,
+        px(mm[0]),
+        px(mm[1]),
+        px(mm[2]),
+        px(mm[3]),
+        bits,
+    ))
+}
+
+/// Prints the plan of `request` with the x correction of Matteo's 4490 (the scan reads the
+/// scanner's own), and what the guard says of it.
+fn show_plan(request: Request) {
+    let r = request;
+    println!(
+        "{} dpi, {} bits: x {} y {} px, {} x {} px",
+        r.dpi, r.bits, r.x, r.y, r.width, r.height
+    );
+    match setup::Plan::new(request, setup::XCorrection(-93)) {
+        Ok(p) => {
+            println!(
+                "with the x correction -93: columns {}-{}, {} lines of {} pixels, T {} us, {} \
+                 steps/s ({:?}), start move {} steps, lead {}, read ends at step {}",
+                p.columns.0,
+                p.columns.1,
+                p.lines,
+                p.pixels,
+                p.t,
+                p.speed,
+                p.mode,
+                p.start_move.as_ref().map_or(0, |m| m.steps),
+                p.lead,
+                p.read_end
+            );
+            match guard::check_plan(&p) {
+                Ok(()) => println!("the guard lets it out"),
+                Err(e) => println!("the guard refuses it: {e}"),
+            }
+        }
+        Err(e) => println!("no plan: {e}"),
+    }
+}
+
+fn scan(request: Request, out: &str, raw: Option<&std::path::Path>) -> Result<(), Error> {
+    show_plan(request);
+    guard::check_request(&request)?;
+    let mut t = open_first()?;
+    let state = protocol::state(&mut t)?;
+    println!("state (1B 03): {}", describe(state));
+    if !state.firmware_running() {
+        return Err(Error::Other(
+            "the firmware is not running: run `epson4490 upload` first".into(),
+        ));
+    }
+    let start = std::time::Instant::now();
+    let mut shown = 0;
+    let s = epson_gt_x750::scan::scan_glass(
+        &mut t,
+        request,
+        &mut |line| println!("  {:5.1} s  {line}", start.elapsed().as_secs_f64()),
+        &mut |done, all| {
+            let tenth = done * 10 / all.max(1);
+            if tenth > shown {
+                shown = tenth;
+                println!(
+                    "  {:5.1} s  {done} of {all} lines",
+                    start.elapsed().as_secs_f64()
+                );
+            }
+        },
+    )?;
+    if let Some(path) = raw {
+        std::fs::write(path, &s.raw)
+            .map_err(|e| Error::Other(format!("{}: {e}", path.display())))?;
+        println!(
+            "raw data: {} lines of {} pixels -> {}",
+            s.plan.lines,
+            s.plan.pixels,
+            path.display()
+        );
+    }
+    write_png(out, &s.image)?;
+    println!(
+        "done in {:.1} s: {} x {} pixels, {} bits -> {out}",
+        start.elapsed().as_secs_f64(),
+        s.image.width,
+        s.image.height,
+        s.image.bits
+    );
+    Ok(())
+}
+
+fn write_png(path: &str, image: &epson_gt_x750::scan::Image) -> Result<(), Error> {
+    let fail = |e: &dyn std::fmt::Display| Error::Other(format!("{path}: {e}"));
+    let file = std::fs::File::create(path).map_err(|e| fail(&e))?;
+    let mut enc = png::Encoder::new(std::io::BufWriter::new(file), image.width, image.height);
+    enc.set_color(png::ColorType::Rgb);
+    let data = if image.bits == 16 {
+        enc.set_depth(png::BitDepth::Sixteen);
+        // PNG wants big-endian samples.
+        image
+            .data
+            .chunks_exact(2)
+            .flat_map(|s| [s[1], s[0]])
+            .collect()
+    } else {
+        enc.set_depth(png::BitDepth::Eight);
+        image.data.clone()
+    };
+    let mut w = enc.write_header().map_err(|e| fail(&e))?;
+    w.write_image_data(&data).map_err(|e| fail(&e))?;
+    w.finish().map_err(|e| fail(&e))
+}
+
 /// One step of a replay script (see `captures/epson4490/tools/script.py`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Step {
@@ -250,146 +421,6 @@ enum Cal {
     White,
     /// The same, lamp off.
     Dark,
-}
-
-/// The `1E 42` block before the white calibration: zero, then each channel's mean of the
-/// black pixels twice (`raw`: 16-bit RGB, possibly ending with the 8-byte block trailer).
-fn black_block(raw: &[u8]) -> Vec<u8> {
-    let n = raw.len();
-    let raw = if n >= 8 && raw[n - 2..] == [0x80, 0x00] && raw[n - 8] == 0x02 {
-        &raw[..n - 8]
-    } else {
-        raw
-    };
-    let mut sum = [0f64; 3];
-    let mut count = 0usize;
-    for p in raw.chunks_exact(6) {
-        for (ch, s) in sum.iter_mut().enumerate() {
-            *s += f64::from(u16::from_le_bytes([p[2 * ch], p[2 * ch + 1]]));
-        }
-        count += 1;
-    }
-    let mean: [u16; 3] = std::array::from_fn(|ch| (sum[ch] / count.max(1) as f64).floor() as u16);
-    [
-        0, 0, 0, mean[0], mean[0], mean[1], mean[1], mean[2], mean[2],
-    ]
-    .iter()
-    .flat_map(|v: &u16| v.to_le_bytes())
-    .collect()
-}
-
-/// The shading computed from a replay's own calibration (`captures/epson4490/06-formato-dati.md`).
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Shading {
-    /// The white's base per channel (`1E 42`).
-    k: [u16; 3],
-    /// The minimum dark per channel (`1E 42`).
-    dark_min: [u16; 3],
-    /// The white's scale, 2^`white_shift` (`1E 41` byte 15, high nibble).
-    white_shift: u8,
-    /// The dark's scale, 2^`dark_shift` (low nibble).
-    dark_shift: u8,
-    /// The table: per column, per channel, `white byte << 8 | dark byte`.
-    table: Vec<u16>,
-}
-
-/// The per-column statistics of a calibration read: 16-bit RGB, `lines` x `cols`.
-fn columns(raw: &[u8], cols: usize) -> Vec<Vec<[u16; 3]>> {
-    let line = cols * 6;
-    raw.chunks_exact(line)
-        .map(|l| {
-            l.chunks_exact(6)
-                .map(|p| {
-                    [
-                        u16::from_le_bytes([p[0], p[1]]),
-                        u16::from_le_bytes([p[2], p[3]]),
-                        u16::from_le_bytes([p[4], p[5]]),
-                    ]
-                })
-                .collect()
-        })
-        .collect()
-}
-
-/// The smallest shift that brings `span` to 255 or less.
-fn shift_for(span: f64) -> u8 {
-    (0u8..16)
-        .find(|&s| span / f64::from(1u32 << s) <= 255.0)
-        .unwrap_or(15)
-}
-
-impl Shading {
-    /// From the white and dark reads (16-bit RGB over `cols` columns), for a table of `len`
-    /// values covering the first `width` columns.
-    fn compute(white: &[u8], dark: &[u8], cols: usize, width: usize, len: usize) -> Self {
-        let w = columns(white, cols);
-        let d = columns(dark, cols);
-        let width = width.min(cols);
-        // The white per column: the mean of its brightest lines (the driver leaves out the
-        // lines darkened by dust on the strip; its exact rule is not known).
-        let keep = w.len() - w.len() * 5 / 16;
-        let mut white_col = vec![[0f64; 3]; width];
-        let mut dark_col = vec![[0f64; 3]; width];
-        for col in 0..width {
-            for ch in 0..3 {
-                let mut v: Vec<u16> = w.iter().map(|l| l[col][ch]).collect();
-                v.sort_unstable();
-                let top = &v[v.len() - keep..];
-                white_col[col][ch] = top.iter().map(|&x| f64::from(x)).sum::<f64>() / keep as f64;
-                dark_col[col][ch] =
-                    d.iter().map(|l| f64::from(l[col][ch])).sum::<f64>() / d.len() as f64;
-            }
-        }
-        let min = |v: &[[f64; 3]], ch: usize| v.iter().map(|c| c[ch]).fold(f64::MAX, f64::min);
-        let max = |v: &[[f64; 3]], ch: usize| v.iter().map(|c| c[ch]).fold(f64::MIN, f64::max);
-        let k: [u16; 3] = std::array::from_fn(|ch| min(&white_col, ch).floor() as u16);
-        let dark_min: [u16; 3] = std::array::from_fn(|ch| min(&dark_col, ch).floor() as u16);
-        let white_shift = (0..3)
-            .map(|ch| shift_for(max(&white_col, ch) - f64::from(k[ch])))
-            .max()
-            .unwrap_or(0);
-        let dark_shift = (0..3)
-            .map(|ch| shift_for(max(&dark_col, ch) - f64::from(dark_min[ch])))
-            .max()
-            .unwrap_or(0);
-        let mut table = vec![0u16; len];
-        for col in 0..width {
-            for ch in 0..3 {
-                let i = col * 3 + ch;
-                if i >= len {
-                    break;
-                }
-                let hi = ((white_col[col][ch] - f64::from(k[ch])) / f64::from(1u32 << white_shift))
-                    .floor()
-                    .clamp(0.0, 255.0) as u16;
-                let lo = ((dark_col[col][ch] - f64::from(dark_min[ch]))
-                    / f64::from(1u32 << dark_shift))
-                .floor()
-                .clamp(0.0, 255.0) as u16;
-                table[i] = hi << 8 | lo;
-            }
-        }
-        Self {
-            k,
-            dark_min,
-            white_shift,
-            dark_shift,
-            table,
-        }
-    }
-
-    /// The `1E 42` block: K per channel, then each minimum dark twice.
-    fn block42(&self) -> Vec<u8> {
-        let [d0, d1, d2] = self.dark_min;
-        [self.k[0], self.k[1], self.k[2], d0, d0, d1, d1, d2, d2]
-            .iter()
-            .flat_map(|v| v.to_le_bytes())
-            .collect()
-    }
-
-    fn table_bytes(&self) -> Vec<u8> {
-        self.table.iter().flat_map(|v| v.to_le_bytes()).collect()
-    }
 }
 
 fn hex(s: &str) -> Result<Vec<u8>, String> {
@@ -743,53 +774,5 @@ mod tests {
         assert!(e.contains("step 2") && e.contains("answered 02"), "{e}");
         // Nothing after it went out.
         assert_eq!(t.writes, [vec![0x1E, 0xA1]]);
-    }
-}
-
-#[cfg(test)]
-mod shading_tests {
-    use super::*;
-
-    fn rgb16(pixels: &[[u16; 3]]) -> Vec<u8> {
-        pixels
-            .iter()
-            .flat_map(|p| p.iter().flat_map(|v| v.to_le_bytes()))
-            .collect()
-    }
-
-    #[test]
-    fn the_black_block_is_the_floor_of_each_channels_mean() {
-        // Two pixels, then the 8-byte block trailer, left out.
-        let mut raw = rgb16(&[[1136, 1238, 1330], [1139, 1239, 1331]]);
-        raw.extend([0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x80, 0x00]);
-        let want: Vec<u8> = [0u16, 0, 0, 1137, 1137, 1238, 1238, 1330, 1330]
-            .iter()
-            .flat_map(|v| v.to_le_bytes())
-            .collect();
-        assert_eq!(black_block(&raw), want);
-    }
-
-    #[test]
-    fn the_shading_packs_white_and_dark_per_column() {
-        // Two columns, 16 lines: white 1000 / 1000+255*128 (one line darkened by dust in the
-        // second, left out), dark 100 / 100+4*10.
-        let cols = 2;
-        let mut white = Vec::new();
-        let mut dark = Vec::new();
-        for line in 0..16 {
-            let dust = if line == 3 { 5000 } else { 0 };
-            white.extend(rgb16(&[[1000; 3], [1000 + 255 * 128 - dust; 3]]));
-            dark.extend(rgb16(&[[100; 3], [140; 3]]));
-        }
-        let s = Shading::compute(&white, &dark, cols, 2, 8);
-        assert_eq!(s.k, [1000; 3]);
-        assert_eq!(s.dark_min, [100; 3]);
-        assert_eq!((s.white_shift, s.dark_shift), (7, 0));
-        // Column 0: white 0, dark 0; column 1: white 255, dark 40; then zeros.
-        assert_eq!(
-            s.table,
-            [0, 0, 0, 255 << 8 | 40, 255 << 8 | 40, 255 << 8 | 40, 0, 0]
-        );
-        assert_eq!(s.block42()[..6], [0xE8, 0x03, 0xE8, 0x03, 0xE8, 0x03]);
     }
 }

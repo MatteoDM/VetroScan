@@ -979,6 +979,45 @@ on `usbscan` by itself.
   moment (means equal, WIA = 0.994 × ours + 0.4 per channel, 2 levels apart on average, the
   noise between two scans). Next: switching the lamp as the driver does, then computing the
   parameters (`1E 57`, `1E 41`, the motor's) for any area and resolution.
+- **The set-up computed from the request** (12 November 2026, night): every set-up block of a
+  glass scan follows from the request by rules read in Epson's interpreter (`esxuin54.dll`,
+  addresses and derivation in `captures/epson4490/06-formato-dati.md`, "Il set-up calcolato
+  dalla richiesta"): the columns at the sensor's base resolution from x, the width and the x
+  origin's correction the scanner stores (bytes 2-3 of its `1E 87` answer, -93 on Matteo's), the
+  line time, the motor's 2400 steps per inch, the read's speed and ramp, the start move and the
+  lead, the lines per block. Checked on 19 glass captures (WIA at 100-1200 dpi, Epson Scan at 600
+  and 2400 dpi, 16 bits): every block the same. A script generated for an area never captured
+  (300 dpi, 5 × 5 cm at 40/60 mm), replayed on the scanner, gave WIA's image of the same area.
+- **The native glass scan** (`scan.rs`, `setup.rs`; 12 November 2026): the backend computes the
+  whole sequence from a request (resolution, area, 8/16 bits, colour) instead of replaying a
+  script: WIA's opening, gamma and tone tables, the request, the lamp, `1E 87` (the x correction
+  read, not a constant), the line time, the black pixels, the white and the dark with the
+  shading computed from them, at 1200 dpi `1E 8B`/`1E 83`, the start move, the read, the
+  trailers, the colours realigned (green dpi/50 lines below blue, red twice: exactly WIA's image
+  from the same data on captures 03, 04, 30) and cropped. The two fixed ramps of the moves are
+  **computed, not copied**: they follow the read ramps' law (400 steps/s up to 10⁶/160 and
+  10⁶/250 steps/s, k = 2n − 3), the first value 2500 and the last one less than the full speed's,
+  equal to the interpreter's tables and to what the scanner received. WIA's gamma table is
+  `round(255 (i/255)^(1/1.8))`; its 8 KB tone table (`1E 84` type 02) has no formula found and is
+  carried as captured on the cable (`tables/wia_tone.bin`). Tests: the blocks of the 18
+  captures rebuilt (`testdata/`, the captures stripped of image data and long tables), the whole
+  scan run against eleven WIA captures write by write, the realigning on made-up lines.
+  - **The guard** lets a scan out only inside what the captures cover: glass, colour, 100, 200,
+    300, 400, 600 and 1200 dpi at 8 bits, 600 at 16 (Epson Scan's capture 15: its `1E 21`'s last
+    two values, 2 and 1002, sent the same); the area inside the glass; the line times each
+    resolution was captured with (the whole width at 600 dpi needs 4224 µs, captured only at
+    100 and 300: refused); start moves of the kinds seen (the 256-value ramp and "no move" never
+    happen on the glass at these resolutions, refused anyway); no read further than capture 07's
+    (29,587 steps); an x correction within ±300. Then only the plan's own blocks go out. Refused:
+    800 (WIA asks 1200), 900, 2400, 4800 dpi, black and white, films, Epson Scan's draft mode.
+  - At 1200 dpi the scanner answers `1E 8B` with `06` once Epson's driver has loaded a table it
+    computes (`1E 84` type 07, seen once, capture 05: the scanner answered `15` and the driver
+    read 245,824 bytes with `1E 83` first); how it is computed is not known, so with `15` the scan
+    stops before the tone tables and the start move.
+  - `epson4490 scan DPI X Y W H OUT.png [--bits 16] [--raw FILE] --move` (millimetres); without
+    `--move` it prints the plan and what the guard says. The application's `scan()` still
+    answers "not implemented": its `Capabilities` (150-4800 dpi, grey) are not yet those of the
+    guard.
 - **More captures and the data format**: the glass through WIA (150-1200 dpi, colour, grey,
   black and white, a cancelled scan), Epson Scan (2400 and 4800 dpi, 48 bits), a negative with
   and without Digital ICE, a slide, the lamp (it switches itself off after about 15 minutes);

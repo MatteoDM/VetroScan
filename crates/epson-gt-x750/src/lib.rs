@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! The Epson Perfection 4490 Photo (GT-X750 in Japan, USB `04b8:0119`).
 //!
-//! **Milestone 1 of phase 12** (`docs/architecture-plan.md`), written
-//! before the scanner arrived: it finds the scanner, sends its firmware
-//! when it is not running, and reads its state. It does not scan
-//! ([`Scanner::scan`] answers an error): nothing that moves the carriage or
-//! switches a lamp is sent, because the native scan protocol is not
-//! understood yet. Every byte here was read from Epson's Windows driver
-//! and is still to be confirmed by a USB capture.
+//! **Phase 12** (`docs/architecture-plan.md`): it finds the scanner, sends
+//! its firmware when it is not running, reads its state and its buttons
+//! (all confirmed by USB captures of Epson's driver), and scans an area of
+//! the glass in colour ([`scan`]), the whole sequence computed from the
+//! request ([`setup`]) with the shading from its own calibration
+//! ([`shading`]). The application does not scan with it yet
+//! ([`Scanner::scan`] answers an error): only the `epson4490` command does.
+//! Every write goes through the [`guard`], which lets out a scan only inside
+//! what the captures cover.
 //!
 //! The scanner does not speak ESC/I: it runs a firmware the host sends at
 //! every power-on ([`firmware`]), then answers two-byte native commands
@@ -27,8 +29,12 @@ pub mod firmware;
 pub mod guard;
 mod nusb_backend;
 pub mod protocol;
+pub mod scan;
+pub mod setup;
+pub mod shading;
 #[cfg(windows)]
 mod sti;
+pub mod tables;
 #[cfg(windows)]
 mod usbscan;
 

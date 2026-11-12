@@ -1,47 +1,201 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! A guard on everything the backend writes to the scanner: only the
-//! commands of milestone 1 go out, so nothing can move the carriage by
-//! mistake.
+//! A guard on everything the backend writes to the scanner, so nothing can
+//! move the carriage or switch the lamp but a scan inside what the captures
+//! of Epson's driver have shown.
 //!
-//! Read from Epson's interpreter (`captures/epson4490/04-carriage.md`,
-//! outside the repository), **not confirmed by a capture yet**: a move is
-//! `1E 84` (a ramp table) + `1E 01` (12 bytes) + `1E 05` (go), after
-//! `1E 25` (what moves); `1E F4` + 16 bits is another move; `1E 47` /
-//! `1E 48` start a scan. Rather than a list of what is forbidden, the guard
-//! lets through a list of what is known to move nothing:
+//! Rather than a list of what is forbidden, the guard lets through a list of
+//! what is allowed:
 //!
-//! * `1B 03` (state), `1E 86` (the two positions) and `1E 85` (the button
-//!   pressed, seen in a capture), read-only;
-//! * the firmware upload: `1B 06`, then only its own data (the length
+//! * always: `1B 03` (state), `1E 86` (the two positions) and `1E 85` (the
+//!   button pressed), read-only;
+//! * always: the firmware upload: `1B 06`, then only its own data (the length
 //!   `01 00 01 00`, 65,536 bytes, the checksum), `1B 16`, and `80` right
-//!   after `1B 16`.
+//!   after `1B 16`;
+//! * during a glass scan ([`crate::scan`]), once [`Guarded::permit_request`]
+//!   has accepted the request: the opening and the read-only commands of
+//!   Epson's sequence, the gamma tables, that request's `1E 57`, the lamp
+//!   (`1E A2 00`/`01`) and `1E 87`;
+//! * once [`Guarded::permit_plan`] has accepted the plan computed from it:
+//!   exactly the plan's blocks (`1E 11`, `21`, `41`, `43`, `46`, the ramps
+//!   and moves `1E 84` type 04 and `1E 01`, `1E 05` only for its start move,
+//!   the tone tables and a shading table as wide as its columns), `1E 42`,
+//!   `1E 31` and `1E 47`.
 //!
-//! Anything else is refused with an error and never reaches the scanner.
-//! A command is let through only when a capture of Epson's driver has
-//! shown it, and then added here on purpose.
+//! What a scan may ask ([`check_request`], [`check_plan`]): the glass, colour,
+//! the resolutions WIA scanned at 8 bits (100, 200, 300, 400, 600, 1200 dpi)
+//! and 600 at 16 bits (Epson Scan); an area inside the glass; the line times
+//! (so the motor's speeds) each resolution was captured with; a start move
+//! of a kind seen; no read further than the furthest captured. Refused, as
+//! not captured: 800 (WIA asks 1200), 900, 2400 and 4800 dpi, black and
+//! white, films, Epson Scan's draft mode. Anything else is refused with an
+//! error and never reaches the scanner.
 
 use crate::firmware::PAYLOAD_LEN;
 use crate::protocol::{FIRMWARE_BEGIN, FIRMWARE_END, FIRMWARE_RUN, GET_BUTTONS, GET_STATE};
-use crate::Transport;
+use crate::scan::READ_83;
+use crate::setup::{self, MoveKind, Plan, Request};
+use crate::{tables, Transport};
 use scanner_api::{Error, Result};
 
 /// Reads the two 16-bit positions (carriage, transparency unit): 4 bytes.
 pub const GET_POSITIONS: [u8; 2] = [0x1E, 0x86];
 
+/// The resolutions and depths a glass scan may use: the ones captured.
+pub const COVERED: [(u32, u8); 7] = [
+    (100, 8),
+    (200, 8),
+    (300, 8),
+    (400, 8),
+    (600, 8),
+    (1200, 8),
+    (600, 16),
+];
+
+/// The line times (µs) each resolution was captured with: the motor's speed
+/// follows from them, so no other one goes out.
+pub const LINE_TIMES: [(u32, u32); 7] = [
+    (100, 4224),
+    (200, 3840),
+    (300, 3840),
+    (300, 4224),
+    (400, 3840),
+    (600, 3840),
+    (1200, 10_752),
+];
+
+/// The furthest step from home a captured read reached (capture 07, A4 at
+/// 300 dpi).
+pub const MAX_READ_END: u32 = 29_587;
+
+/// The glass, in tenths of an inch (216 x 297 mm).
+pub const GLASS_TENTHS: (u32, u32) = (85, 117);
+
+/// The x origin's corrections the scanner may give (4800ths of an inch):
+/// Matteo's 4490 has -93; a value far from it is more likely a wrong answer.
+pub const X_CORRECTION_RANGE: std::ops::RangeInclusive<i16> = -300..=300;
+
 /// The commands known to move something, with what they do, for the
-/// error message (all refused anyway: they are not in the allowed list).
-const MOVERS: [(u8, &str); 7] = [
+/// error message.
+const MOVERS: [(u8, &str); 9] = [
     (0x01, "the parameters of a carriage move"),
     (0x05, "starts a carriage move"),
     (0x25, "selects what moves"),
     (0x47, "starts a scan"),
     (0x48, "starts a scan"),
-    (0x84, "loads a motor ramp"),
+    (0x84, "loads a table"),
     (0xF4, "moves the carriage"),
+    (0xA2, "switches the lamp"),
+    (0x77, "switches the lamp"),
 ];
 
 /// The payload's length, as the upload sends it.
 const UPLOAD_LENGTH: [u8; 4] = (PAYLOAD_LEN as u32).to_le_bytes();
+
+/// Whether a glass scan of `r` may be sent: the resolutions, depth and area
+/// the captures cover.
+pub fn check_request(r: &Request) -> Result<()> {
+    let refuse = |why: String| Err(Error::InvalidRequest(format!("Epson 4490: {why}")));
+    if r.ydpi != r.dpi {
+        return refuse(format!(
+            "{} x {} dpi: only the same resolution both ways was captured",
+            r.dpi, r.ydpi
+        ));
+    }
+    if !COVERED.contains(&(r.dpi, r.bits)) {
+        return refuse(format!(
+            "{} dpi at {} bits was never captured on the glass (only 100, 200, 300, 400, 600 and \
+             1200 dpi at 8 bits, 600 at 16)",
+            r.dpi, r.bits
+        ));
+    }
+    let (gw, gh) = GLASS_TENTHS;
+    let (max_w, max_h) = (gw * r.dpi / 10, gh * r.dpi / 10);
+    if r.width == 0 || r.height == 0 || r.x + r.width > max_w || r.y + r.height > max_h {
+        return refuse(format!(
+            "the area {}x{} at {},{} is not inside the glass ({max_w} x {max_h} pixels at {} dpi)",
+            r.width, r.height, r.x, r.y, r.dpi
+        ));
+    }
+    setup::request_block(r)?;
+    Ok(())
+}
+
+/// Whether a plan may be sent: its request accepted, and every move and
+/// speed one the captures have shown.
+pub fn check_plan(p: &Plan) -> Result<()> {
+    check_request(&p.request)?;
+    let refuse = |why: String| Err(Error::InvalidRequest(format!("Epson 4490: {why}")));
+    let r = &p.request;
+    if !X_CORRECTION_RANGE.contains(&p.x_correction.0) {
+        return refuse(format!(
+            "1E 87 gave an x correction of {}, far from the -93 seen: not trusted",
+            p.x_correction.0
+        ));
+    }
+    if !LINE_TIMES.contains(&(r.dpi, p.t)) {
+        return refuse(format!(
+            "this area needs a line time of {} µs at {} dpi, never captured (the motor would \
+             run at {} steps/s): make it narrower",
+            p.t, r.dpi, p.speed
+        ));
+    }
+    if p.starts_late {
+        return refuse("the read would start lower than asked: never seen".into());
+    }
+    match &p.start_move {
+        None => {
+            return refuse(format!(
+                "this position needs no start move, a sequence never captured: move the area by \
+                 a pixel (y {})",
+                r.y
+            ))
+        }
+        Some(m) if m.kind == MoveKind::Medium => {
+            return refuse(format!(
+                "a start move of {} steps uses the 256-value ramp, never captured",
+                m.steps
+            ))
+        }
+        Some(m) if m.kind == MoveKind::Short && m.steps >= p.num => {
+            return refuse(format!(
+                "a short start move of {} steps, never captured",
+                m.steps
+            ))
+        }
+        Some(_) => {}
+    }
+    if p.read_end > MAX_READ_END {
+        return refuse(format!(
+            "the read would end {} steps from home, further than any capture ({MAX_READ_END})",
+            p.read_end
+        ));
+    }
+    Ok(())
+}
+
+/// What may come after a command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Expect {
+    /// One of these blocks.
+    OneOf(Vec<Vec<u8>>),
+    /// Any block of this length (values computed from the calibration, or
+    /// the scanner's own written back).
+    Len(usize),
+    /// One of the plan's `1E 41`: the image's with any byte 15 (the scales).
+    Block41,
+    /// `1E B3`: a channel, then the gamma table.
+    GammaChannel,
+    /// `1E 84`: a header the plan allows.
+    TableHeader,
+}
+
+/// What a scan may send.
+#[derive(Debug, Clone)]
+struct Permit {
+    request: Request,
+    e57: [u8; 42],
+    plan: Option<Plan>,
+}
 
 /// Where the firmware upload is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,6 +217,9 @@ enum Stage {
 pub struct Guarded<T: Transport> {
     inner: T,
     stage: Stage,
+    permit: Option<Permit>,
+    /// What the next write must be, after a command that takes a block.
+    expect: Option<Expect>,
 }
 
 impl<T: Transport> Guarded<T> {
@@ -71,6 +228,8 @@ impl<T: Transport> Guarded<T> {
         Self {
             inner,
             stage: Stage::Idle,
+            permit: None,
+            expect: None,
         }
     }
 
@@ -79,58 +238,210 @@ impl<T: Transport> Guarded<T> {
         &self.inner
     }
 
-    /// Whether `data` may be written now, and the stage after it.
-    fn check(&self, data: &[u8]) -> Result<Stage> {
+    /// Lets out a glass scan of `request` (the commands before its plan is
+    /// known), if [`check_request`] accepts it.
+    pub fn permit_request(&mut self, request: &Request) -> Result<()> {
+        check_request(request)?;
+        self.permit = Some(Permit {
+            request: *request,
+            e57: setup::request_block(request)?,
+            plan: None,
+        });
+        self.expect = None;
+        Ok(())
+    }
+
+    /// Lets out the blocks of `plan`, computed for the request already
+    /// permitted, if [`check_plan`] accepts it.
+    pub fn permit_plan(&mut self, plan: &Plan) -> Result<()> {
+        let permit = self.permit.as_mut().ok_or_else(|| {
+            Error::Other("Epson 4490: a plan without its request permitted".into())
+        })?;
+        if permit.request != plan.request {
+            return Err(Error::Other(
+                "Epson 4490: the plan is not for the request permitted".into(),
+            ));
+        }
+        check_plan(plan)?;
+        permit.plan = Some(plan.clone());
+        Ok(())
+    }
+
+    /// Back to the commands that move nothing.
+    pub fn end_scan(&mut self) {
+        self.permit = None;
+        self.expect = None;
+    }
+
+    /// Whether `data` may be written now: the stage and what to expect after.
+    fn check(&self, data: &[u8]) -> Result<(Stage, Option<Expect>)> {
+        let idle = |e| Ok((Stage::Idle, e));
         match self.stage {
-            Stage::Length if data == UPLOAD_LENGTH => return Ok(Stage::Payload(PAYLOAD_LEN - 1)),
-            Stage::Payload(left) if !data.is_empty() && data.len() <= left => {
-                return Ok(match left - data.len() {
-                    0 => Stage::Checksum,
-                    left => Stage::Payload(left),
-                })
+            Stage::Length if data == UPLOAD_LENGTH => {
+                return Ok((Stage::Payload(PAYLOAD_LEN - 1), None))
             }
-            Stage::Checksum if data.len() == 1 => return Ok(Stage::Idle),
-            Stage::Run if data == [FIRMWARE_RUN] => return Ok(Stage::Idle),
+            Stage::Payload(left) if !data.is_empty() && data.len() <= left => {
+                return Ok((
+                    match left - data.len() {
+                        0 => Stage::Checksum,
+                        left => Stage::Payload(left),
+                    },
+                    None,
+                ))
+            }
+            Stage::Checksum if data.len() == 1 => return idle(None),
+            Stage::Run if data == [FIRMWARE_RUN] => return idle(None),
             // Anything else ends an upload: judged as a command.
             _ => {}
         }
+        if let Some(expect) = &self.expect {
+            return self.block(expect, data).map(|next| (Stage::Idle, next));
+        }
         match data {
-            d if d == GET_STATE || d == GET_POSITIONS || d == GET_BUTTONS => Ok(Stage::Idle),
-            d if d == FIRMWARE_BEGIN => Ok(Stage::Length),
-            d if d == FIRMWARE_END => Ok(Stage::Run),
-            _ => Err(refusal(data)),
+            d if d == GET_STATE || d == GET_POSITIONS || d == GET_BUTTONS => return idle(None),
+            d if d == FIRMWARE_BEGIN => return Ok((Stage::Length, None)),
+            d if d == FIRMWARE_END => return Ok((Stage::Run, None)),
+            _ => {}
+        }
+        let Some(permit) = &self.permit else {
+            return Err(refusal(data, "no scan permitted"));
+        };
+        let request_level = match data {
+            [0x1B, 0x40] | [0x1B, 0x13] => Some(None),
+            [0x1E, 0x53 | 0xA1 | 0x92 | 0x8C | 0x04 | 0x8B] => Some(None),
+            [0x1E, 0x87] => Some(one(&[&[0x00]])),
+            [0x1E, 0xA2] => Some(one(&[&[0x00], &[0x01]])),
+            [0x1E, 0xB3] => Some(Some(Expect::GammaChannel)),
+            [0x1E, 0x57] => Some(one(&[&permit.e57])),
+            [0x1E, 0x31] => Some(Some(Expect::Len(12))),
+            _ => None,
+        };
+        if let Some(next) = request_level {
+            return idle(next);
+        }
+        let Some(p) = &permit.plan else {
+            return Err(refusal(data, "the scan's plan is not permitted yet"));
+        };
+        let next = match data {
+            [0x1E, 0x83] if p.base == 2400 => one(&[&READ_83]),
+            [0x1E, 0x11] => one(&[&[p.e11]]),
+            [0x1E, 0x46] => one(&[&p.e46[0], &p.e46[1]]),
+            [0x1E, 0x21] => one(&[&p.e21_cal, &p.e21_data]),
+            [0x1E, 0x41] => Some(Expect::Block41),
+            [0x1E, 0x42] => Some(Expect::Len(18)),
+            [0x1E, 0x43] => one(&[&setup::GAIN_CAL, &setup::GAIN_DATA]),
+            [0x1E, 0x84] => Some(Expect::TableHeader),
+            [0x1E, 0x01] => {
+                let mut moves: Vec<&[u8]> = vec![&p.move_cal, &p.move_data];
+                if let Some(m) = &p.start_move {
+                    moves.push(&m.block);
+                }
+                one(&moves)
+            }
+            [0x1E, 0x05] if p.start_move.is_some() => None,
+            [0x1E, 0x47] => None,
+            _ => return Err(refusal(data, "not in the scan's plan")),
+        };
+        idle(next)
+    }
+
+    /// Whether `data` is a block `expect` allows; what comes after it.
+    fn block(&self, expect: &Expect, data: &[u8]) -> Result<Option<Expect>> {
+        let plan = self.permit.as_ref().and_then(|p| p.plan.as_ref());
+        let bad = |what: &str| {
+            Err(Error::Other(format!(
+                "refused to send a block of {} bytes to the Epson 4490 ({what}): not one the \
+                 scan's plan computed",
+                data.len()
+            )))
+        };
+        match expect {
+            Expect::OneOf(blocks) if blocks.iter().any(|b| b == data) => Ok(None),
+            Expect::OneOf(_) => bad("after its command"),
+            Expect::Len(n) if data.len() == *n => Ok(None),
+            Expect::Len(_) => bad("of the wrong length"),
+            Expect::Block41 => {
+                let p = plan.expect("1E 41 needs a plan");
+                let mut image = p.e41_data;
+                if data.len() == 22 {
+                    image[15] = data[15];
+                }
+                if [p.e41_black, p.e41_white, p.e41_dark, image]
+                    .iter()
+                    .any(|b| b[..] == *data)
+                {
+                    Ok(None)
+                } else {
+                    bad("1E 41")
+                }
+            }
+            Expect::GammaChannel => match data {
+                [0..=2] => Ok(Some(Expect::OneOf(vec![tables::gamma().to_vec()]))),
+                _ => bad("1E B3's channel"),
+            },
+            Expect::TableHeader => {
+                let p = plan.expect("1E 84 needs a plan");
+                let ramps = std::iter::once(&p.ramp_cal)
+                    .chain(p.start_move.as_ref().map(|m| &m.ramp))
+                    .chain(std::iter::once(&p.ramp_data));
+                let mut tables_: Vec<Vec<u8>> = Vec::new();
+                for r in ramps {
+                    if setup::ramp_header(r.len())[..] == *data {
+                        tables_.push(r.iter().flat_map(|v| v.to_le_bytes()).collect());
+                    }
+                }
+                if !tables_.is_empty() {
+                    return Ok(Some(Expect::OneOf(tables_)));
+                }
+                if tables::TONE_HEADERS.iter().any(|h| h[..] == *data) {
+                    return Ok(Some(Expect::OneOf(vec![tables::TONE.to_vec()])));
+                }
+                if setup::shading_header(p.column_count())[..] == *data {
+                    return Ok(Some(Expect::Len(p.column_count() as usize * 6)));
+                }
+                bad("1E 84's header")
+            }
         }
     }
 }
 
-fn refusal(data: &[u8]) -> Error {
+/// Any of `blocks` next.
+fn one<B: AsRef<[u8]>>(blocks: &[B]) -> Option<Expect> {
+    Some(Expect::OneOf(
+        blocks.iter().map(|b| b.as_ref().to_vec()).collect(),
+    ))
+}
+
+fn refusal(data: &[u8], why: &str) -> Error {
     let head: Vec<String> = data.iter().take(4).map(|b| format!("{b:02X}")).collect();
     let more = if data.len() > 4 { " ..." } else { "" };
     let what = match data {
         [0x1E, code, ..] => MOVERS
             .iter()
             .find(|(c, _)| c == code)
-            .map_or("not a command this backend may send yet", |(_, what)| *what),
-        _ => "not a command this backend may send yet",
+            .map_or("not a command this backend may send", |(_, what)| *what),
+        _ => "not a command this backend may send",
     };
     Error::Other(format!(
-        "refused to send {}{more} to the Epson 4490 ({what}): nothing that may move the \
-         carriage goes out before a capture of Epson's driver confirms it",
+        "refused to send {}{more} to the Epson 4490 ({what}; {why}): nothing that may move the \
+         carriage goes out but a scan inside what the captures of Epson's driver have shown",
         head.join(" ")
     ))
 }
 
 impl<T: Transport> Transport for Guarded<T> {
     fn bulk_out(&mut self, data: &[u8]) -> Result<()> {
-        let next = match self.check(data) {
+        let (stage, expect) = match self.check(data) {
             Ok(next) => next,
             Err(e) => {
                 self.stage = Stage::Idle;
+                self.expect = None;
                 return Err(e);
             }
         };
         self.inner.bulk_out(data)?;
-        self.stage = next;
+        self.stage = stage;
+        self.expect = expect;
         Ok(())
     }
 
@@ -150,6 +461,8 @@ mod tests {
     use crate::firmware::HEADER_LEN;
     use crate::protocol::tests::{image, Mock};
     use crate::protocol::{self, ACK};
+    use crate::setup::tests::{parse, request_of, CAPTURES};
+    use crate::setup::XCorrection;
 
     fn guarded(answers: &[&[u8]]) -> Guarded<Mock> {
         Guarded::new(Mock::answering(answers))
@@ -157,7 +470,7 @@ mod tests {
 
     #[test]
     fn the_commands_that_move_are_refused_and_never_sent() {
-        let movers: [&[u8]; 8] = [
+        let movers: [&[u8]; 9] = [
             &[0x1E, 0x05],
             &[0x1E, 0xF4, 0x10, 0x00],
             &[0x1E, 0xF4],
@@ -166,6 +479,7 @@ mod tests {
             &[0x1E, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10, 0],
             &[0x1E, 0x84, 0xC4, 0x09],
             &[0x1E, 0x25, 0x00],
+            &[0x1E, 0xA2],
         ];
         let mut t = guarded(&[]);
         for m in movers {
@@ -233,5 +547,134 @@ mod tests {
         t.bulk_out(&FIRMWARE_BEGIN).unwrap();
         t.bulk_out(&UPLOAD_LENGTH).unwrap();
         assert!(t.bulk_out(&vec![0; PAYLOAD_LEN]).is_err());
+    }
+
+    fn plan(dpi: u32, x: u32, y: u32, w: u32, h: u32, bits: u8) -> Result<Plan> {
+        Plan::new(Request::new(dpi, x, y, w, h, bits), XCorrection(-93))
+    }
+
+    /// Every WIA capture's request and plan is accepted (Epson Scan's 600 dpi
+    /// at 16 bits too), and the limits are the captures' own.
+    #[test]
+    fn the_captured_scans_are_accepted() {
+        let mut furthest = 0;
+        for (name, text) in CAPTURES {
+            let (r, xc, _) = request_of(&parse(text));
+            let p = Plan::new(r, xc).unwrap();
+            furthest = furthest.max(p.read_end);
+            let ok = check_plan(&p);
+            match (r.dpi, r.ydpi, r.bits) {
+                (2400, ..) => assert!(ok.is_err(), "{name}"),
+                _ => assert!(ok.is_ok(), "{name}: {ok:?}"),
+            }
+        }
+        assert_eq!(furthest, MAX_READ_END);
+    }
+
+    #[test]
+    fn what_was_never_captured_is_refused() {
+        let refused = |r: Result<Plan>| {
+            let r = r.and_then(|p| check_plan(&p));
+            assert!(r.is_err(), "{r:?}");
+            r.unwrap_err().to_string()
+        };
+        // Resolutions and depths.
+        for (dpi, bits) in [(800, 8), (2400, 8), (300, 16), (1200, 16), (150, 8)] {
+            let r = Request::new(dpi, 0, 0, 400, 400, bits);
+            assert!(check_request(&r).is_err(), "{dpi} {bits}");
+        }
+        assert!(check_request(&Request {
+            ydpi: 600,
+            ..Request::new(300, 0, 0, 400, 400, 8)
+        })
+        .is_err());
+        // Outside the glass: 8.5 x 11.7 in.
+        assert!(check_request(&Request::new(300, 2000, 0, 551, 100, 8)).is_err());
+        assert!(check_request(&Request::new(300, 2000, 0, 550, 100, 8)).is_ok());
+        assert!(check_request(&Request::new(300, 0, 3500, 100, 11, 8)).is_err());
+        // The whole width at 600 dpi: 14 x 384 pixels read, a line time of 4224 µs, captured
+        // at 300 and 100 dpi but not at 600. A4's width keeps 3840 µs.
+        let e = refused(plan(600, 0, 0, 5100, 1000, 8));
+        assert!(e.contains("line time"), "{e}");
+        assert!(check_plan(&plan(600, 0, 0, 4961, 1000, 8).unwrap()).is_ok());
+        // The bottom of the glass, further than any capture.
+        let e = refused(plan(300, 0, 3400, 591, 110, 8));
+        assert!(e.contains("further"), "{e}");
+        // No start move: never needed on the glass at the resolutions covered (the near
+        // case leaves (1267 - R) mod num steps, 3 or 11), but refused if it were.
+        for (dpi, _) in COVERED {
+            for y in 0..200 {
+                let p = plan(dpi, 0, y, 400, 400, 8).unwrap();
+                let m = p.start_move.as_ref().expect("a start move");
+                assert!(m.kind != MoveKind::Medium, "{dpi} dpi y {y}");
+                assert!(check_plan(&p).is_ok(), "{dpi} dpi y {y}");
+            }
+        }
+        let mut p = plan(300, 0, 0, 591, 591, 8).unwrap();
+        p.start_move = None;
+        let e = check_plan(&p).unwrap_err().to_string();
+        assert!(e.contains("no start move"), "{e}");
+        // A wild x correction.
+        let p = Plan::new(Request::new(300, 0, 0, 591, 591, 8), XCorrection(2000)).unwrap();
+        assert!(check_plan(&p).is_err());
+    }
+
+    #[test]
+    fn a_permitted_scan_sends_only_its_own_blocks() {
+        let p = plan(300, 472, 709, 591, 591, 8).unwrap();
+        let mut t = guarded(&[]);
+        // Nothing of the scan before the permit.
+        assert!(t.bulk_out(&[0x1E, 0x57]).is_err());
+        t.permit_request(&p.request).unwrap();
+        t.bulk_out(&[0x1B, 0x40]).unwrap();
+        t.bulk_out(&[0x1E, 0x57]).unwrap();
+        // Another request's block is refused.
+        let other = setup::request_block(&Request::new(300, 0, 0, 591, 591, 8)).unwrap();
+        assert!(t.bulk_out(&other).is_err());
+        t.bulk_out(&[0x1E, 0x57]).unwrap();
+        t.bulk_out(&p.e57).unwrap();
+        // The plan's blocks need the plan.
+        assert!(t.bulk_out(&[0x1E, 0x01]).is_err());
+        t.permit_plan(&p).unwrap();
+        t.bulk_out(&[0x1E, 0x01]).unwrap();
+        assert!(t.bulk_out(&setup::move_block(100, 0, 0, 0x18)).is_err());
+        t.bulk_out(&[0x1E, 0x01]).unwrap();
+        t.bulk_out(&p.start_move.as_ref().unwrap().block).unwrap();
+        // A ramp: its header, then only its values.
+        t.bulk_out(&[0x1E, 0x84]).unwrap();
+        t.bulk_out(&setup::ramp_header(512)).unwrap();
+        assert!(t.bulk_out(&vec![0x10; 1024]).is_err());
+        t.bulk_out(&[0x1E, 0x84]).unwrap();
+        t.bulk_out(&setup::ramp_header(512)).unwrap();
+        let ramp: Vec<u8> = p.ramp_data.iter().flat_map(|v| v.to_le_bytes()).collect();
+        t.bulk_out(&ramp).unwrap();
+        // The image's 1E 41 with any scales; another geometry refused.
+        t.bulk_out(&[0x1E, 0x41]).unwrap();
+        let mut e41 = p.e41_data;
+        e41[15] = 0x72;
+        t.bulk_out(&e41).unwrap();
+        t.bulk_out(&[0x1E, 0x41]).unwrap();
+        e41[0] = 0;
+        assert!(t.bulk_out(&e41).is_err());
+        // The lamp, but not a third value.
+        t.bulk_out(&[0x1E, 0xA2]).unwrap();
+        assert!(t.bulk_out(&[0x02]).is_err());
+        // Over: moves refused again.
+        t.end_scan();
+        assert!(t.bulk_out(&[0x1E, 0x01]).is_err());
+        assert!(t.bulk_out(&[0x1E, 0x47]).is_err());
+    }
+
+    #[test]
+    fn a_plan_is_permitted_only_for_its_request() {
+        let mut t = guarded(&[]);
+        let p = plan(300, 472, 709, 591, 591, 8).unwrap();
+        assert!(t.permit_plan(&p).is_err());
+        t.permit_request(&Request::new(300, 0, 0, 591, 591, 8))
+            .unwrap();
+        assert!(t.permit_plan(&p).is_err());
+        assert!(t
+            .permit_request(&Request::new(2400, 0, 0, 591, 591, 8))
+            .is_err());
     }
 }

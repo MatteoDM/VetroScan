@@ -1050,6 +1050,7 @@ name = "epson-gt-x750"
 version = "0.7.0"
 dependencies = [
  "nusb",
+ "png",
  "scanner-api",
  "sha2",
  "windows-sys 0.61.2",
