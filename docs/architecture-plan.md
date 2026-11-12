@@ -1178,11 +1178,13 @@ native scan computes any area at 100, 200, 300, 400, 600, 1200 dpi (`scan.rs`), 
    normal. `1E 18` to a scanner at rest answers `06`. The killed program's lock was free 27 s
    after. **Done**: opening (`Gt4490::start`) asks `1B 03` before the lock, with room for a
    packet: anything but a state of a scanner at rest (`protocol::is_state`) is stopped with
-   `1E 18` (`scan::recover`, the guard's `permit_recovery`), then the lock is taken (up to 45 s
+   `1E 18` (`scan::recover`, the guard's `permit_recovery`), written while a second opening
+   reads (`Transport::write_reading`: in the app's first try, capture 52, `1B 03` brought a
+   block's trailer and `1E 18` alone then waited 30 s, given up; read meanwhile, capture 53, it
+   went through at once), then the lock is taken (up to 45 s
    for a program gone), and told in the status. The firmware goes out only on the state seen
    before it (`28 00`): any other unknown state is an error, never an upload. The command line
-   has `epson4490 recover`, `probe --no-lock`, `drain --no-lock`. Not yet tried: the app
-   itself closed half-way and opened again.
+   has `epson4490 recover`, `probe --no-lock`, `drain --no-lock`.
 6. **The lamp in the app**: `lamp_off` with `1E A2 00` (already sent in every calibration) and
    `LampInfo { warm_up, switches_off_after: about 15 minutes }` (capture 21), so the app offers
    its lamp choices. **Done** (12 November, evening): outside a scan the guard lets through

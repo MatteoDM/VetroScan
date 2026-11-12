@@ -339,13 +339,34 @@ fn cancel(t: &mut dyn Transport, log: &mut dyn FnMut(String)) -> Result<()> {
 }
 
 /// Stops the scan a scanner was left in by a program that went away half-way through its
-/// read (closed, killed): `1E 18`, the image it still had left out until its `06`, then
-/// `1B 03` until it is idle. **Tried first on 12 November 2026** (captures 44-48): the
-/// transport must be opened without the STI lock (Epson's driver, given the lock, asks the
-/// state and takes image bytes for "no firmware"), and the guard told
-/// ([`crate::guard::Guarded::permit_recovery`]).
+/// read (closed, killed): `1E 18` written while reading ([`Transport::write_reading`]: such a
+/// scanner may take a command only while what it sends is read, capture 52), the image it
+/// still had and empty packets left out until its `06`, then `1B 03` until it is idle.
+/// **Tried on 12 November 2026** (captures 44-53): the transport must be opened without the
+/// STI lock (Epson's driver, given the lock, asks the state and takes image bytes for "no
+/// firmware"), and the guard told ([`crate::guard::Guarded::permit_recovery`]).
 pub fn recover(t: &mut dyn Transport, log: &mut dyn FnMut(String)) -> Result<()> {
-    stop(t, log)?;
+    let until = Instant::now() + Duration::from_secs(60);
+    let (mut left_out, mut reads, mut empty) = (0usize, 0usize, 0usize);
+    let mut answered = false;
+    t.write_reading(&CANCEL, &mut |data: &[u8]| {
+        reads += 1;
+        if data == [ACK] {
+            answered = true;
+            return false;
+        }
+        left_out += data.len();
+        empty += usize::from(data.is_empty());
+        empty <= MAX_EMPTY && Instant::now() < until && left_out <= CANCEL_MAX_LEFT_OUT
+    })?;
+    if !answered {
+        return Err(other(format!(
+            "after 1E 18 the scanner sent {left_out} bytes and no 06"
+        )));
+    }
+    log(format!(
+        "1E 18: {left_out} bytes of image left out in {reads} reads before its 06"
+    ));
     wait_ready(t, log)?;
     Ok(())
 }
@@ -1099,5 +1120,6 @@ pub(crate) mod tests {
             vec![CANCEL.to_vec(), GET_STATE.to_vec(), GET_STATE.to_vec()]
         );
         assert!(log[0].contains("820 bytes"), "{log:?}");
+        assert!(log[0].contains("in 4 reads"), "{log:?}");
     }
 }

@@ -116,6 +116,58 @@ impl Handle {
         (ok != 0).then_some(returned)
     }
 
+    /// [`BULK_TIMEOUT`] for reads and writes. Failure is not fatal: the driver's default
+    /// timeout then applies.
+    fn set_timeout(&self) {
+        let secs = BULK_TIMEOUT.as_secs() as u32;
+        let timeout = UsbscanTimeout {
+            read: secs,
+            write: secs,
+            event: 0,
+        };
+        // SAFETY: `timeout` is a valid input buffer of the given size.
+        let _ = unsafe {
+            self.ioctl(
+                IOCTL_SET_TIMEOUT,
+                (&timeout as *const UsbscanTimeout).cast(),
+                size_of::<UsbscanTimeout>() as u32,
+                null_mut(),
+                0,
+            )
+        };
+    }
+
+    /// `ReadFile` on the bulk IN pipe: the bytes read.
+    fn read(&self, buf: &mut [u8]) -> Result<usize> {
+        let len = u32::try_from(buf.len())
+            .map_err(|_| Error::InvalidRequest("bulk read too long".into()))?;
+        let mut read = 0u32;
+        // SAFETY: `buf` is valid for `len` bytes; synchronous handle.
+        let ok = unsafe { ReadFile(self.0, buf.as_mut_ptr(), len, &mut read, null_mut()) };
+        if ok == 0 {
+            return Err(last_error("bulk IN"));
+        }
+        Ok(read as usize)
+    }
+
+    /// `WriteFile` on the bulk OUT pipe, all of `data`.
+    fn write(&self, data: &[u8]) -> Result<()> {
+        let len = u32::try_from(data.len())
+            .map_err(|_| Error::InvalidRequest("bulk write too long".into()))?;
+        let mut written = 0u32;
+        // SAFETY: `data` is valid for `len` bytes; synchronous handle.
+        let ok = unsafe { WriteFile(self.0, data.as_ptr(), len, &mut written, null_mut()) };
+        if ok == 0 {
+            return Err(last_error("bulk OUT"));
+        }
+        if written != len {
+            return Err(Error::Other(format!(
+                "bulk OUT: {written} bytes of {len} sent"
+            )));
+        }
+        Ok(())
+    }
+
     fn is_4490(&self) -> bool {
         let mut d = DeviceDescriptor::default();
         // SAFETY: `d` is a valid output buffer of the given size.
@@ -133,6 +185,11 @@ impl Handle {
             && d.product_id == PRODUCT_ID
     }
 }
+
+// SAFETY: a Win32 file handle may be used from any thread; each `Handle` is owned and closed
+// once. A synchronous handle serialises its own I/O, so a read and a write at once need two
+// handles ([`UsbscanTransport::write_reading`]).
+unsafe impl Send for Handle {}
 
 impl Drop for Handle {
     fn drop(&mut self) {
@@ -204,23 +261,7 @@ impl UsbscanTransport {
                 "{location} is not an Epson Perfection 4490"
             )));
         }
-        let secs = BULK_TIMEOUT.as_secs() as u32;
-        let timeout = UsbscanTimeout {
-            read: secs,
-            write: secs,
-            event: 0,
-        };
-        // SAFETY: `timeout` is a valid input buffer of the given size.
-        // Failure is not fatal: the driver's default timeout then applies.
-        let _ = unsafe {
-            handle.ioctl(
-                IOCTL_SET_TIMEOUT,
-                (&timeout as *const UsbscanTimeout).cast(),
-                size_of::<UsbscanTimeout>() as u32,
-                null_mut(),
-                0,
-            )
-        };
+        handle.set_timeout();
         Ok(Self {
             handle,
             index: n,
@@ -264,31 +305,43 @@ impl Transport for UsbscanTransport {
     }
 
     fn bulk_in(&mut self, buf: &mut [u8]) -> Result<usize> {
-        let len = u32::try_from(buf.len())
-            .map_err(|_| Error::InvalidRequest("bulk read too long".into()))?;
-        let mut read = 0u32;
-        // SAFETY: `buf` is valid for `len` bytes; synchronous handle.
-        let ok = unsafe { ReadFile(self.handle.0, buf.as_mut_ptr(), len, &mut read, null_mut()) };
-        if ok == 0 {
-            return Err(last_error("bulk IN"));
-        }
-        Ok(read as usize)
+        self.handle.read(buf)
     }
 
     fn bulk_out(&mut self, data: &[u8]) -> Result<()> {
-        let len = u32::try_from(data.len())
-            .map_err(|_| Error::InvalidRequest("bulk write too long".into()))?;
-        let mut written = 0u32;
-        // SAFETY: `data` is valid for `len` bytes; synchronous handle.
-        let ok = unsafe { WriteFile(self.handle.0, data.as_ptr(), len, &mut written, null_mut()) };
-        if ok == 0 {
-            return Err(last_error("bulk OUT"));
-        }
-        if written != len {
-            return Err(Error::Other(format!(
-                "bulk OUT: {written} bytes of {len} sent"
-            )));
-        }
-        Ok(())
+        self.handle.write(data)
+    }
+
+    /// A second handle of the same device reads on its own thread while this one writes (a
+    /// synchronous handle would do one after the other). Tried on the scanner on 12 November
+    /// 2026 (capture 53): a scanner left half-way, whose `1E 18` alone had waited 30 s and been
+    /// given up (capture 52), took it at once.
+    fn write_reading(
+        &mut self,
+        data: &[u8],
+        on_read: &mut (dyn FnMut(&[u8]) -> bool + Send),
+    ) -> Result<()> {
+        let reader =
+            Handle::open(self.index).ok_or_else(|| last_error("opening usbscan device"))?;
+        reader.set_timeout();
+        let writer = &self.handle;
+        std::thread::scope(|s| {
+            let read = s.spawn(move || -> Result<()> {
+                let mut buf = vec![0u8; crate::WRITE_READING_CHUNK];
+                loop {
+                    let n = reader.read(&mut buf)?;
+                    if !on_read(&buf[..n]) {
+                        return Ok(());
+                    }
+                }
+            });
+            // The read is asked first; then the write.
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let written = writer.write(data);
+            let read = read
+                .join()
+                .unwrap_or_else(|_| Err(Error::Other("bulk IN: the reader stopped".into())));
+            written.and(read)
+        })
     }
 }

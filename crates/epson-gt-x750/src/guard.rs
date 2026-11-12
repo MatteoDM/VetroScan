@@ -502,6 +502,25 @@ impl<T: Transport> Transport for Guarded<T> {
     fn hold(&mut self) -> Result<()> {
         self.inner.hold()
     }
+
+    fn write_reading(
+        &mut self,
+        data: &[u8],
+        on_read: &mut (dyn FnMut(&[u8]) -> bool + Send),
+    ) -> Result<()> {
+        let (stage, expect) = match self.check(data) {
+            Ok(next) => next,
+            Err(e) => {
+                self.stage = Stage::Idle;
+                self.expect = None;
+                return Err(e);
+            }
+        };
+        self.inner.write_reading(data, on_read)?;
+        self.stage = stage;
+        self.expect = expect;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

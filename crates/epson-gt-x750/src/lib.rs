@@ -88,7 +88,28 @@ pub trait Transport: Send + fmt::Debug {
     fn hold(&mut self) -> Result<()> {
         Ok(())
     }
+    /// Writes `data` while reading the IN endpoint at the same time, each read handed to
+    /// `on_read` until it answers `false`: a scanner left half-way through a scan takes a
+    /// command only while what it sends is read (capture 52, 12 November 2026). The default,
+    /// for a transport that cannot do both, writes and then reads.
+    fn write_reading(
+        &mut self,
+        data: &[u8],
+        on_read: &mut (dyn FnMut(&[u8]) -> bool + Send),
+    ) -> Result<()> {
+        self.bulk_out(data)?;
+        let mut buf = vec![0u8; WRITE_READING_CHUNK];
+        loop {
+            let n = self.bulk_in(&mut buf)?;
+            if !on_read(&buf[..n]) {
+                return Ok(());
+            }
+        }
+    }
 }
+
+/// The longest read of [`Transport::write_reading`].
+pub const WRITE_READING_CHUNK: usize = 65_536;
 
 impl<T: Transport + ?Sized> Transport for Box<T> {
     fn bulk_out(&mut self, data: &[u8]) -> Result<()> {
@@ -101,6 +122,14 @@ impl<T: Transport + ?Sized> Transport for Box<T> {
 
     fn hold(&mut self) -> Result<()> {
         (**self).hold()
+    }
+
+    fn write_reading(
+        &mut self,
+        data: &[u8],
+        on_read: &mut (dyn FnMut(&[u8]) -> bool + Send),
+    ) -> Result<()> {
+        (**self).write_reading(data, on_read)
     }
 }
 
@@ -412,15 +441,24 @@ fn hold(t: &mut guard::Guarded<Box<dyn Transport>>, recovered: bool) -> Result<(
 /// ([`protocol::is_state`]); anything else is a scan left half-way, stopped
 /// ([`scan::recover`]). What was done, empty when nothing.
 fn settle(t: &mut guard::Guarded<Box<dyn Transport>>) -> Result<Vec<String>> {
-    t.bulk_out(&protocol::GET_STATE)?;
-    let mut answer = [0u8; 512];
-    let n = t.bulk_in(&mut answer)?;
-    if protocol::is_state(&answer[..n]) {
-        return Ok(Vec::new());
-    }
-    let mut log = vec![format!(
-        "1B 03 answered {n} bytes, not a state: a scan left half-way"
-    )];
+    // Written alone: reading first could take the answer of the image service's button poll
+    // (`1E 85` every second while the lock is free). A scanner left half-way took this write
+    // every time (captures 44-52); if it does not, or nothing comes back, it is stopped all the
+    // same.
+    let asked = t.bulk_out(&protocol::GET_STATE).and_then(|()| {
+        let mut answer = [0u8; 512];
+        let n = t.bulk_in(&mut answer)?;
+        Ok(answer[..n].to_vec())
+    });
+    let first = match asked {
+        Ok(answer) if protocol::is_state(&answer) => return Ok(Vec::new()),
+        Ok(answer) => format!(
+            "1B 03 answered {} bytes, not a state: a scan left half-way",
+            answer.len()
+        ),
+        Err(e) => format!("1B 03: {e}: a scan left half-way?"),
+    };
+    let mut log = vec![first];
     t.permit_recovery();
     let done = scan::recover(t, &mut |line| log.push(line));
     t.end_scan();

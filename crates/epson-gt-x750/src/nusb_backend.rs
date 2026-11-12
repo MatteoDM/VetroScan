@@ -132,17 +132,48 @@ impl Transport for NusbTransport {
     }
 
     fn bulk_out(&mut self, data: &[u8]) -> Result<()> {
-        let completion = self
-            .bulk_out
-            .transfer_blocking(Buffer::from(data), BULK_TIMEOUT);
-        completion.status.map_err(|e| err("bulk OUT", e))?;
-        if completion.actual_len != data.len() {
-            return Err(Error::Other(format!(
-                "bulk OUT: {} bytes of {} sent",
-                completion.actual_len,
-                data.len()
-            )));
-        }
-        Ok(())
+        write(&mut self.bulk_out, data)
     }
+
+    /// The two endpoints at once: reads on one thread while the other writes.
+    fn write_reading(
+        &mut self,
+        data: &[u8],
+        on_read: &mut (dyn FnMut(&[u8]) -> bool + Send),
+    ) -> Result<()> {
+        let (bulk_in, bulk_out) = (&mut self.bulk_in, &mut self.bulk_out);
+        std::thread::scope(|s| {
+            let reader = s.spawn(move || -> Result<()> {
+                let mps = bulk_in.max_packet_size().max(1);
+                let len = crate::WRITE_READING_CHUNK.div_ceil(mps) * mps;
+                loop {
+                    let c = bulk_in.transfer_blocking(bulk_in.allocate(len), BULK_TIMEOUT);
+                    c.status.map_err(|e| err("bulk IN", e))?;
+                    if !on_read(&c.buffer[..c.actual_len]) {
+                        return Ok(());
+                    }
+                }
+            });
+            // The read is asked first; then the write.
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let written = write(bulk_out, data);
+            let read = reader
+                .join()
+                .unwrap_or_else(|_| Err(Error::Other("bulk IN: the reader stopped".into())));
+            written.and(read)
+        })
+    }
+}
+
+fn write(bulk_out: &mut Endpoint<Bulk, Out>, data: &[u8]) -> Result<()> {
+    let completion = bulk_out.transfer_blocking(Buffer::from(data), BULK_TIMEOUT);
+    completion.status.map_err(|e| err("bulk OUT", e))?;
+    if completion.actual_len != data.len() {
+        return Err(Error::Other(format!(
+            "bulk OUT: {} bytes of {} sent",
+            completion.actual_len,
+            data.len()
+        )));
+    }
+    Ok(())
 }
