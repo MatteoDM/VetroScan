@@ -32,7 +32,7 @@
 
 use crate::firmware::PAYLOAD_LEN;
 use crate::protocol::{FIRMWARE_BEGIN, FIRMWARE_END, FIRMWARE_RUN, GET_BUTTONS, GET_STATE};
-use crate::scan::READ_83;
+use crate::scan::{CANCEL, READ_83};
 use crate::setup::{self, MoveKind, Plan, Request};
 use crate::table07;
 use crate::tables::{self, Curves};
@@ -233,6 +233,9 @@ pub struct Guarded<T: Transport> {
     permit: Option<Permit>,
     /// What the next write must be, after a command that takes a block.
     expect: Option<Expect>,
+    /// `1E 18` may go out without a scan: a scanner left half-way through one
+    /// ([`Guarded::permit_recovery`]).
+    recovering: bool,
 }
 
 impl<T: Transport> Guarded<T> {
@@ -243,6 +246,7 @@ impl<T: Transport> Guarded<T> {
             stage: Stage::Idle,
             permit: None,
             expect: None,
+            recovering: false,
         }
     }
 
@@ -284,6 +288,14 @@ impl<T: Transport> Guarded<T> {
     pub fn end_scan(&mut self) {
         self.permit = None;
         self.expect = None;
+        self.recovering = false;
+    }
+
+    /// Lets `1E 18` out without a scan, to stop the one a scanner was left in by a program
+    /// that went away half-way through it (capture 47, 12 November 2026). Until
+    /// [`Guarded::end_scan`].
+    pub fn permit_recovery(&mut self) {
+        self.recovering = true;
     }
 
     /// Whether `data` may be written now: the stage and what to expect after.
@@ -320,6 +332,9 @@ impl<T: Transport> Guarded<T> {
             // Outside a scan the lamp may only be switched off (the app's lamp timer).
             if data == crate::protocol::LAMP {
                 return idle(one(&[[0x00]]));
+            }
+            if self.recovering && data == CANCEL {
+                return idle(None);
             }
             return Err(refusal(data, "no scan permitted"));
         };
@@ -482,6 +497,10 @@ impl<T: Transport> Transport for Guarded<T> {
             self.stage = Stage::Idle;
         }
         self.inner.bulk_in(buf)
+    }
+
+    fn hold(&mut self) -> Result<()> {
+        self.inner.hold()
     }
 }
 
@@ -666,6 +685,20 @@ mod tests {
 
     /// The whole glass the application is offered, at every resolution and depth covered: its
     /// preview (200 dpi) and the largest scans.
+    #[test]
+    fn the_cancel_goes_out_without_a_scan_only_to_recover() {
+        let mut t = guarded(&[]);
+        assert!(t.bulk_out(&CANCEL).is_err());
+        t.permit_recovery();
+        t.bulk_out(&CANCEL).unwrap();
+        // Nothing else that moves.
+        assert!(t.bulk_out(&[0x1E, 0x47]).is_err());
+        assert!(t.bulk_out(&[0x1E, 0x05]).is_err());
+        t.end_scan();
+        assert!(t.bulk_out(&CANCEL).is_err());
+        assert_eq!(t.inner().writes, vec![CANCEL.to_vec()]);
+    }
+
     #[test]
     fn the_whole_glass_is_accepted() {
         let caps = crate::capabilities();

@@ -1166,9 +1166,23 @@ native scan computes any area at 100, 200, 300, 400, 600, 1200 dpi (`scan.rs`), 
    carriage then went home in 4 s and the next scan ran normally. Found on the way: right
    after the scanner is switched on Windows does not give the STI lock for a few seconds, and
    a scan opened without it got the image service's `1E 85` between its own commands; opening
-   now waits for the lock up to 20 s and refuses without it. Left: an app closed half-way
-   through a scan leaves the scanner sending, stuck until switched off; opening it again could
-   read what is left (`epson4490 drain` reads it), to be looked at.
+   now waits for the lock up to 20 s and refuses without it.
+   **A program closed half-way through a scan** (12 November 2026, night; captures 44-51,
+   `captures/epson4490/05-catture.md`, "Lo scanner lasciato a metà da un programma chiuso"):
+   killed while reading, the scanner keeps its carriage half-way and its lamp on, and gives
+   out a packet of its image for each command it gets, nothing by itself; `1B 03` gets image
+   bytes, not a state (yesterday's `00 00` and `81 00`). Given the STI lock, **Epson's driver**
+   asks `1B 03` itself, takes the image for "no firmware" and sends `1B 06` (the scanner did not
+   take it; the lock waited 2 minutes). Stopped with `1E 18`: an empty packet or the image
+   still held (4.3 MB once), then `06`, the carriage home in 6 s, `18 81`; the next scan
+   normal. `1E 18` to a scanner at rest answers `06`. The killed program's lock was free 27 s
+   after. **Done**: opening (`Gt4490::start`) asks `1B 03` before the lock, with room for a
+   packet: anything but a state of a scanner at rest (`protocol::is_state`) is stopped with
+   `1E 18` (`scan::recover`, the guard's `permit_recovery`), then the lock is taken (up to 45 s
+   for a program gone), and told in the status. The firmware goes out only on the state seen
+   before it (`28 00`): any other unknown state is an error, never an upload. The command line
+   has `epson4490 recover`, `probe --no-lock`, `drain --no-lock`. Not yet tried: the app
+   itself closed half-way and opened again.
 6. **The lamp in the app**: `lamp_off` with `1E A2 00` (already sent in every calibration) and
    `LampInfo { warm_up, switches_off_after: about 15 minutes }` (capture 21), so the app offers
    its lamp choices. **Done** (12 November, evening): outside a scan the guard lets through

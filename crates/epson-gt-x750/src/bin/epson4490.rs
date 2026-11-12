@@ -21,6 +21,12 @@
 //! `--tone linear` loads identity tables in place of WIA's curves (to be measured).
 //! `--cancel-after N` stops the scan after N blocks of image, as the app's Cancel does.
 //! `epson4490 drain` reads what a scanner stopped half-way still has to send, then its state.
+//! `epson4490 recover` stops the scan a scanner was left in by a program gone half-way through
+//! its read (`1E 18`, the image left out until `06`, `1B 03` until idle), opened without the
+//! STI lock. First tried on 12 November 2026.
+//! `probe --no-lock` asks the state (`1B 03`) of a scanner opened so.
+//! With `--no-lock` it opens the scanner without Windows' STI lock (taking it has Epson's
+//! driver ask the scanner its state, capture 44) and writes nothing at all: it only reads.
 //! `epson4490 lamp-off` switches the lamp off (`1E A2 00`), as the application's lamp timer.
 //! Without `--move` it only prints the plan and what the guard says of it. A lamp taken to be
 //! cold (switched on, or no scan for 14 minutes; the time of the last scan is kept in the
@@ -48,7 +54,7 @@ use std::process::ExitCode;
 
 const USAGE: &str = "usage: epson4490 list | firmware [--firmware FILE] | probe | \
                      upload [--firmware FILE] | buttons [SECONDS] | replay SCRIPT OUT --move | \
-                     scan DPI X Y W H OUT.png [--bits 16] [--tone wia|linear] [--raw FILE] [--cancel-after BLOCKS] --move   (X Y W H in mm) | drain | lamp-off";
+                     scan DPI X Y W H OUT.png [--bits 16] [--tone wia|linear] [--raw FILE] [--cancel-after BLOCKS] --move   (X Y W H in mm) | probe/drain [--no-lock] | recover | lamp-off";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -57,6 +63,7 @@ fn main() -> ExitCode {
     let mut seconds = None;
     let mut operands: Vec<String> = Vec::new();
     let mut moves = false;
+    let mut no_lock = false;
     let mut bits = 8u8;
     let mut raw_path = None;
     let mut curves = Curves::Wia;
@@ -69,6 +76,7 @@ fn main() -> ExitCode {
                 None => return usage(),
             },
             "--move" => moves = true,
+            "--no-lock" => no_lock = true,
             "--bits" => match rest.next().map(|b| b.parse()) {
                 Some(Ok(b)) => bits = b,
                 _ => return usage(),
@@ -112,11 +120,12 @@ fn main() -> ExitCode {
             Ok(())
         }
         Some("firmware") => show_firmware(firmware_path.as_deref()),
-        Some("probe") => probe(firmware_path.as_deref()),
+        Some("probe") => probe(firmware_path.as_deref(), no_lock),
         Some("upload") => upload(firmware_path),
         Some("buttons") => buttons(seconds.unwrap_or(10)),
-        Some("drain") => drain(),
+        Some("drain") => drain(no_lock),
         Some("lamp-off") => lamp_off(),
+        Some("recover") => recover(),
         Some("replay") if operands.len() == 2 && moves => replay(&operands[0], &operands[1]),
         Some("replay") if operands.len() == 2 => {
             eprintln!("epson4490: replay moves the carriage: add --move to run it");
@@ -221,14 +230,18 @@ fn describe(state: State) -> String {
     )
 }
 
-fn probe(path: Option<&std::path::Path>) -> Result<(), Error> {
+fn probe(path: Option<&std::path::Path>, no_lock: bool) -> Result<(), Error> {
     if list().is_empty() {
         return Ok(());
     }
     if let Err(e) = show_firmware(path) {
         println!("{e}");
     }
-    let mut t = open_first()?;
+    let mut t = if no_lock {
+        open_first_unlocked()?
+    } else {
+        open_first()?
+    };
     println!("state (1B 03): {}", describe(protocol::state(&mut t)?));
     Ok(())
 }
@@ -266,7 +279,10 @@ fn lamp_off() -> Result<(), Error> {
 
 /// Reads whatever the scanner still has to send (after a read stopped half-way), until a
 /// read times out, then asks the state. Nothing is written but `1B 03` at the end.
-fn drain() -> Result<(), Error> {
+fn drain(no_lock: bool) -> Result<(), Error> {
+    if no_lock {
+        return drain_reading_only();
+    }
     let mut t = open_first()?;
     let mut total = 0usize;
     let mut buf = vec![0u8; 65_536];
@@ -287,6 +303,67 @@ fn drain() -> Result<(), Error> {
         }
     }
     println!("state (1B 03): {}", describe(protocol::state(&mut t)?));
+    Ok(())
+}
+
+fn recover() -> Result<(), Error> {
+    let mut t = open_first_unlocked()?;
+    t.permit_recovery();
+    let start = std::time::Instant::now();
+    let done = epson_gt_x750::scan::recover(&mut t, &mut |line| {
+        println!("  {:5.1} s  {line}", start.elapsed().as_secs_f64())
+    });
+    t.end_scan();
+    done?;
+    println!("state (1B 03): {}", describe(protocol::state(&mut t)?));
+    Ok(())
+}
+
+/// The first scanner, opened without Windows' STI lock (Epson's driver then sends it nothing).
+fn open_first_unlocked() -> Result<Guarded<Box<dyn Transport>>, Error> {
+    let f = epson_gt_x750::list()
+        .into_iter()
+        .find(|f| f.note.is_none())
+        .ok_or_else(|| Error::Disconnected("no Epson Perfection 4490 found".into()))?;
+    let t = epson_gt_x750::open_unlocked(&f.location)?;
+    println!(
+        "opened {} {} without the STI lock ({t:?})",
+        f.link, f.location
+    );
+    Ok(Guarded::new(t))
+}
+
+/// Reads, without the STI lock and without writing anything, until the scanner sends nothing
+/// for [`epson_gt_x750::BULK_TIMEOUT`]: each read's length and last bytes (an image block
+/// ends with `02 len len len 00 00 80 00`).
+fn drain_reading_only() -> Result<(), Error> {
+    let mut t = open_first_unlocked()?;
+    let start = std::time::Instant::now();
+    let mut total = 0usize;
+    let mut buf = vec![0u8; 65_536];
+    loop {
+        match t.bulk_in(&mut buf) {
+            Ok(0) => {
+                println!("{:7.2} s  read 0 bytes", start.elapsed().as_secs_f64());
+                break;
+            }
+            Ok(n) => {
+                total += n;
+                println!(
+                    "{:7.2} s  read {n} bytes ({total} in all), ending {:02x?}",
+                    start.elapsed().as_secs_f64(),
+                    &buf[n.saturating_sub(8)..n]
+                );
+            }
+            Err(e) => {
+                println!(
+                    "{:7.2} s  read: {e} after {total} bytes",
+                    start.elapsed().as_secs_f64()
+                );
+                break;
+            }
+        }
+    }
     Ok(())
 }
 

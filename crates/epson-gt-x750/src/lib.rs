@@ -83,6 +83,11 @@ pub trait Transport: Send + fmt::Debug {
     fn bulk_out(&mut self, data: &[u8]) -> Result<()>;
     /// Reads from the bulk IN endpoint into `buf`; the bytes read.
     fn bulk_in(&mut self, buf: &mut [u8]) -> Result<usize>;
+    /// Takes the scanner for this program until the transport is dropped: on Windows with
+    /// Epson's driver its STI lock (`usbscan.rs`), nothing elsewhere.
+    fn hold(&mut self) -> Result<()> {
+        Ok(())
+    }
 }
 
 impl<T: Transport + ?Sized> Transport for Box<T> {
@@ -92,6 +97,10 @@ impl<T: Transport + ?Sized> Transport for Box<T> {
 
     fn bulk_in(&mut self, buf: &mut [u8]) -> Result<usize> {
         (**self).bulk_in(buf)
+    }
+
+    fn hold(&mut self) -> Result<()> {
+        (**self).hold()
     }
 }
 
@@ -142,6 +151,17 @@ pub fn open(location: &str) -> Result<Box<dyn Transport>> {
         return Ok(Box::new(UsbscanTransport::open(location)?));
     }
     Ok(Box::new(NusbTransport::open(location)?))
+}
+
+/// Opens the scanner at `location` without Windows' STI lock (`usbscan.sys` only; elsewhere
+/// as [`open`]), only to read what a scanner left half-way through a scan still sends
+/// (`UsbscanTransport::open_unlocked`).
+pub fn open_unlocked(location: &str) -> Result<Box<dyn Transport>> {
+    #[cfg(windows)]
+    if location.starts_with(r"\\.\") {
+        return Ok(Box::new(UsbscanTransport::open_unlocked(location)?));
+    }
+    open(location)
 }
 
 /// What the 4490 can do, **provisionally**: from Epson's user guide, none of
@@ -317,7 +337,9 @@ impl scanner_api::Backend for EpsonBackend {
     /// Opens the scanner and sends its firmware if it is not running (and
     /// that is allowed: [`UPLOAD_CONFIRMED`]).
     fn open(&self, device: &scanner_api::DeviceInfo) -> Result<Box<dyn scanner_api::Scanner>> {
-        let transport = open(&device.id)?;
+        // Unlocked: a scanner left half-way through a scan is settled before Epson's driver
+        // (given the lock) asks it anything ([`Gt4490::start`]).
+        let transport = open_unlocked(&device.id)?;
         let load = firmware_loader(self.upload, self.firmware_path.clone());
         Ok(Box::new(Gt4490::start(transport, load)?))
     }
@@ -332,22 +354,33 @@ pub struct Gt4490 {
     firmware: FirmwareOutcome,
     /// When a scan of ours last ended: the lamp was lit then ([`scan::lamp_is_cold`]).
     lamp_used: Option<SystemTime>,
+    /// What opening found and did about a scan left half-way, if there was one.
+    recovered: Vec<String>,
 }
 
 impl Gt4490 {
     /// Takes the scanner on `transport`, sending it the firmware `load`
     /// gives if it is not running.
+    ///
+    /// First, before [`Transport::hold`], it asks the state: a scanner a program left
+    /// half-way through a scan (closed or killed while reading) answers with its image, not a
+    /// state, and is stopped with `1E 18` ([`scan::recover`]; captures 44-51, 12 November
+    /// 2026). On Windows this comes before the STI lock, as given the lock Epson's driver asks
+    /// the state itself, takes the image for "no firmware" and tries to send it.
     pub fn start(
         transport: Box<dyn Transport>,
         load: impl FnOnce() -> Result<firmware::Firmware>,
     ) -> Result<Self> {
         let mut transport = guard::Guarded::new(transport);
+        let recovered = settle(&mut transport)?;
+        hold(&mut transport, !recovered.is_empty())?;
         let firmware = protocol::ensure_firmware(&mut transport, load)?;
         Ok(Self {
             transport,
             caps: capabilities(),
             firmware,
             lamp_used: None,
+            recovered,
         })
     }
 
@@ -357,6 +390,45 @@ impl Gt4490 {
     }
 }
 
+/// How long the lock of a program gone is waited for after its scan was stopped: Windows
+/// let it go 27 s after the program was killed (capture 51, 12 November 2026).
+const LOCK_AFTER_RECOVERY: Duration = Duration::from_secs(45);
+
+/// [`Transport::hold`]; after a scan left half-way was stopped, the lock the program gone
+/// still held ([`Error::Busy`]) is waited for.
+fn hold(t: &mut guard::Guarded<Box<dyn Transport>>, recovered: bool) -> Result<()> {
+    let until = std::time::Instant::now() + LOCK_AFTER_RECOVERY;
+    loop {
+        match t.hold() {
+            Err(Error::Busy(_)) if recovered && std::time::Instant::now() < until => {
+                std::thread::sleep(Duration::from_secs(1));
+            }
+            other => return other,
+        }
+    }
+}
+
+/// Asks the state with room for a packet of image: a state is the answer of a scanner at rest
+/// ([`protocol::is_state`]); anything else is a scan left half-way, stopped
+/// ([`scan::recover`]). What was done, empty when nothing.
+fn settle(t: &mut guard::Guarded<Box<dyn Transport>>) -> Result<Vec<String>> {
+    t.bulk_out(&protocol::GET_STATE)?;
+    let mut answer = [0u8; 512];
+    let n = t.bulk_in(&mut answer)?;
+    if protocol::is_state(&answer[..n]) {
+        return Ok(Vec::new());
+    }
+    let mut log = vec![format!(
+        "1B 03 answered {n} bytes, not a state: a scan left half-way"
+    )];
+    t.permit_recovery();
+    let done = scan::recover(t, &mut |line| log.push(line));
+    t.end_scan();
+    done?;
+    log.push("stopped with 1E 18".into());
+    Ok(log)
+}
+
 impl scanner_api::Scanner for Gt4490 {
     fn capabilities(&self) -> &Capabilities {
         &self.caps
@@ -364,29 +436,33 @@ impl scanner_api::Scanner for Gt4490 {
 
     fn status(&mut self) -> Result<DeviceStatus> {
         let state = protocol::state(&mut self.transport)?;
+        let mut details = vec![
+            (
+                "State (1B 03)".into(),
+                format!("{:02X} {:02X}", state.0[0], state.0[1]),
+            ),
+            (
+                "Firmware".into(),
+                match &self.firmware {
+                    FirmwareOutcome::AlreadyRunning => "already running when opened".into(),
+                    FirmwareOutcome::Uploaded { build, origin } => {
+                        format!("sent when opened ({build}, {origin})")
+                    }
+                },
+            ),
+        ];
+        if !self.recovered.is_empty() {
+            details.push(("Scan left half-way".into(), self.recovered.join("; ")));
+        }
+        details.push((
+            "Backend".into(),
+            "glass scans computed from the request".into(),
+        ));
         Ok(DeviceStatus {
             ready: state.firmware_running() && !state.busy(),
             lamp: None,
             adapter: None,
-            details: vec![
-                (
-                    "State (1B 03)".into(),
-                    format!("{:02X} {:02X}", state.0[0], state.0[1]),
-                ),
-                (
-                    "Firmware".into(),
-                    match &self.firmware {
-                        FirmwareOutcome::AlreadyRunning => "already running when opened".into(),
-                        FirmwareOutcome::Uploaded { build, origin } => {
-                            format!("sent when opened ({build}, {origin})")
-                        }
-                    },
-                ),
-                (
-                    "Backend".into(),
-                    "glass scans computed from the request".into(),
-                ),
-            ],
+            details,
         })
     }
 
@@ -469,6 +545,10 @@ mod tests {
     use protocol::tests::Mock;
     use scanner_api::{Area, Backend, Scanner, Source};
 
+    /// `1B 03` at rest, and before the firmware (captures).
+    const IDLE: [u8; 2] = [0x18, 0x81];
+    const NO_FW: [u8; 2] = protocol::State::NO_FIRMWARE;
+
     #[test]
     fn scanners_can_move_to_the_scanner_thread() {
         fn send<T: Send>() {}
@@ -498,30 +578,30 @@ mod tests {
     #[test]
     fn the_lamp_is_switched_off_with_1e_a2_00() {
         // The opening's 1B 03, then 06 twice.
-        let t = Mock::answering(&[&[0x10, 0x00], &[6], &[6]]);
+        let t = Mock::answering(&[&IDLE, &IDLE, &[6], &[6]]);
         let mut s = Gt4490::start(Box::new(t), || panic!("no firmware needed")).unwrap();
         s.lamp_used = Some(SystemTime::now());
         s.lamp_off().unwrap();
         assert_eq!(s.lamp_used, None);
         // A NAK is an error.
-        let t = Mock::answering(&[&[0x10, 0x00], &[0x15]]);
+        let t = Mock::answering(&[&IDLE, &IDLE, &[0x15]]);
         let mut s = Gt4490::start(Box::new(t), || panic!("no firmware needed")).unwrap();
         assert!(s.lamp_off().is_err());
     }
 
     fn running() -> Gt4490 {
-        let t = Mock::answering(&[&[0x10, 0x00]]);
+        let t = Mock::answering(&[&IDLE, &IDLE]);
         Gt4490::start(Box::new(t), || panic!("no firmware needed")).unwrap()
     }
 
-    /// A scanner answering as WIA's capture 29 (300 dpi, 5 x 5 cm), after the `1B 03` of
-    /// the opening, its lamp just used.
+    /// A scanner answering as WIA's capture 29 (300 dpi, 5 x 5 cm), after the two `1B 03` of
+    /// the opening (a scan left half-way?, the firmware), its lamp just used.
     fn follow_29() -> Gt4490 {
         let (_, text) = setup::tests::CAPTURES
             .iter()
             .find(|(n, _)| *n == "29")
             .unwrap();
-        let mut f = scan::tests::Follow::new("29", &format!("P 1b03 1881\n{text}"));
+        let mut f = scan::tests::Follow::new("29", &format!("P 1b03 1881\nP 1b03 1881\n{text}"));
         f.curves = tables::Curves::Linear;
         let mut s = Gt4490::start(Box::new(f), || panic!("no firmware needed")).unwrap();
         s.lamp_used = Some(SystemTime::now());
@@ -605,7 +685,7 @@ mod tests {
     fn the_buttons_are_read_with_1e_85() {
         // Opening (1B 03), then none, Start, Copy, PDF, E-mail and an
         // unknown answer, as 1E 85 gives them.
-        let t = Mock::answering(&[&[0x10, 0x00], &[0], &[1], &[4], &[2], &[3], &[9]]);
+        let t = Mock::answering(&[&IDLE, &IDLE, &[0], &[1], &[4], &[2], &[3], &[9]]);
         let mut s = Gt4490::start(Box::new(t), || panic!("no firmware needed")).unwrap();
         let bits: Vec<u32> = (0..6).map(|_| s.poll_buttons().unwrap()).collect();
         assert_eq!(bits, [0, 0b0001, 0b1000, 0b0010, 0b0100, 0]);
@@ -628,7 +708,7 @@ mod tests {
 
     #[test]
     fn opening_sends_the_firmware_through_the_guard() {
-        let t = Mock::answering(&[&[0x00, 0x00], &[6], &[6], &[6], &[6], &[0x10, 0x00]]);
+        let t = Mock::answering(&[&NO_FW, &NO_FW, &[6], &[6], &[6], &[6], &IDLE]);
         let image = protocol::tests::image();
         let mut s =
             Gt4490::start(Box::new(t), || Ok(firmware::Firmware::unchecked(image))).unwrap();
@@ -643,17 +723,60 @@ mod tests {
         assert!(!EpsonBackend::new().with_upload(false).upload);
         // Firmware stopped, upload not allowed: only 1B 03 goes out (an
         // upload would have read an ACK the mock does not have).
-        let t = Mock::answering(&[&[0x00, 0x00]]);
+        let t = Mock::answering(&[&NO_FW, &NO_FW]);
         let e = Gt4490::start(Box::new(t), firmware_loader(false, None)).unwrap_err();
         assert!(e.to_string().contains("sending it is turned off"), "{e}");
         // Running: it opens anyway.
-        let t = Mock::answering(&[&[0x10, 0x00]]);
+        let t = Mock::answering(&[&IDLE, &IDLE]);
         assert!(Gt4490::start(Box::new(t), firmware_loader(false, None)).is_ok());
     }
 
     #[test]
+    fn opening_stops_a_scan_left_half_way() {
+        // As on the scanner (captures 46-51): 1B 03 brings a packet of image; 1E 18 an empty
+        // packet, then 06; the carriage goes home; then the firmware's 1B 03 and the status.
+        let packet = [0x0Cu8; 512];
+        let t = Mock::answering(&[
+            &packet,
+            &[],
+            &[protocol::ACK],
+            &[0x58, 0x81],
+            &IDLE,
+            &IDLE,
+            &IDLE,
+        ]);
+        let mut s = Gt4490::start(Box::new(t), || panic!("no firmware needed")).unwrap();
+        assert_eq!(s.firmware(), &FirmwareOutcome::AlreadyRunning);
+        let status = s.status().unwrap();
+        assert!(status.ready);
+        let left = status
+            .details
+            .iter()
+            .find(|(k, _)| k == "Scan left half-way")
+            .expect("told in the status");
+        assert!(left.1.contains("512 bytes"), "{left:?}");
+        // Every answer read, in order: nothing more was sent.
+        let e = s.status().unwrap_err();
+        assert!(e.to_string().contains("no answer left"), "{e}");
+        // The guard is back to the commands that move nothing.
+        assert!(s.transport.bulk_out(&scan::CANCEL).is_err());
+    }
+
+    #[test]
+    fn a_scanner_at_rest_is_left_alone() {
+        let t = Mock::answering(&[&IDLE, &IDLE, &IDLE]);
+        let mut s = Gt4490::start(Box::new(t), || panic!("no firmware needed")).unwrap();
+        assert!(s
+            .status()
+            .unwrap()
+            .details
+            .iter()
+            .all(|(k, _)| k != "Scan left half-way"));
+    }
+
+    #[test]
     fn the_status_reads_the_state() {
-        let t = Mock::answering(&[&[0x10, 0x00], &[0x12, 0x00], &[0x10, 0x00]]);
+        let t = Mock::answering(&[&IDLE, &IDLE, &[0x12, 0x00], &[0x10, 0x00]]);
         let mut s = Gt4490::start(Box::new(t), || panic!("no firmware needed")).unwrap();
         let busy = s.status().unwrap();
         assert!(!busy.ready);

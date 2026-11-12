@@ -183,6 +183,17 @@ impl UsbscanTransport {
     /// the Epson 4490, and takes its STI lock; a lock another program holds
     /// (Epson Scan scanning) is an [`Error::Busy`].
     pub fn open(location: &str) -> Result<Self> {
+        let mut t = Self::open_unlocked(location)?;
+        t.hold()?;
+        Ok(t)
+    }
+
+    /// Opens `\\.\UsbscanN` without the STI lock, only to read what a scanner left half-way
+    /// through a scan still sends (`epson4490 drain --no-lock`). Taking the lock has Epson's
+    /// driver ask the scanner its state (`1B 03`); a scanner still sending its image answers
+    /// with image bytes, which Epson's driver took for "no firmware": it began an upload
+    /// (`1B 06`), which the scanner did not take (capture 44, 12 November 2026).
+    pub fn open_unlocked(location: &str) -> Result<Self> {
         let n: u32 = location
             .strip_prefix(r"\\.\Usbscan")
             .and_then(|n| n.parse().ok())
@@ -210,12 +221,32 @@ impl UsbscanTransport {
                 0,
             )
         };
+        Ok(Self {
+            handle,
+            index: n,
+            lock: None,
+        })
+    }
+
+    /// Whether the transport holds the scanner's STI lock.
+    pub fn locked(&self) -> bool {
+        self.lock.is_some()
+    }
+}
+
+impl Transport for UsbscanTransport {
+    /// Takes the STI lock, waiting up to [`LOCK_WAIT`] for Windows to have one to give; a
+    /// lock another program holds is an [`Error::Busy`] at once.
+    fn hold(&mut self) -> Result<()> {
+        if self.lock.is_some() {
+            return Ok(());
+        }
         // Without the lock Windows' image service asks the scanner for its buttons between
         // our commands and the answers mix: never used so. Right after the scanner is
         // switched on (12 November 2026) the lock could not be had for a while: tried again.
         let until = std::time::Instant::now() + LOCK_WAIT;
         let lock = loop {
-            if let Some(lock) = StiLock::take(&path_of(n))? {
+            if let Some(lock) = StiLock::take(&path_of(self.index))? {
                 break lock;
             }
             if std::time::Instant::now() > until {
@@ -228,20 +259,10 @@ impl UsbscanTransport {
             }
             std::thread::sleep(std::time::Duration::from_millis(500));
         };
-        Ok(Self {
-            handle,
-            index: n,
-            lock: Some(lock),
-        })
+        self.lock = Some(lock);
+        Ok(())
     }
 
-    /// Whether the transport holds the scanner's STI lock.
-    pub fn locked(&self) -> bool {
-        self.lock.is_some()
-    }
-}
-
-impl Transport for UsbscanTransport {
     fn bulk_in(&mut self, buf: &mut [u8]) -> Result<usize> {
         let len = u32::try_from(buf.len())
             .map_err(|_| Error::InvalidRequest("bulk read too long".into()))?;

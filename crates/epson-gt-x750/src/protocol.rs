@@ -44,6 +44,9 @@ pub struct State(pub [u8; 2]);
 impl State {
     /// In the first byte: the firmware is running.
     pub const FIRMWARE_RUNNING: u8 = 0x10;
+    /// The only state seen without the firmware: switched on, before Epson's driver sent it
+    /// (capture 01).
+    pub const NO_FIRMWARE: [u8; 2] = [0x28, 0x00];
     /// In the first byte: busy (Epson's interpreter waits, polling every
     /// 50 ms, until both are clear).
     pub const BUSY: u8 = 0x42;
@@ -56,6 +59,17 @@ impl State {
     /// Whether the scanner is busy.
     pub fn busy(self) -> bool {
         self.0[0] & Self::BUSY != 0
+    }
+}
+
+/// Whether `answer` is a state `1B 03` gives a scanner at rest: two bytes, the firmware running
+/// with `81` after it (`18 81` idle, `19 81` / `1A 81` the lamp warming, `58 81` the carriage
+/// moving), or [`State::NO_FIRMWARE`]. A scanner left half-way through a scan answers with a
+/// packet of its image (512 bytes, capture 46).
+pub fn is_state(answer: &[u8]) -> bool {
+    match answer {
+        [a, 0x81] => a & State::FIRMWARE_RUNNING != 0,
+        a => a == State::NO_FIRMWARE,
     }
 }
 
@@ -184,8 +198,17 @@ pub fn ensure_firmware(
     t: &mut dyn Transport,
     load: impl FnOnce() -> Result<Firmware>,
 ) -> Result<FirmwareOutcome> {
-    if state(t)?.firmware_running() {
+    let s = state(t)?;
+    if s.firmware_running() {
         return Ok(FirmwareOutcome::AlreadyRunning);
+    }
+    // Only on the state seen before the firmware: two bytes of something else (a scan left
+    // half-way, capture 44) must never start an upload.
+    if s.0 != State::NO_FIRMWARE {
+        return Err(Error::Other(format!(
+            "the Epson 4490 answered {:02X} {:02X} to 1B 03, a state never seen: switch it off              and on",
+            s.0[0], s.0[1]
+        )));
     }
     let fw = load()?;
     upload_firmware(t, fw.image())?;
@@ -323,7 +346,7 @@ pub(crate) mod tests {
     #[test]
     fn a_stopped_firmware_is_sent_after_the_state() {
         let image = image();
-        let mut answers: Vec<&[u8]> = vec![&[0x00, 0x00]];
+        let mut answers: Vec<&[u8]> = vec![&State::NO_FIRMWARE];
         answers.extend(ACKS);
         let mut t = Mock::answering(&answers);
         let outcome = ensure_firmware(&mut t, || Ok(Firmware::unchecked(image.clone()))).unwrap();
@@ -336,10 +359,40 @@ pub(crate) mod tests {
 
     #[test]
     fn without_firmware_nothing_but_the_state_is_sent() {
-        let mut t = Mock::answering(&[&[0x00, 0x00]]);
+        let mut t = Mock::answering(&[&State::NO_FIRMWARE]);
         let e = ensure_firmware(&mut t, || Err(Error::Other("no esfw54.bin".into()))).unwrap_err();
         assert_eq!(e, Error::Other("no esfw54.bin".into()));
         assert_eq!(t.writes, vec![GET_STATE.to_vec()]);
+    }
+
+    #[test]
+    fn a_state_never_seen_never_starts_an_upload() {
+        // Two bytes of the image of a scan left half-way (capture 44's 00 00, 81 00).
+        for answer in [[0x00, 0x00], [0x81, 0x00], [0x06, 0x04]] {
+            let mut t = Mock::answering(&[&answer]);
+            let e = ensure_firmware(&mut t, || panic!("never loaded")).unwrap_err();
+            assert!(e.to_string().contains("never seen"), "{e}");
+            assert_eq!(t.writes, vec![GET_STATE.to_vec()]);
+        }
+    }
+
+    #[test]
+    fn only_a_scanner_at_rest_answers_a_state() {
+        for s in [
+            [0x18, 0x81],
+            [0x19, 0x81],
+            [0x1A, 0x81],
+            [0x58, 0x81],
+            [0x28, 0x00],
+        ] {
+            assert!(is_state(&s), "{s:02X?}");
+        }
+        assert!(!is_state(&[0x06, 0x04]));
+        assert!(!is_state(&[0x00, 0x00]));
+        assert!(!is_state(&[0x81, 0x00]));
+        assert!(!is_state(&[]));
+        assert!(!is_state(&[0x18, 0x81, 0x00]));
+        assert!(!is_state(&[0x0C; 512]));
     }
 
     #[test]

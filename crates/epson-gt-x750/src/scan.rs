@@ -41,6 +41,8 @@ pub const CANCEL: [u8; 2] = [0x1E, 0x18];
 /// blocks), then `06`; a reader that gave up before it left the scanner stuck until switched
 /// off. Its memory's size is not known: generously more.
 const CANCEL_MAX_LEFT_OUT: usize = 16 << 20;
+/// The most empty packets taken before `1E 18`'s `06` (one seen, capture 48).
+const MAX_EMPTY: usize = 8;
 /// The longest single read asked of the transport.
 const READ_CHUNK: usize = 65_536;
 /// How long the scanner may stay busy.
@@ -329,9 +331,35 @@ fn read_all(t: &mut dyn Transport, lines: u32, per: u32, line: u32) -> Result<Ve
 /// On the scanner (12 November 2026): 262,176 bytes of image came before the `06`.
 fn cancel(t: &mut dyn Transport, log: &mut dyn FnMut(String)) -> Result<()> {
     std::thread::sleep(Duration::from_millis(500));
+    stop(t, log)?;
+    wait_ready(t, log)?;
+    lamp_is_the_glass(t)?;
+    log("cancelled (1E 18): the carriage went home".into());
+    Ok(())
+}
+
+/// Stops the scan a scanner was left in by a program that went away half-way through its
+/// read (closed, killed): `1E 18`, the image it still had left out until its `06`, then
+/// `1B 03` until it is idle. **Tried first on 12 November 2026** (captures 44-48): the
+/// transport must be opened without the STI lock (Epson's driver, given the lock, asks the
+/// state and takes image bytes for "no firmware"), and the guard told
+/// ([`crate::guard::Guarded::permit_recovery`]).
+pub fn recover(t: &mut dyn Transport, log: &mut dyn FnMut(String)) -> Result<()> {
+    stop(t, log)?;
+    wait_ready(t, log)?;
+    Ok(())
+}
+
+/// `1E 18` and its answer: the image still on its way left out, up to a lone `06`.
+///
+/// A scanner left half-way by a program gone answered `1E 18` first with a packet of no
+/// bytes (the end of the image transfer it had begun), then `06` (captures 48, 49): empty
+/// reads are not an answer, the `06` is still waited for.
+fn stop(t: &mut dyn Transport, log: &mut dyn FnMut(String)) -> Result<()> {
     t.bulk_out(&CANCEL)?;
     let until = Instant::now() + Duration::from_secs(60);
     let mut left_out = 0usize;
+    let mut empty = 0usize;
     loop {
         let mut packet = [0u8; 512];
         let n = t.bulk_in(&mut packet)?;
@@ -339,7 +367,10 @@ fn cancel(t: &mut dyn Transport, log: &mut dyn FnMut(String)) -> Result<()> {
             break;
         }
         left_out += n;
-        if n == 0 || Instant::now() > until || left_out > CANCEL_MAX_LEFT_OUT {
+        if n == 0 {
+            empty += 1;
+        }
+        if empty > MAX_EMPTY || Instant::now() > until || left_out > CANCEL_MAX_LEFT_OUT {
             return Err(other(format!(
                 "after 1E 18 the scanner sent {left_out} bytes and no 06"
             )));
@@ -350,9 +381,6 @@ fn cancel(t: &mut dyn Transport, log: &mut dyn FnMut(String)) -> Result<()> {
             "1E 18: {left_out} bytes of image left out before its 06"
         ));
     }
-    wait_ready(t, log)?;
-    lamp_is_the_glass(t)?;
-    log("cancelled (1E 18): the carriage went home".into());
     Ok(())
 }
 
@@ -1043,5 +1071,33 @@ pub(crate) mod tests {
             .collect();
         let im = assemble(&raw, &p);
         assert_eq!(im.data[..6], [24, 24, 12, 12, 0, 0]);
+    }
+
+    #[test]
+    fn a_scan_left_half_way_is_stopped_with_1e_18() {
+        use crate::guard::Guarded;
+        use crate::protocol::tests::Mock;
+        // As on the scanner: image packets, then the lone 06, then the state while the
+        // carriage goes home, then at rest.
+        let packet = [0x0Cu8; 512];
+        let mut t = Guarded::new(Mock::answering(&[
+            &packet,
+            &packet[..308],
+            &[],
+            &[ACK],
+            &[0x58, 0x81],
+            &[0x18, 0x81],
+        ]));
+        // Not without the guard told.
+        assert!(recover(&mut t, &mut |_| {}).is_err());
+        assert!(t.inner().writes.is_empty());
+        t.permit_recovery();
+        let mut log = Vec::new();
+        recover(&mut t, &mut |l| log.push(l)).unwrap();
+        assert_eq!(
+            t.inner().writes,
+            vec![CANCEL.to_vec(), GET_STATE.to_vec(), GET_STATE.to_vec()]
+        );
+        assert!(log[0].contains("820 bytes"), "{log:?}");
     }
 }
