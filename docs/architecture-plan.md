@@ -1150,7 +1150,10 @@ native scan computes any area at 100, 200, 300, 400, 600, 1200 dpi (`scan.rs`), 
    samples), 8-bit with the 16-bit `samples16` when asked (the top byte, as the 3770); the
    progress (`Starting`, `WarmingUp` once, `Calibrating`, `Scanning` in bytes, `Finishing`);
    the lamp's last use kept by the open scanner; `details` with the x correction, the columns
-   and K. A test runs the app's scan against capture 29, write by write.
+   and K. A test runs the app's scan against capture 29, write by write. **Tried in the app**
+   by Matteo (12 November, evening): the preview of the whole glass, a scan at 300 dpi, the
+   Photo preset (600 dpi, 16 bits) and Cancel during the read all worked. A scan fails while
+   Epson Scan is open (it holds the STI lock); a click on the state opens the scanner again.
 5. **Cancelling**: the contract's `progress` returning `false`. **Done**: Epson's driver does
    not just stop reading (as first thought): capture 11 shows `1E 18` (answered `06` after about
    a second), then `1B 03` while the carriage goes home (`58 81` for about 4 s), then `1E A1`.
