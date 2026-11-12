@@ -18,7 +18,9 @@
 //! millimetres from the glass's corner, rounded to pixels as WIA does; the guard refuses what no
 //! capture covers (100, 200, 300, 400, 600, 1200 dpi at 8 bits, 600 at 16). OUT.png is the image
 //! realigned and cropped; `--raw` keeps the data as the scanner sent it (trailers removed).
-//! Without `--move` it only prints the plan and what the guard says of it.
+//! Without `--move` it only prints the plan and what the guard says of it. A lamp taken to be
+//! cold (switched on, or no scan for 14 minutes; the time of the last scan is kept in the
+//! temporary folder, `epson4490-lamp.txt`) gets two minutes before the calibration.
 //!
 //! `replay` is the one command that moves the carriage, so it asks for `--move`. It sends only
 //! the bytes of its script (made by `captures/epson4490/tools/script.py` from a capture: what
@@ -329,6 +331,7 @@ fn scan(request: Request, out: &str, raw: Option<&std::path::Path>) -> Result<()
     let s = epson_gt_x750::scan::scan_glass(
         &mut t,
         request,
+        lamp_last_used(),
         &mut |line| println!("  {:5.1} s  {line}", start.elapsed().as_secs_f64()),
         &mut |done, all| {
             let tenth = done * 10 / all.max(1);
@@ -341,6 +344,9 @@ fn scan(request: Request, out: &str, raw: Option<&std::path::Path>) -> Result<()
             }
         },
     )?;
+    // Only after a scan that went through: a failed one may not have lit the lamp, and a
+    // warm-up too many costs only two minutes.
+    remember_lamp();
     if let Some(path) = raw {
         std::fs::write(path, &s.raw)
             .map_err(|e| Error::Other(format!("{}: {e}", path.display())))?;
@@ -360,6 +366,28 @@ fn scan(request: Request, out: &str, raw: Option<&std::path::Path>) -> Result<()
         s.image.bits
     );
     Ok(())
+}
+
+/// Where the command remembers when its last scan ended (the lamp lit then): each run is a
+/// new process, and a lamp idle for 14 minutes is taken to be off (`scan::LAMP_OFF_AFTER`).
+fn lamp_file() -> PathBuf {
+    std::env::temp_dir().join("epson4490-lamp.txt")
+}
+
+fn lamp_last_used() -> Option<std::time::SystemTime> {
+    let secs: u64 = std::fs::read_to_string(lamp_file())
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs))
+}
+
+fn remember_lamp() {
+    if let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        // Losing it only costs a warm-up.
+        let _ = std::fs::write(lamp_file(), now.as_secs().to_string());
+    }
 }
 
 fn write_png(path: &str, image: &epson_gt_x750::scan::Image) -> Result<(), Error> {

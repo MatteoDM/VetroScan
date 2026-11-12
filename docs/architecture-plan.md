@@ -1109,7 +1109,12 @@ native scan computes any area at 100, 200, 300, 400, 600, 1200 dpi (`scan.rs`), 
    measured: the lamp switched off by itself after 15 minutes and lit again with `1E A2 01`
    (one point that morning: +7, the same). So the scanner's own flag is not enough; the wait
    is the backend's: how long and when (switched on, or idle long enough for the lamp to go
-   off), Matteo's choice; then the wait in the scan, `Progress::WarmingUp`, `LampInfo::warm_up`.
+   off), Matteo's choice. **Done**: two minutes (Matteo, 12 November) from when the lamp was
+   lit (the scanner's warming flag first seen, or `1E A2 01`), when the scanner flags it
+   warming or no scan of ours ended in the last 14 minutes (`scan::WARM_UP`,
+   `LAMP_OFF_AFTER`, `lamp_is_cold`); `1B 03` polled every second meanwhile. The command keeps
+   the time of its last scan in the temporary folder. Still to come with step 4:
+   `Progress::WarmingUp` and `LampInfo::warm_up` in the app.
 2. **The glass's height**: the app's preview of the whole glass at 200 dpi (2,340 lines of
    11.7 in) would end at step 29,603, past the furthest captured (29,587, capture 07): the guard
    refuses it. Decided: declare the glass 297 mm (11.69 in, A4's length, what WIA scanned) in

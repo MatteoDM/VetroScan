@@ -25,7 +25,7 @@ use crate::setup::{self, Plan, Request, XCorrection, TRAILER_LEN};
 use crate::shading::{black_block, Shading};
 use crate::{tables, Transport};
 use scanner_api::{Error, Result};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 /// What the scanner names itself (`1B 13`): the only model and firmware seen.
 pub const IDENTITY: &[u8; 28] = b"EPSON   GT-X750         1.27";
@@ -34,8 +34,17 @@ pub const IDENTITY: &[u8; 28] = b"EPSON   GT-X750         1.27";
 pub const READ_83: [u8; 8] = [0x07, 0xA0, 0xF9, 0x7F, 0x00, 0x58, 0x02, 0x00];
 /// The longest single read asked of the transport.
 const READ_CHUNK: usize = 65_536;
-/// How long the scanner may stay busy (the lamp warms up for about a minute).
+/// How long the scanner may stay busy.
 const WAIT: Duration = Duration::from_secs(180);
+/// How long a cold lamp is given before the calibration, from when it was lit. Measured on
+/// 12 November 2026 (`captures/epson4490/05-catture.md`, "La lampada fredda, misurata"): ten
+/// scans right after switching on; `1B 03` flags the lamp warming for about 20 s only, and the
+/// image was still 6 levels lighter in the shadows; within 1 level after about 1.5 minutes,
+/// 0.5 after 3. Two minutes, chosen by Matteo.
+pub const WARM_UP: Duration = Duration::from_secs(120);
+/// After this long without a scan the lamp is taken to be off: the scanner switches it off by
+/// itself after about 15 minutes idle (capture 21), without saying so.
+pub const LAMP_OFF_AFTER: Duration = Duration::from_secs(14 * 60);
 
 /// A scanned image: RGB interleaved, 8 bits or 16 bits little-endian.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -132,14 +141,19 @@ fn ramp_bytes(r: &[u16]) -> Vec<u8> {
 
 /// Polls `1B 03` until the scanner is idle with its lamp warm (`18 81` at rest
 /// in every capture; `0x40` moving, `0x02` busy, `0x01` the lamp warming).
-/// A wait longer than one poll goes to `log`, with the states seen.
-fn wait_ready(t: &mut dyn Transport, log: &mut dyn FnMut(String)) -> Result<()> {
+/// A wait longer than one poll goes to `log`, with the states seen. Answers when it first
+/// saw the lamp warming, if it did.
+fn wait_ready(t: &mut dyn Transport, log: &mut dyn FnMut(String)) -> Result<Option<Instant>> {
     let start = Instant::now();
+    let mut warming = None;
     let until = start + WAIT;
     let mut seen: Vec<(f64, [u8; 2])> = Vec::new();
     loop {
         let s = State(read_two(ask(t, GET_STATE, 2)?));
         let at = start.elapsed().as_secs_f64();
+        if s.0[0] & 0x01 != 0 && warming.is_none() {
+            warming = Some(Instant::now());
+        }
         if seen.last().is_none_or(|(_, last)| *last != s.0) {
             seen.push((at, s.0));
         }
@@ -151,7 +165,7 @@ fn wait_ready(t: &mut dyn Transport, log: &mut dyn FnMut(String)) -> Result<()> 
                     .collect();
                 log(format!("1B 03: waited {at:.2} s: {}", states.join(", ")));
             }
-            return Ok(());
+            return Ok(warming);
         }
         if Instant::now() > until {
             return Err(other(format!(
@@ -275,16 +289,44 @@ pub fn assemble(raw: &[u8], p: &Plan) -> Image {
     }
 }
 
-/// Scans `request` on the glass. `log` gets a line for each phase, `progress`
-/// the image lines read and their total.
+/// Whether the lamp must be given [`WARM_UP`] before the calibration: the scanner flagged it
+/// warming, or no scan of ours ended in the last [`LAMP_OFF_AFTER`] (`last_used`; none known
+/// counts as long ago, as does a clock gone back).
+pub fn lamp_is_cold(warming_seen: bool, last_used: Option<SystemTime>, now: SystemTime) -> bool {
+    let idle = last_used.and_then(|t| now.duration_since(t).ok());
+    warming_seen || idle.is_none_or(|idle| idle >= LAMP_OFF_AFTER)
+}
+
+/// Waits until [`WARM_UP`] after `lit`, polling `1B 03` every second.
+fn warm_up(t: &mut dyn Transport, lit: Instant, log: &mut dyn FnMut(String)) -> Result<()> {
+    let until = lit + WARM_UP;
+    let mut said = None;
+    while Instant::now() < until {
+        let left = (until - Instant::now()).as_secs();
+        if said.is_none_or(|s: u64| s >= left + 30) {
+            log(format!("the lamp was off: warming up, {left} s left"));
+            said = Some(left);
+        }
+        ask(t, GET_STATE, 2)?;
+        std::thread::sleep(
+            Duration::from_secs(1).min(until.saturating_duration_since(Instant::now())),
+        );
+    }
+    Ok(())
+}
+
+/// Scans `request` on the glass. `last_used` is when a scan of ours last ended (the lamp
+/// was lit then), if known: a lamp taken to be cold ([`lamp_is_cold`]) gets [`WARM_UP`]
+/// first. `log` gets a line for each phase, `progress` the image lines read and their total.
 pub fn scan_glass<T: Transport>(
     g: &mut Guarded<T>,
     request: Request,
+    last_used: Option<SystemTime>,
     log: &mut dyn FnMut(String),
     progress: &mut dyn FnMut(u32, u32),
 ) -> Result<Scanned> {
     g.permit_request(&request)?;
-    let result = run(g, request, log, progress);
+    let result = run(g, request, last_used, log, progress);
     g.end_scan();
     result
 }
@@ -292,12 +334,13 @@ pub fn scan_glass<T: Transport>(
 fn run<T: Transport>(
     g: &mut Guarded<T>,
     request: Request,
+    last_used: Option<SystemTime>,
     log: &mut dyn FnMut(String),
     progress: &mut dyn FnMut(u32, u32),
 ) -> Result<Scanned> {
     let e57 = setup::request_block(&request)?;
     // The opening, as WIA's driver does it.
-    wait_ready(g, log)?;
+    let warming = wait_ready(g, log)?;
     ask(g, [0x1E, 0x53], 42)?;
     wait_ready(g, log)?;
     command(g, [0x1B, 0x40])?;
@@ -333,8 +376,13 @@ fn run<T: Transport>(
     wait_ready(g, log)?;
     lamp_is_the_glass(g)?;
     send(g, [0x1E, 0xA2], &[0x01])?;
+    let lit = Instant::now();
     log("lamp on (1E A2 01)".into());
-    wait_ready(g, log)?;
+    let warming = warming.or(wait_ready(g, log)?);
+    if lamp_is_cold(warming.is_some(), last_used, SystemTime::now()) {
+        // Lit when the scanner was switched on (flagged warming) or just now.
+        warm_up(g, warming.unwrap_or(lit).min(lit), log)?;
+    }
 
     // The x origin's correction, stored in the scanner; then the plan.
     command(g, [0x1E, 0x87])?;
@@ -606,7 +654,13 @@ mod tests {
     fn scan(name: &'static str, text: &str) -> (Result<Scanned>, usize, usize) {
         let (request, _, _) = request_of(&parse(text));
         let mut g = Guarded::new(Follow::new(name, text));
-        let r = scan_glass(&mut g, request, &mut |_| {}, &mut |_, _| {});
+        let r = scan_glass(
+            &mut g,
+            request,
+            Some(SystemTime::now()),
+            &mut |_| {},
+            &mut |_, _| {},
+        );
         let f = g.inner();
         let r = r.and_then(|s| match f.lines.len() - f.at {
             0 => Ok(s),
@@ -657,6 +711,23 @@ mod tests {
             .unwrap();
         // 1E 8B and its answer, nothing after.
         assert_eq!(at, i8b + 2);
+    }
+
+    #[test]
+    fn a_lamp_is_cold_when_flagged_or_idle_long_enough() {
+        let now = SystemTime::now();
+        let ago = |s: u64| Some(now - Duration::from_secs(s));
+        assert!(!lamp_is_cold(false, ago(60), now));
+        assert!(!lamp_is_cold(false, ago(13 * 60), now));
+        assert!(lamp_is_cold(false, ago(14 * 60), now));
+        assert!(lamp_is_cold(true, ago(60), now));
+        // Never used by us, or a clock gone back: cold.
+        assert!(lamp_is_cold(false, None, now));
+        assert!(lamp_is_cold(
+            false,
+            Some(now + Duration::from_secs(60)),
+            now
+        ));
     }
 
     #[test]
