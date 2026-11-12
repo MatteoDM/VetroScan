@@ -1034,6 +1034,14 @@ on `usbscan` by itself.
     calibration's K (the lamp's light then), the image's means against the last scan's and WIA's,
     the `1B 03` states after `1E A2 01`. It says how long to wait, and whether the scanner tells
     or the backend must decide (a time, or K no longer rising).
+  - **Then, the application's scan** (`Gt4490::scan` on `scan::scan_glass`), after the lamp:
+    its `Capabilities` made the guard's (100, 200, 300, 400, 600, 1200 dpi; grey made by the
+    application from colour, the scanner always sends RGB); 16 bits only at 600 dpi, which the
+    contract cannot say (`depths` is not tied to the resolution): declare 8 bits only for now, or
+    a new field; the contract wants linear samples while the scan loads WIA's curves (gamma 1/1.8
+    and the tone table): linear tables (never sent, harmless to the mechanics, the image to be
+    measured) or WIA's curve declared in `Tone`, measured first; the progress; the e2e with a
+    made-up 4490.
 - **More captures and the data format**: the glass through WIA (150-1200 dpi, colour, grey,
   black and white, a cancelled scan), Epson Scan (2400 and 4800 dpi, 48 bits), a negative with
   and without Digital ICE, a slide, the lamp (it switches itself off after about 15 minutes);
