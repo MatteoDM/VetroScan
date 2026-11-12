@@ -1100,9 +1100,16 @@ native scan computes any area at 100, 200, 300, 400, 600, 1200 dpi (`scan.rs`), 
 
 **A. The glass in the application** (milestone 3, first half: what makes the 4490 usable)
 
-1. **The cold lamp, measured** (planned for 13 November, above): how long to wait after
-   `1E A2 01`, and whether `1B 03` says so; then the wait in the scan, `Progress::WarmingUp`,
-   `LampInfo::warm_up`.
+1. **The cold lamp, measured** (12 November 2026, evening; `captures/epson4490/05-catture.md`,
+   "La lampada fredda, misurata"): ten identical scans right after switching the scanner on.
+   `1B 03` shows the lamp warming (`19 81`) for about 20 s and the scan waited for it, but the
+   image still came out 6 levels lighter in the shadows than once steady (green, against the
+   last of the series); within 1 level after about 1.5 minutes, within 0.5 after 3. The white
+   calibration's K falls about 14 % in the first minute: a lamp just lit gives more light. Not
+   measured: the lamp switched off by itself after 15 minutes and lit again with `1E A2 01`
+   (one point that morning: +7, the same). So the scanner's own flag is not enough; the wait
+   is the backend's: how long and when (switched on, or idle long enough for the lamp to go
+   off), Matteo's choice; then the wait in the scan, `Progress::WarmingUp`, `LampInfo::warm_up`.
 2. **The glass's height**: the app's preview of the whole glass at 200 dpi (2,340 lines of
    11.7 in) would end at step 29,603, past the furthest captured (29,587, capture 07): the guard
    refuses it. Decided: declare the glass 297 mm (11.69 in, A4's length, what WIA scanned) in
