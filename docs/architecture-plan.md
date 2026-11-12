@@ -1018,6 +1018,13 @@ on `usbscan` by itself.
     `--move` it prints the plan and what the guard says. The application's `scan()` still
     answers "not implemented": its `Capabilities` (150-4800 dpi, grey) are not yet those of the
     guard.
+  - **Tried on the scanner** (12 November 2026, Matteo present): 300 dpi, 5 × 5 cm at 40/60 mm,
+    the area of WIA's capture 30. Geometry identical to WIA's (offset 0/0). The first scan, with
+    the scanner idle for hours, came out 6-8 levels lighter (a cold lamp: WIA's own capture 30, made
+    right after the lamp came on, was 4-5 lighter than with a warm one); made again at once, the
+    same means as WIA's (67.1 / 55.3 / 53.1 against 67.7 / 55.8 / 53.8; WIA = 0.997-0.998 × ours +
+    0.6-0.9), 2.75 levels apart on average. Next: how a cold lamp shows in `1B 03` after
+    `1E A2 01` and how long to wait, measured.
 - **More captures and the data format**: the glass through WIA (150-1200 dpi, colour, grey,
   black and white, a cancelled scan), Epson Scan (2400 and 4800 dpi, 48 bits), a negative with
   and without Digital ICE, a slide, the lamp (it switches itself off after about 15 minutes);
