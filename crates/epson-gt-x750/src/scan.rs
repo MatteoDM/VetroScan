@@ -35,6 +35,11 @@ pub const IDENTITY: &[u8; 28] = b"EPSON   GT-X750         1.27";
 pub const READ_83: [u8; 8] = [0x07, 0xA0, 0xF9, 0x7F, 0x00, 0x58, 0x02, 0x00];
 /// Stops a scan under way (capture 11).
 pub const CANCEL: [u8; 2] = [0x1E, 0x18];
+/// The most image data taken to come before `1E 18`'s answer. The scanner sends what its
+/// memory holds first: 262,176 bytes on 12 November 2026 (300 dpi, stopped after three
+/// blocks), then `06`; a reader that gave up before it left the scanner stuck until switched
+/// off. Its memory's size is not known: generously more.
+const CANCEL_MAX_LEFT_OUT: usize = 16 << 20;
 /// The longest single read asked of the transport.
 const READ_CHUNK: usize = 65_536;
 /// How long the scanner may stay busy.
@@ -275,10 +280,36 @@ fn read_all(t: &mut dyn Transport, lines: u32, per: u32, line: u32) -> Result<Ve
 }
 
 /// Stops a read under way as Epson's driver does (capture 11, a scan cancelled half-way):
-/// no more data read, `1E 18` (answered `06` after about a second), then `1B 03` polled while
-/// the carriage goes home, and `1E A1`.
+/// no more data read, half a second, `1E 18` (answered `06` after about a second), then
+/// `1B 03` polled while the carriage goes home, and `1E A1`.
+///
+/// The scanner may have put out some of the image already (a packet waiting in its endpoint):
+/// it comes before the `06`, so the answer is read a packet at a time and what is not a lone
+/// `06` is left out (an image block's trailer ends with `00`, so a lone `06` is the answer).
+/// On the scanner (12 November 2026): 262,176 bytes of image came before the `06`.
 fn cancel(t: &mut dyn Transport, log: &mut dyn FnMut(String)) -> Result<()> {
-    command(t, CANCEL)?;
+    std::thread::sleep(Duration::from_millis(500));
+    t.bulk_out(&CANCEL)?;
+    let until = Instant::now() + Duration::from_secs(60);
+    let mut left_out = 0usize;
+    loop {
+        let mut packet = [0u8; 512];
+        let n = t.bulk_in(&mut packet)?;
+        if packet[..n] == [ACK] {
+            break;
+        }
+        left_out += n;
+        if n == 0 || Instant::now() > until || left_out > CANCEL_MAX_LEFT_OUT {
+            return Err(other(format!(
+                "after 1E 18 the scanner sent {left_out} bytes and no 06"
+            )));
+        }
+    }
+    if left_out > 0 {
+        log(format!(
+            "1E 18: {left_out} bytes of image left out before its 06"
+        ));
+    }
     wait_ready(t, log)?;
     lamp_is_the_glass(t)?;
     log("cancelled (1E 18): the carriage went home".into());
@@ -810,7 +841,9 @@ pub(crate) mod tests {
     struct Cancelling {
         follow: Follow,
         after: Vec<Vec<u8>>,
-        answers: VecDeque<u8>,
+        answers: VecDeque<Vec<u8>>,
+        /// Packets of image the scanner puts out before `1E 18`'s answer.
+        leftover: usize,
     }
 
     impl Transport for Cancelling {
@@ -819,10 +852,15 @@ pub(crate) mod tests {
                 return self.follow.bulk_out(data);
             }
             self.after.push(data.to_vec());
-            self.answers.extend(match data {
-                [0x1E, 0x18] => &[ACK][..],
-                [0x1B, 0x03] => &[0x18, 0x81][..],
-                [0x1E, 0xA1] => &[0x01][..],
+            if data == CANCEL {
+                for _ in 0..self.leftover {
+                    self.answers.push_back(vec![0x5A; 512]);
+                }
+            }
+            self.answers.push_back(match data {
+                [0x1E, 0x18] => vec![ACK],
+                [0x1B, 0x03] => vec![0x18, 0x81],
+                [0x1E, 0xA1] => vec![0x01],
                 _ => return Err(Error::Other(format!("after 1E 18: {data:02x?}"))),
             });
             Ok(())
@@ -832,9 +870,15 @@ pub(crate) mod tests {
             if self.after.is_empty() {
                 return self.follow.bulk_in(buf);
             }
-            let n = buf.len().min(self.answers.len());
-            for (b, a) in buf.iter_mut().zip(self.answers.drain(..n)) {
-                *b = a;
+            // One USB packet a read, as the scanner gives them.
+            let Some(mut a) = self.answers.pop_front() else {
+                return Err(Error::Other("no answer".into()));
+            };
+            let n = buf.len().min(a.len());
+            buf[..n].copy_from_slice(&a[..n]);
+            if n < a.len() {
+                a.drain(..n);
+                self.answers.push_front(a);
             }
             Ok(n)
         }
@@ -846,31 +890,47 @@ pub(crate) mod tests {
     fn a_scan_is_cancelled_as_epsons_driver_does() {
         let (_, text) = CAPTURES.iter().find(|(n, _)| *n == "29").unwrap();
         let (request, _, _) = request_of(&parse(text));
-        let mut g = Guarded::new(Cancelling {
-            follow: Follow::new("29", text),
-            after: Vec::new(),
-            answers: VecDeque::new(),
-        });
         let options = Options {
             last_used: Some(SystemTime::now()),
             curves: Curves::Wia,
         };
-        let mut blocks = 0;
-        let r = scan_glass(&mut g, request, options, &mut |_| {}, &mut |e| match e {
-            Event::Reading { .. } => {
-                blocks += 1;
-                blocks < 3
-            }
-            _ => true,
-        });
-        assert_eq!(r.unwrap_err(), Error::Cancelled);
-        assert_eq!(blocks, 3);
-        assert_eq!(
-            g.inner().after,
-            [CANCEL.to_vec(), GET_STATE.to_vec(), vec![0x1E, 0xA1]]
-        );
-        // The guard is back to what moves nothing.
-        assert!(g.bulk_out(&[0x1E, 0x47]).is_err());
+        // The answer right away, or after two packets of image already put out.
+        for leftover in [0, 2] {
+            let mut g = Guarded::new(Cancelling {
+                follow: Follow::new("29", text),
+                after: Vec::new(),
+                answers: VecDeque::new(),
+                leftover,
+            });
+            let mut blocks = 0;
+            let mut said = Vec::new();
+            let r = scan_glass(
+                &mut g,
+                request,
+                options,
+                &mut |l| said.push(l),
+                &mut |e| match e {
+                    Event::Reading { .. } => {
+                        blocks += 1;
+                        blocks < 3
+                    }
+                    _ => true,
+                },
+            );
+            assert_eq!(r.unwrap_err(), Error::Cancelled);
+            assert_eq!(blocks, 3);
+            assert_eq!(
+                g.inner().after,
+                [CANCEL.to_vec(), GET_STATE.to_vec(), vec![0x1E, 0xA1]]
+            );
+            assert_eq!(
+                said.iter()
+                    .any(|l| l.contains("1024 bytes of image left out")),
+                leftover == 2
+            );
+            // The guard is back to what moves nothing.
+            assert!(g.bulk_out(&[0x1E, 0x47]).is_err());
+        }
 
         let mut g = Guarded::new(Follow::new("29", text));
         let r = scan_glass(&mut g, request, options, &mut |_| {}, &mut |e| {

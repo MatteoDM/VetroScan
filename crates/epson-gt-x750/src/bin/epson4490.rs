@@ -19,6 +19,8 @@
 //! capture covers (100, 200, 300, 400, 600, 1200 dpi, at 8 or 16 bits). OUT.png is the image
 //! realigned and cropped; `--raw` keeps the data as the scanner sent it (trailers removed).
 //! `--tone linear` loads identity tables in place of WIA's curves (to be measured).
+//! `--cancel-after N` stops the scan after N blocks of image, as the app's Cancel does.
+//! `epson4490 drain` reads what a scanner stopped half-way still has to send, then its state.
 //! Without `--move` it only prints the plan and what the guard says of it. A lamp taken to be
 //! cold (switched on, or no scan for 14 minutes; the time of the last scan is kept in the
 //! temporary folder, `epson4490-lamp.txt`) gets two minutes before the calibration.
@@ -45,7 +47,7 @@ use std::process::ExitCode;
 
 const USAGE: &str = "usage: epson4490 list | firmware [--firmware FILE] | probe | \
                      upload [--firmware FILE] | buttons [SECONDS] | replay SCRIPT OUT --move | \
-                     scan DPI X Y W H OUT.png [--bits 16] [--tone wia|linear] [--raw FILE] --move   (X Y W H in mm)";
+                     scan DPI X Y W H OUT.png [--bits 16] [--tone wia|linear] [--raw FILE] [--cancel-after BLOCKS] --move   (X Y W H in mm) | drain";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -57,6 +59,7 @@ fn main() -> ExitCode {
     let mut bits = 8u8;
     let mut raw_path = None;
     let mut curves = Curves::Wia;
+    let mut cancel_after = None;
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
@@ -67,6 +70,10 @@ fn main() -> ExitCode {
             "--move" => moves = true,
             "--bits" => match rest.next().map(|b| b.parse()) {
                 Some(Ok(b)) => bits = b,
+                _ => return usage(),
+            },
+            "--cancel-after" => match rest.next().map(|n| n.parse::<usize>()) {
+                Some(Ok(n)) => cancel_after = Some(n),
                 _ => return usage(),
             },
             "--tone" => match rest.next().map(String::as_str) {
@@ -107,6 +114,7 @@ fn main() -> ExitCode {
         Some("probe") => probe(firmware_path.as_deref()),
         Some("upload") => upload(firmware_path),
         Some("buttons") => buttons(seconds.unwrap_or(10)),
+        Some("drain") => drain(),
         Some("replay") if operands.len() == 2 && moves => replay(&operands[0], &operands[1]),
         Some("replay") if operands.len() == 2 => {
             eprintln!("epson4490: replay moves the carriage: add --move to run it");
@@ -126,7 +134,13 @@ fn main() -> ExitCode {
                 eprintln!("epson4490: scan moves the carriage: add --move to run it");
                 return ExitCode::from(2);
             }
-            scan(request, curves, &operands[5], raw_path.as_deref())
+            scan(
+                request,
+                curves,
+                cancel_after,
+                &operands[5],
+                raw_path.as_deref(),
+            )
         }
         _ => return usage(),
     };
@@ -238,6 +252,32 @@ fn upload(path: Option<PathBuf>) -> Result<(), Error> {
     Ok(())
 }
 
+/// Reads whatever the scanner still has to send (after a read stopped half-way), until a
+/// read times out, then asks the state. Nothing is written but `1B 03` at the end.
+fn drain() -> Result<(), Error> {
+    let mut t = open_first()?;
+    let mut total = 0usize;
+    let mut buf = vec![0u8; 65_536];
+    loop {
+        match t.bulk_in(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                total += n;
+                println!(
+                    "read {n} bytes ({total} in all), starting {:02x?}",
+                    &buf[..n.min(8)]
+                );
+            }
+            Err(e) => {
+                println!("read: {e} after {total} bytes");
+                break;
+            }
+        }
+    }
+    println!("state (1B 03): {}", describe(protocol::state(&mut t)?));
+    Ok(())
+}
+
 /// The button names, in the order of the backend's capabilities.
 const BUTTONS: [&str; 4] = ["Start", "Scan to PDF", "Scan to E-mail", "Copy"];
 
@@ -326,6 +366,7 @@ fn show_plan(request: Request) {
 fn scan(
     request: Request,
     curves: Curves,
+    cancel_after: Option<usize>,
     out: &str,
     raw: Option<&std::path::Path>,
 ) -> Result<(), Error> {
@@ -341,6 +382,7 @@ fn scan(
     }
     let start = std::time::Instant::now();
     let mut shown = 0;
+    let mut blocks = 0;
     let s = epson_gt_x750::scan::scan_glass(
         &mut t,
         request,
@@ -351,6 +393,11 @@ fn scan(
         &mut |line| println!("  {:5.1} s  {line}", start.elapsed().as_secs_f64()),
         &mut |event| {
             if let epson_gt_x750::scan::Event::Reading { done, total } = event {
+                blocks += 1;
+                if cancel_after.is_some_and(|n| blocks >= n) {
+                    println!("  cancelling after {blocks} blocks");
+                    return false;
+                }
                 let tenth = done * 10 / total.max(1);
                 if tenth > shown {
                     shown = tenth;
@@ -364,10 +411,13 @@ fn scan(
             }
             true
         },
-    )?;
-    // Only after a scan that went through: a failed one may not have lit the lamp, and a
-    // warm-up too many costs only two minutes.
-    remember_lamp();
+    );
+    // After a scan that went through or was cancelled (the lamp lit either way): a failed one
+    // may not have lit it, and a warm-up too many costs only two minutes.
+    if matches!(&s, Ok(_) | Err(Error::Cancelled)) {
+        remember_lamp();
+    }
+    let s = s?;
     if let Some(path) = raw {
         std::fs::write(path, &s.raw)
             .map_err(|e| Error::Other(format!("{}: {e}", path.display())))?;

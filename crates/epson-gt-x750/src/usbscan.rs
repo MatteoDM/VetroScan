@@ -175,6 +175,9 @@ impl fmt::Debug for UsbscanTransport {
     }
 }
 
+/// How long opening waits for the STI lock that Windows does not give yet.
+const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
+
 impl UsbscanTransport {
     /// Opens `\\.\UsbscanN` (`location`, as [`list`] gives it), if it is
     /// the Epson 4490, and takes its STI lock; a lock another program holds
@@ -207,11 +210,28 @@ impl UsbscanTransport {
                 0,
             )
         };
-        let lock = StiLock::take(&path_of(n))?;
+        // Without the lock Windows' image service asks the scanner for its buttons between
+        // our commands and the answers mix: never used so. Right after the scanner is
+        // switched on (12 November 2026) the lock could not be had for a while: tried again.
+        let until = std::time::Instant::now() + LOCK_WAIT;
+        let lock = loop {
+            if let Some(lock) = StiLock::take(&path_of(n))? {
+                break lock;
+            }
+            if std::time::Instant::now() > until {
+                return Err(Error::Busy(format!(
+                    "Windows' image service did not let go of the Epson 4490 in {} s (switched \
+                     on a moment ago, or not answering): try again in a little while, or switch \
+                     it off and on",
+                    LOCK_WAIT.as_secs()
+                )));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        };
         Ok(Self {
             handle,
             index: n,
-            lock,
+            lock: Some(lock),
         })
     }
 

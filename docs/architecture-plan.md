@@ -1156,7 +1156,16 @@ native scan computes any area at 100, 200, 300, 400, 600, 1200 dpi (`scan.rs`), 
    a second), then `1B 03` while the carriage goes home (`58 81` for about 4 s), then `1E A1`.
    The scan does the same when stopped during the read, and stops without sending anything
    more during the warm-up or before the calibration (nothing has moved then); the guard lets
-   `1E 18` through during a scan. Not yet tried on the scanner.
+   `1E 18` through during a scan. **Tried on the scanner** (12 November, evening, after two
+   wrong first tries that left it stuck until switched off): after `1E 18` the scanner first
+   sends what its memory holds (262,176 and 301,101 bytes at 300 dpi, stopped after three
+   blocks), then `06`; the scan reads it all, a packet at a time, and leaves it out; the
+   carriage then went home in 4 s and the next scan ran normally. Found on the way: right
+   after the scanner is switched on Windows does not give the STI lock for a few seconds, and
+   a scan opened without it got the image service's `1E 85` between its own commands; opening
+   now waits for the lock up to 20 s and refuses without it. Left: an app closed half-way
+   through a scan leaves the scanner sending, stuck until switched off; opening it again could
+   read what is left (`epson4490 drain` reads it), to be looked at.
 6. **The lamp in the app**: `lamp_off` with `1E A2 00` (already sent in every calibration) and
    `LampInfo { warm_up, switches_off_after: about 15 minutes }` (capture 21), so the app offers
    its lamp choices. `DeviceStatus::lamp` stays `None`: `1E A1` says which lamp is selected, not
