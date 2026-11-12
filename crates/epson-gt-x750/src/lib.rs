@@ -49,7 +49,7 @@ use scanner_api::{
 };
 use std::fmt;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 /// Epson's USB vendor id.
 pub const VENDOR_ID: u16 = 0x04B8;
@@ -160,10 +160,12 @@ pub fn capabilities() -> Capabilities {
             product: PRODUCT_ID,
         }),
         glass_inches: GLASS_INCHES,
-        // Provisional: optical 4800 dpi across; which ones the native
-        // protocol takes is not known.
-        resolutions: vec![150, 300, 600, 1200, 2400, 4800],
-        modes: vec![ColourMode::Colour, ColourMode::Grey],
+        // The resolutions the guard lets out: every one captured on the glass, at 8 bits
+        // (WIA) and 16 (Epson Scan). 800, 900, 2400 and 4800 dpi are not (guard.rs).
+        resolutions: vec![100, 200, 300, 400, 600, 1200],
+        // The scanner always sends colour; grey and black and white are made by the
+        // application, as for the HP 3770.
+        modes: vec![ColourMode::Colour, ColourMode::Grey, ColourMode::Lineart],
         depths: vec![8, 16],
         // It has an adapter in its lid (slides, negatives, 6 x 12 cm), not
         // driven yet: not declared, so the application offers no films.
@@ -177,14 +179,53 @@ pub fn capabilities() -> Capabilities {
             button("copy", "Copy", SuggestedAction::Copy),
         ],
         lamp: None,
-        // Provisional: a plain gamma 2.2 up to full white, until measured.
+        // The scan gives linear samples (identity tables, `tables::Curves::Linear`); WIA's
+        // image is them through a gamma of 1/1.8 up to full white (measured 12 November
+        // 2026, 1.3 levels apart): the same here, until the tone is measured as the 3770's.
         tone: Tone {
             white: [255.0; 3],
             grey_white: 255.0,
-            gamma: 2.2,
+            gamma: 1.8,
         },
         stripes: Vec::new(),
         colour: Vec::new(),
+    }
+}
+
+/// A scan as the contract wants it: 8-bit linear RGB (the top byte of 16-bit samples), and
+/// the 16-bit samples when the scan read them.
+pub fn result_of(s: scan::Scanned, dpi: u16) -> ScanResult {
+    let im = s.image;
+    let (data, samples16) = if im.bits == 16 {
+        let deep: Vec<u16> = im
+            .data
+            .chunks_exact(2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]))
+            .collect();
+        (deep.iter().map(|&v| (v >> 8) as u8).collect(), Some(deep))
+    } else {
+        (im.data, None)
+    };
+    ScanResult {
+        image: scan_imaging::Image {
+            width: im.width as usize,
+            height: im.height as usize,
+            dpi,
+            format: scan_imaging::Format::Rgb,
+            data,
+        },
+        samples16,
+        details: vec![
+            (
+                "x origin correction (1E 87)".into(),
+                format!("{} / 4800 in", s.plan.x_correction.0),
+            ),
+            (
+                "columns read".into(),
+                format!("{}-{}", s.plan.columns.0, s.plan.columns.1),
+            ),
+            ("white calibration K".into(), format!("{:?}", s.shading.k)),
+        ],
     }
 }
 
@@ -283,6 +324,8 @@ pub struct Gt4490 {
     transport: guard::Guarded<Box<dyn Transport>>,
     caps: Capabilities,
     firmware: FirmwareOutcome,
+    /// When a scan of ours last ended: the lamp was lit then ([`scan::lamp_is_cold`]).
+    lamp_used: Option<SystemTime>,
 }
 
 impl Gt4490 {
@@ -298,6 +341,7 @@ impl Gt4490 {
             transport,
             caps: capabilities(),
             firmware,
+            lamp_used: None,
         })
     }
 
@@ -332,20 +376,66 @@ impl scanner_api::Scanner for Gt4490 {
                         }
                     },
                 ),
-                ("Backend".into(), "milestone 1: no scanning yet".into()),
+                (
+                    "Backend".into(),
+                    "glass scans computed from the request".into(),
+                ),
             ],
         })
     }
 
+    /// Scans the glass ([`scan::scan_glass`]): linear samples, 8 bits, and the 16-bit ones
+    /// too when asked. A cold lamp gets its two minutes first (`Progress::WarmingUp`).
     fn scan(
         &mut self,
         request: &ScanRequest,
-        _progress: &mut dyn FnMut(Progress) -> bool,
+        progress: &mut dyn FnMut(Progress) -> bool,
     ) -> Result<ScanResult> {
         scanner_api::check(&self.caps, request)?;
-        Err(Error::Other(
-            "scanning with the Epson Perfection 4490 is not implemented yet".into(),
-        ))
+        if request.source.is_film() {
+            return Err(Error::Unsupported("films on the Epson 4490"));
+        }
+        if !progress(Progress::Starting) {
+            return Err(Error::Cancelled);
+        }
+        let a = request.area;
+        let r = setup::Request::new(
+            u32::from(request.dpi),
+            a.x,
+            a.y,
+            a.width,
+            a.height,
+            request.depth,
+        );
+        let options = scan::Options {
+            last_used: self.lamp_used,
+            curves: tables::Curves::Linear,
+        };
+        let mut warming = false;
+        let scanned = scan::scan_glass(
+            &mut self.transport,
+            r,
+            options,
+            &mut |_| {},
+            &mut |event| match event {
+                scan::Event::WarmingUp { .. } if warming => true,
+                scan::Event::WarmingUp { .. } => {
+                    warming = true;
+                    progress(Progress::WarmingUp)
+                }
+                scan::Event::Calibrating => progress(Progress::Calibrating),
+                scan::Event::Reading { done, total } => {
+                    progress(Progress::Scanning { done, total })
+                }
+            },
+        );
+        // The lamp is lit once a scan got as far as switching it on: taken so, cancelled or not.
+        if matches!(&scanned, Ok(_) | Err(Error::Cancelled)) {
+            self.lamp_used = Some(SystemTime::now());
+        }
+        let s = scanned?;
+        progress(Progress::Finishing);
+        Ok(result_of(s, request.dpi))
     }
 
     /// The button pressed, as `1E 85` reads it: its number 1-4 is the
@@ -394,11 +484,69 @@ mod tests {
         Gt4490::start(Box::new(t), || panic!("no firmware needed")).unwrap()
     }
 
+    /// A scanner answering as WIA's capture 29 (300 dpi, 5 x 5 cm), after the `1B 03` of
+    /// the opening, its lamp just used.
+    fn follow_29() -> Gt4490 {
+        let (_, text) = setup::tests::CAPTURES
+            .iter()
+            .find(|(n, _)| *n == "29")
+            .unwrap();
+        let mut f = scan::tests::Follow::new("29", &format!("P 1b03 1881\n{text}"));
+        f.curves = tables::Curves::Linear;
+        let mut s = Gt4490::start(Box::new(f), || panic!("no firmware needed")).unwrap();
+        s.lamp_used = Some(SystemTime::now());
+        s
+    }
+
+    fn request_29() -> ScanRequest {
+        let (_, text) = setup::tests::CAPTURES
+            .iter()
+            .find(|(n, _)| *n == "29")
+            .unwrap();
+        let (r, _, _) = setup::tests::request_of(&setup::tests::parse(text));
+        ScanRequest {
+            dpi: r.dpi as u16,
+            source: Source::Glass,
+            area: Area {
+                x: r.x,
+                y: r.y,
+                width: r.width,
+                height: r.height,
+            },
+            depth: 8,
+        }
+    }
+
     #[test]
-    fn it_does_not_scan_yet_and_sends_nothing_for_it() {
+    fn the_application_scans_the_glass() {
+        let mut s = follow_29();
+        let mut seen = Vec::new();
+        let result = s
+            .scan(&request_29(), &mut |p| {
+                if !matches!(seen.last(), Some(Progress::Scanning { .. }))
+                    || !matches!(p, Progress::Scanning { .. })
+                {
+                    seen.push(p);
+                }
+                true
+            })
+            .unwrap();
+        assert_eq!((result.image.width, result.image.height), (591, 591));
+        assert_eq!(result.image.dpi, 300);
+        assert_eq!(result.image.data.len(), 591 * 591 * 3);
+        assert!(result.samples16.is_none());
+        assert!(result.details[0].1.contains("-93"), "{:?}", result.details);
+        // The lamp was used a moment ago: no warming up.
+        assert_eq!(seen[..2], [Progress::Starting, Progress::Calibrating]);
+        assert!(matches!(seen[2], Progress::Scanning { .. }));
+        assert_eq!(seen.last(), Some(&Progress::Finishing));
+    }
+
+    #[test]
+    fn what_the_guard_refuses_never_reaches_the_scanner() {
         let mut s = running();
-        let request = ScanRequest {
-            dpi: 300,
+        let mut request = ScanRequest {
+            dpi: 800,
             source: Source::Glass,
             area: Area {
                 x: 0,
@@ -408,8 +556,15 @@ mod tests {
             },
             depth: 8,
         };
-        let e = s.scan(&request, &mut |_| true).unwrap_err();
-        assert!(e.to_string().contains("not implemented yet"), "{e}");
+        // Not a resolution of the capabilities.
+        assert!(s.scan(&request, &mut |_| true).is_err());
+        // Films: no adapter declared.
+        request.dpi = 300;
+        request.source = Source::Negative;
+        assert!(s.scan(&request, &mut |_| true).is_err());
+        // Stopped before anything is sent.
+        request.source = Source::Glass;
+        assert_eq!(s.scan(&request, &mut |_| false), Err(Error::Cancelled));
         assert_eq!(s.lamp_off(), Err(Error::Unsupported("lamp_off")));
         // Only the 1B 03 of the opening went out (the mock would have
         // failed any read after).

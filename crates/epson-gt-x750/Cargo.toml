@@ -12,6 +12,7 @@ build = "build.rs"
 
 [dependencies]
 scanner-api.workspace = true
+scan-imaging.workspace = true
 nusb = "0.2"
 sha2 = "0.10"
 png = "0.18"

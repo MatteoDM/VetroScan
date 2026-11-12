@@ -17,11 +17,20 @@ GitHub; here they are in English.
 
 ## [Unreleased]
 
+### Added
+- **VetroScan scans the glass of the Epson Perfection 4490 Photo**, with its own driver: 100,
+  200, 300, 400, 600 and 1200 dpi, 8 or 16 bits, colour (grey and black and white made by
+  VetroScan), any area of the glass. Every command is computed from the area asked and kept
+  within what the captures of Epson's own drivers showed the scanner doing; the image comes out
+  as Epson's driver's. After the scanner has been idle for a quarter of an hour, or just switched
+  on, its lamp is given two minutes to warm up first. 1200 dpi needs one scan with Epson's
+  driver after each switch-on, for now. No films yet.
+
 ### Changed
 - VetroScan sends the Epson Perfection 4490 Photo its firmware when it opens the scanner and
   the firmware is not running (on Linux and macOS, where no Epson driver sends it at
   switch-on): a capture of Epson's driver showed the same bytes. `VETROSCAN_EPSON_UPLOAD` is no longer needed, and
-  no longer read. It still does not scan.
+  no longer read.
 - The Epson Perfection 4490's four buttons (Start, Scan to PDF, Scan to E-mail, Copy) reach
   VetroScan. On Windows with Epson's driver, VetroScan takes the scanner for itself while it has
   it open, so Windows stops asking it for its buttons in between: Epson Scan cannot use the

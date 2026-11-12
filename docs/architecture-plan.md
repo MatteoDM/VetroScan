@@ -1144,14 +1144,19 @@ native scan computes any area at 100, 200, 300, 400, 600, 1200 dpi (`scan.rs`), 
    from the 16 bits of step 8, which the app already turns into its tone at 12 bits
    (`tables_fine16`). Tried the same evening at 600 dpi, 16 bits, linear tables: true 16-bit
    samples, 771 different values in the band where 8 bits had 4.
-4. **`Gt4490::scan`** on `scan::scan_glass`: `ScanRequest` (area in pixels at its dpi) to
-   `setup::Request`; the `Capabilities` made the guard's (resolutions 100, 200, 300, 400, 600,
-   1200; depths 8 only until step 8; modes colour, grey and line art, the last two made by the
-   app as for the 3770: the scanner always sends RGB); the progress (`Starting`, `WarmingUp`,
-   `Calibrating`, `Scanning` in bytes, `Finishing`); `details` with the x correction and K.
-5. **Cancelling**: the contract's `progress` returning `false`. Epson's driver stops reading and
-   polls `1B 03` until `18 81` (capture 11: nothing else seen so far, to be looked at again): the
-   same, then a test that a following scan works.
+4. **`Gt4490::scan`** on `scan::scan_glass`. **Done** (12 November): the `Capabilities` are
+   the guard's (100, 200, 300, 400, 600, 1200 dpi; 8 and 16 bits; colour, grey and line art,
+   the last two made by the app; `Tone { white: 255, gamma: 1.8 }`); identity tables (linear
+   samples), 8-bit with the 16-bit `samples16` when asked (the top byte, as the 3770); the
+   progress (`Starting`, `WarmingUp` once, `Calibrating`, `Scanning` in bytes, `Finishing`);
+   the lamp's last use kept by the open scanner; `details` with the x correction, the columns
+   and K. A test runs the app's scan against capture 29, write by write.
+5. **Cancelling**: the contract's `progress` returning `false`. **Done**: Epson's driver does
+   not just stop reading (as first thought): capture 11 shows `1E 18` (answered `06` after about
+   a second), then `1B 03` while the carriage goes home (`58 81` for about 4 s), then `1E A1`.
+   The scan does the same when stopped during the read, and stops without sending anything
+   more during the warm-up or before the calibration (nothing has moved then); the guard lets
+   `1E 18` through during a scan. Not yet tried on the scanner.
 6. **The lamp in the app**: `lamp_off` with `1E A2 00` (already sent in every calibration) and
    `LampInfo { warm_up, switches_off_after: about 15 minutes }` (capture 21), so the app offers
    its lamp choices. `DeviceStatus::lamp` stays `None`: `1E A1` says which lamp is selected, not

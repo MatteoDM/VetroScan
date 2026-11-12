@@ -349,15 +349,20 @@ fn scan(
             curves,
         },
         &mut |line| println!("  {:5.1} s  {line}", start.elapsed().as_secs_f64()),
-        &mut |done, all| {
-            let tenth = done * 10 / all.max(1);
-            if tenth > shown {
-                shown = tenth;
-                println!(
-                    "  {:5.1} s  {done} of {all} lines",
-                    start.elapsed().as_secs_f64()
-                );
+        &mut |event| {
+            if let epson_gt_x750::scan::Event::Reading { done, total } = event {
+                let tenth = done * 10 / total.max(1);
+                if tenth > shown {
+                    shown = tenth;
+                    println!(
+                        "  {:5.1} s  {} of {} MB",
+                        start.elapsed().as_secs_f64(),
+                        done / 1_000_000,
+                        total / 1_000_000
+                    );
+                }
             }
+            true
         },
     )?;
     // Only after a scan that went through: a failed one may not have lit the lamp, and a

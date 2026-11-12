@@ -352,6 +352,8 @@ impl<T: Transport> Guarded<T> {
             }
             [0x1E, 0x05] if p.start_move.is_some() => None,
             [0x1E, 0x47] => None,
+            // Stops the read (capture 11).
+            [0x1E, 0x18] => None,
             _ => return Err(refusal(data, "not in the scan's plan")),
         };
         idle(next)

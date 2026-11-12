@@ -1051,6 +1051,7 @@ version = "0.7.0"
 dependencies = [
  "nusb",
  "png",
+ "scan-imaging",
  "scanner-api",
  "sha2",
  "windows-sys 0.61.2",

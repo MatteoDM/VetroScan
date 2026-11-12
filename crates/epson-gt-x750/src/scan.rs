@@ -33,6 +33,8 @@ pub const IDENTITY: &[u8; 28] = b"EPSON   GT-X750         1.27";
 /// `1E 83`'s header at 1200 dpi: reads 600 bytes at `7ff9a0` (captures 33,
 /// 37), what Epson's driver does when `1E 8B` answers `06`.
 pub const READ_83: [u8; 8] = [0x07, 0xA0, 0xF9, 0x7F, 0x00, 0x58, 0x02, 0x00];
+/// Stops a scan under way (capture 11).
+pub const CANCEL: [u8; 2] = [0x1E, 0x18];
 /// The longest single read asked of the transport.
 const READ_CHUNK: usize = 65_536;
 /// How long the scanner may stay busy.
@@ -234,14 +236,16 @@ fn setup_read(
 }
 
 /// `1E 47` and the read of `lines` lines of `line` bytes in blocks of `per`
-/// lines, each with its trailer; the data without the trailers.
+/// lines, each with its trailer; the data without the trailers. After each
+/// block `on_block` hears the bytes read and their total: `false` stops the
+/// read there (none).
 fn read_lines(
     t: &mut dyn Transport,
     lines: u32,
     per: u32,
     line: u32,
-    progress: &mut dyn FnMut(u32, u32),
-) -> Result<Vec<u8>> {
+    on_block: &mut dyn FnMut(usize, usize) -> bool,
+) -> Result<Option<Vec<u8>>> {
     t.bulk_out(&[0x1E, 0x47])?;
     let mut data = Vec::with_capacity((lines * line) as usize);
     let mut left = lines;
@@ -258,9 +262,27 @@ fn read_lines(
         }
         data.extend(b);
         left -= k;
-        progress(lines - left, lines);
+        if !on_block(data.len(), (lines * line) as usize) {
+            return Ok(None);
+        }
     }
-    Ok(data)
+    Ok(Some(data))
+}
+
+/// A calibration read: never stopped.
+fn read_all(t: &mut dyn Transport, lines: u32, per: u32, line: u32) -> Result<Vec<u8>> {
+    Ok(read_lines(t, lines, per, line, &mut |_, _| true)?.expect("never stopped"))
+}
+
+/// Stops a read under way as Epson's driver does (capture 11, a scan cancelled half-way):
+/// no more data read, `1E 18` (answered `06` after about a second), then `1B 03` polled while
+/// the carriage goes home, and `1E A1`.
+fn cancel(t: &mut dyn Transport, log: &mut dyn FnMut(String)) -> Result<()> {
+    command(t, CANCEL)?;
+    wait_ready(t, log)?;
+    lamp_is_the_glass(t)?;
+    log("cancelled (1E 18): the carriage went home".into());
+    Ok(())
 }
 
 /// Realigns the colours (green `offset` lines below blue, red twice) and crops
@@ -298,8 +320,14 @@ pub fn lamp_is_cold(warming_seen: bool, last_used: Option<SystemTime>, now: Syst
     warming_seen || idle.is_none_or(|idle| idle >= LAMP_OFF_AFTER)
 }
 
-/// Waits until [`WARM_UP`] after `lit`, polling `1B 03` every second.
-fn warm_up(t: &mut dyn Transport, lit: Instant, log: &mut dyn FnMut(String)) -> Result<()> {
+/// Waits until [`WARM_UP`] after `lit`, polling `1B 03` every second. `events` may stop it:
+/// nothing has moved yet.
+fn warm_up(
+    t: &mut dyn Transport,
+    lit: Instant,
+    log: &mut dyn FnMut(String),
+    events: &mut dyn FnMut(Event) -> bool,
+) -> Result<()> {
     let until = lit + WARM_UP;
     let mut said = None;
     while Instant::now() < until {
@@ -307,6 +335,9 @@ fn warm_up(t: &mut dyn Transport, lit: Instant, log: &mut dyn FnMut(String)) -> 
         if said.is_none_or(|s: u64| s >= left + 30) {
             log(format!("the lamp was off: warming up, {left} s left"));
             said = Some(left);
+        }
+        if !events(Event::WarmingUp { left }) {
+            return Err(Error::Cancelled);
         }
         ask(t, GET_STATE, 2)?;
         std::thread::sleep(
@@ -326,17 +357,29 @@ pub struct Options {
     pub curves: Curves,
 }
 
-/// Scans `request` on the glass. `log` gets a line for each phase, `progress` the image
-/// lines read and their total.
+/// Where a scan is, for whoever shows it; the answer `false` stops it where that is safe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Event {
+    /// A cold lamp being given its time, seconds left (stopping: nothing moved yet).
+    WarmingUp { left: u64 },
+    /// The calibration starts (stopping: nothing moved yet).
+    Calibrating,
+    /// Image data, bytes read so far and their total (stopping: `1E 18`, as Epson's driver).
+    Reading { done: usize, total: usize },
+}
+
+/// Scans `request` on the glass. `log` gets a line for each phase, `events` where the scan
+/// is; when `events` answers `false` the scan stops at the next safe place and ends with
+/// [`Error::Cancelled`].
 pub fn scan_glass<T: Transport>(
     g: &mut Guarded<T>,
     request: Request,
     options: Options,
     log: &mut dyn FnMut(String),
-    progress: &mut dyn FnMut(u32, u32),
+    events: &mut dyn FnMut(Event) -> bool,
 ) -> Result<Scanned> {
     g.permit_request(&request)?;
-    let result = run(g, request, options, log, progress);
+    let result = run(g, request, options, log, events);
     g.end_scan();
     result
 }
@@ -346,7 +389,7 @@ fn run<T: Transport>(
     request: Request,
     options: Options,
     log: &mut dyn FnMut(String),
-    progress: &mut dyn FnMut(u32, u32),
+    events: &mut dyn FnMut(Event) -> bool,
 ) -> Result<Scanned> {
     let Options { last_used, curves } = options;
     let e57 = setup::request_block(&request)?;
@@ -392,7 +435,7 @@ fn run<T: Transport>(
     let warming = warming.or(wait_ready(g, log)?);
     if lamp_is_cold(warming.is_some(), last_used, SystemTime::now()) {
         // Lit when the scanner was switched on (flagged warming) or just now.
-        warm_up(g, warming.unwrap_or(lit).min(lit), log)?;
+        warm_up(g, warming.unwrap_or(lit).min(lit), log, events)?;
     }
 
     // The x origin's correction, stored in the scanner; then the plan.
@@ -428,6 +471,9 @@ fn run<T: Transport>(
     ask(g, [0x1E, 0x8C], 1)?;
 
     // The sensor's black pixels: 4 lines, still.
+    if !events(Event::Calibrating) {
+        return Err(Error::Cancelled);
+    }
     let zeros = [0u8; 18];
     setup_read(
         g,
@@ -440,7 +486,7 @@ fn run<T: Transport>(
     )?;
     wait_ready(g, log)?;
     let black_cols = p.black_column_count();
-    let black = read_lines(g, 4, 4, black_cols * 6, &mut |_, _| {})?;
+    let black = read_all(g, 4, 4, black_cols * 6)?;
     let e42_black = black_block(&black);
 
     // The white strip: 16 lines at 16 bits, the carriage moving 160 steps.
@@ -458,7 +504,7 @@ fn run<T: Transport>(
     send(g, [0x1E, 0x01], &p.move_cal)?;
     wait_ready(g, log)?;
     let cols = p.column_count();
-    let white = read_lines(g, 16, 16, cols * 6, &mut |_, _| {})?;
+    let white = read_all(g, 16, 16, cols * 6)?;
 
     // The lamp off, the dark, still.
     wait_ready(g, log)?;
@@ -473,7 +519,7 @@ fn run<T: Transport>(
         &setup::GAIN_CAL,
     )?;
     wait_ready(g, log)?;
-    let dark = read_lines(g, 16, 16, cols * 6, &mut |_, _| {})?;
+    let dark = read_all(g, 16, 16, cols * 6)?;
     wait_ready(g, log)?;
     send(g, [0x1E, 0xA2], &[0x01])?;
     log("calibration read: black pixels, white, dark; lamp on again".into());
@@ -548,7 +594,17 @@ fn run<T: Transport>(
     send(g, [0x1E, 0x01], &p.move_data)?;
     wait_ready(g, log)?;
     log(format!("reading {} lines", p.lines));
-    let raw = read_lines(g, p.lines, p.lines_per_block, p.bytes_per_line, progress)?;
+    let raw = read_lines(
+        g,
+        p.lines,
+        p.lines_per_block,
+        p.bytes_per_line,
+        &mut |done, total| events(Event::Reading { done, total }),
+    )?;
+    let Some(raw) = raw else {
+        cancel(g, log)?;
+        return Err(Error::Cancelled);
+    };
     wait_ready(g, log)?;
     lamp_is_the_glass(g)?;
     let image = assemble(&raw, &p);
@@ -561,7 +617,7 @@ fn run<T: Transport>(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::setup::tests::{parse, request_of, Line, CAPTURES};
     use std::collections::VecDeque;
@@ -569,17 +625,19 @@ mod tests {
     /// A scanner that answers as in a capture and checks every write against
     /// Epson's driver's, in order.
     #[derive(Debug)]
-    struct Follow {
+    pub(crate) struct Follow {
         name: &'static str,
-        lines: Vec<Line>,
-        at: usize,
+        pub(crate) lines: Vec<Line>,
+        pub(crate) at: usize,
         answer: VecDeque<u8>,
         last_cmd: [u8; 2],
-        writes: usize,
+        pub(crate) writes: usize,
+        /// The tables the scan is expected to load where the capture loaded WIA's.
+        pub(crate) curves: Curves,
     }
 
     impl Follow {
-        fn new(name: &'static str, text: &str) -> Self {
+        pub(crate) fn new(name: &'static str, text: &str) -> Self {
             Self {
                 name,
                 lines: parse(text),
@@ -587,6 +645,7 @@ mod tests {
                 answer: VecDeque::new(),
                 last_cmd: [0; 2],
                 writes: 0,
+                curves: Curves::Wia,
             }
         }
 
@@ -625,8 +684,8 @@ mod tests {
                     want == got
                 }
                 Some(Line::W(_, Some(tag))) => match tag.split(' ').collect::<Vec<_>>()[..] {
-                    ["gamma"] => data == tables::gamma(),
-                    ["tone"] => data == tables::TONE,
+                    ["gamma"] => data == self.curves.gamma(),
+                    ["tone"] => data == self.curves.tone(),
                     ["shading", n] => data.len() == n.parse::<usize>().unwrap(),
                     ["42", _] => data.len() == 18,
                     _ => false,
@@ -674,7 +733,7 @@ mod tests {
                 curves: Curves::Wia,
             },
             &mut |_| {},
-            &mut |_, _| {},
+            &mut |_| true,
         );
         let f = g.inner();
         let r = r.and_then(|s| match f.lines.len() - f.at {
@@ -743,6 +802,89 @@ mod tests {
             Some(now + Duration::from_secs(60)),
             now
         ));
+    }
+
+    /// A capture's scanner until `1E 18`, then the scanner of capture 11 after it: `06`,
+    /// the state at rest, the glass's lamp.
+    #[derive(Debug)]
+    struct Cancelling {
+        follow: Follow,
+        after: Vec<Vec<u8>>,
+        answers: VecDeque<u8>,
+    }
+
+    impl Transport for Cancelling {
+        fn bulk_out(&mut self, data: &[u8]) -> Result<()> {
+            if self.after.is_empty() && data != CANCEL {
+                return self.follow.bulk_out(data);
+            }
+            self.after.push(data.to_vec());
+            self.answers.extend(match data {
+                [0x1E, 0x18] => &[ACK][..],
+                [0x1B, 0x03] => &[0x18, 0x81][..],
+                [0x1E, 0xA1] => &[0x01][..],
+                _ => return Err(Error::Other(format!("after 1E 18: {data:02x?}"))),
+            });
+            Ok(())
+        }
+
+        fn bulk_in(&mut self, buf: &mut [u8]) -> Result<usize> {
+            if self.after.is_empty() {
+                return self.follow.bulk_in(buf);
+            }
+            let n = buf.len().min(self.answers.len());
+            for (b, a) in buf.iter_mut().zip(self.answers.drain(..n)) {
+                *b = a;
+            }
+            Ok(n)
+        }
+    }
+
+    /// Stopped during the read: `1E 18`, the state until the carriage is home, `1E A1`, as
+    /// Epson's driver (capture 11); stopped before the calibration: nothing more sent.
+    #[test]
+    fn a_scan_is_cancelled_as_epsons_driver_does() {
+        let (_, text) = CAPTURES.iter().find(|(n, _)| *n == "29").unwrap();
+        let (request, _, _) = request_of(&parse(text));
+        let mut g = Guarded::new(Cancelling {
+            follow: Follow::new("29", text),
+            after: Vec::new(),
+            answers: VecDeque::new(),
+        });
+        let options = Options {
+            last_used: Some(SystemTime::now()),
+            curves: Curves::Wia,
+        };
+        let mut blocks = 0;
+        let r = scan_glass(&mut g, request, options, &mut |_| {}, &mut |e| match e {
+            Event::Reading { .. } => {
+                blocks += 1;
+                blocks < 3
+            }
+            _ => true,
+        });
+        assert_eq!(r.unwrap_err(), Error::Cancelled);
+        assert_eq!(blocks, 3);
+        assert_eq!(
+            g.inner().after,
+            [CANCEL.to_vec(), GET_STATE.to_vec(), vec![0x1E, 0xA1]]
+        );
+        // The guard is back to what moves nothing.
+        assert!(g.bulk_out(&[0x1E, 0x47]).is_err());
+
+        let mut g = Guarded::new(Follow::new("29", text));
+        let r = scan_glass(&mut g, request, options, &mut |_| {}, &mut |e| {
+            e != Event::Calibrating
+        });
+        assert_eq!(r.unwrap_err(), Error::Cancelled);
+        // The last write was 1E 8C's, before the calibration's set-up.
+        let lines = &g.inner().lines;
+        let at = g.inner().at;
+        assert!(
+            matches!(&lines[at - 2], Line::W(b, None) if b == &[0x1E, 0x8C]),
+            "{:?}",
+            &lines[at - 3..at]
+        );
     }
 
     #[test]
