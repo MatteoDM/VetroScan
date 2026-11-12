@@ -1140,9 +1140,11 @@ native scan computes any area at 100, 200, 300, 400, 600, 1200 dpi (`scan.rs`), 
    while `1E B3` does not act on 8-bit colour; so `Tone { gamma: 1.8 }` on the linear samples
    gives WIA's image back (1.7 levels apart). The price at 8 bits: the darkest shadows get 5
    levels where WIA's curve had 24 (the step about twice the noise there), as on the HP 3770;
-   16-bit samples avoid it. **Matteo's choice**: linear at 8 bits like the 3770 (the contract
-   as it is; the 16 bits of step 8 for the shadows), or WIA's curve kept in the scanner, which
-   needs a new field in the contract (samples already gamma-encoded) and its branch in the app.
+   16-bit samples avoid it. **Decided** (Matteo, 12 November): linear, as the 3770 (the contract
+   as it is, `Tone { white: 255, gamma: 1.8 }` until the tone is measured), and the shadows
+   from the 16 bits of step 8, which the app already turns into its tone at 12 bits
+   (`tables_fine16`). Tried the same evening at 600 dpi, 16 bits, linear tables: true 16-bit
+   samples, 771 different values in the band where 8 bits had 4.
 4. **`Gt4490::scan`** on `scan::scan_glass`: `ScanRequest` (area in pixels at its dpi) to
    `setup::Request`; the `Capabilities` made the guard's (resolutions 100, 200, 300, 400, 600,
    1200; depths 8 only until step 8; modes colour, grey and line art, the last two made by the
