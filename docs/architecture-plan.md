@@ -1115,6 +1115,12 @@ native scan computes any area at 100, 200, 300, 400, 600, 1200 dpi (`scan.rs`), 
    `LAMP_OFF_AFTER`, `lamp_is_cold`); `1B 03` polled every second meanwhile. The command keeps
    the time of its last scan in the temporary folder. Still to come with step 4:
    `Progress::WarmingUp` and `LampInfo::warm_up` in the app.
+   Tried the same evening, 17 minutes after the series: `1B 03` showed the lamp warming at the
+   opening (`1B 40` lights it again), the scan waited its two minutes and came out as a WIA scan
+   made right after (offset 0/0, means within 0.2, WIA = 0.995-0.998 × ours + 0.1-0.3). The
+   x origin's correction from `1E 87` was −150 that evening and −93 in every capture and scan
+   before: it **changes from one power-on to the next**, and with −150 the geometry matched
+   WIA's, so reading it at every scan is what makes it right.
 2. **The glass's height**: the app's preview of the whole glass at 200 dpi (2,340 lines of
    11.7 in) would end at step 29,603, past the furthest captured (29,587, capture 07): the guard
    refuses it. Decided: declare the glass 297 mm (11.69 in, A4's length, what WIA scanned) in
