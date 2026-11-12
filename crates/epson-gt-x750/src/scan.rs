@@ -132,11 +132,25 @@ fn ramp_bytes(r: &[u16]) -> Vec<u8> {
 
 /// Polls `1B 03` until the scanner is idle with its lamp warm (`18 81` at rest
 /// in every capture; `0x40` moving, `0x02` busy, `0x01` the lamp warming).
-fn wait_ready(t: &mut dyn Transport) -> Result<()> {
-    let until = Instant::now() + WAIT;
+/// A wait longer than one poll goes to `log`, with the states seen.
+fn wait_ready(t: &mut dyn Transport, log: &mut dyn FnMut(String)) -> Result<()> {
+    let start = Instant::now();
+    let until = start + WAIT;
+    let mut seen: Vec<(f64, [u8; 2])> = Vec::new();
     loop {
         let s = State(read_two(ask(t, GET_STATE, 2)?));
+        let at = start.elapsed().as_secs_f64();
+        if seen.last().is_none_or(|(_, last)| *last != s.0) {
+            seen.push((at, s.0));
+        }
         if s.firmware_running() && s.0[0] & 0x43 == 0 {
+            if seen.len() > 1 {
+                let states: Vec<String> = seen
+                    .iter()
+                    .map(|(t, s)| format!("{:02X} {:02X} at {t:.2} s", s[0], s[1]))
+                    .collect();
+                log(format!("1B 03: waited {at:.2} s: {}", states.join(", ")));
+            }
             return Ok(());
         }
         if Instant::now() > until {
@@ -283,12 +297,12 @@ fn run<T: Transport>(
 ) -> Result<Scanned> {
     let e57 = setup::request_block(&request)?;
     // The opening, as WIA's driver does it.
-    wait_ready(g)?;
+    wait_ready(g, log)?;
     ask(g, [0x1E, 0x53], 42)?;
-    wait_ready(g)?;
+    wait_ready(g, log)?;
     command(g, [0x1B, 0x40])?;
     ask(g, [0x1E, 0x53], 42)?;
-    wait_ready(g)?;
+    wait_ready(g, log)?;
     let id = ask(g, [0x1B, 0x13], IDENTITY.len())?;
     if id != IDENTITY {
         return Err(other(format!(
@@ -298,13 +312,13 @@ fn run<T: Transport>(
         )));
     }
     for _ in 0..2 {
-        wait_ready(g)?;
+        wait_ready(g, log)?;
         lamp_is_the_glass(g)?;
     }
-    wait_ready(g)?;
+    wait_ready(g, log)?;
     command(g, [0x1B, 0x40])?;
     ask(g, [0x1E, 0x53], 42)?;
-    wait_ready(g)?;
+    wait_ready(g, log)?;
     lamp_is_the_glass(g)?;
     let gamma = tables::gamma();
     for channel in 0..3u8 {
@@ -312,15 +326,15 @@ fn run<T: Transport>(
         g.bulk_out(&[channel])?;
         g.bulk_out(&gamma)?;
     }
-    wait_ready(g)?;
+    wait_ready(g, log)?;
     lamp_is_the_glass(g)?;
     ask(g, [0x1E, 0x53], 42)?;
     send(g, [0x1E, 0x57], &e57)?;
-    wait_ready(g)?;
+    wait_ready(g, log)?;
     lamp_is_the_glass(g)?;
     send(g, [0x1E, 0xA2], &[0x01])?;
     log("lamp on (1E A2 01)".into());
-    wait_ready(g)?;
+    wait_ready(g, log)?;
 
     // The x origin's correction, stored in the scanner; then the plan.
     command(g, [0x1E, 0x87])?;
@@ -365,13 +379,13 @@ fn run<T: Transport>(
         &zeros,
         &setup::GAIN_CAL,
     )?;
-    wait_ready(g)?;
+    wait_ready(g, log)?;
     let black_cols = p.black_column_count();
     let black = read_lines(g, 4, 4, black_cols * 6, &mut |_, _| {})?;
     let e42_black = black_block(&black);
 
     // The white strip: 16 lines at 16 bits, the carriage moving 160 steps.
-    wait_ready(g)?;
+    wait_ready(g, log)?;
     setup_read(
         g,
         &p,
@@ -383,12 +397,12 @@ fn run<T: Transport>(
     )?;
     table(g, &setup::ramp_header(1), &ramp_bytes(&p.ramp_cal))?;
     send(g, [0x1E, 0x01], &p.move_cal)?;
-    wait_ready(g)?;
+    wait_ready(g, log)?;
     let cols = p.column_count();
     let white = read_lines(g, 16, 16, cols * 6, &mut |_, _| {})?;
 
     // The lamp off, the dark, still.
-    wait_ready(g)?;
+    wait_ready(g, log)?;
     send(g, [0x1E, 0xA2], &[0x00])?;
     setup_read(
         g,
@@ -399,9 +413,9 @@ fn run<T: Transport>(
         &zeros,
         &setup::GAIN_CAL,
     )?;
-    wait_ready(g)?;
+    wait_ready(g, log)?;
     let dark = read_lines(g, 16, 16, cols * 6, &mut |_, _| {})?;
-    wait_ready(g)?;
+    wait_ready(g, log)?;
     send(g, [0x1E, 0xA2], &[0x01])?;
     log("calibration read: black pixels, white, dark; lamp on again".into());
 
@@ -417,7 +431,7 @@ fn run<T: Transport>(
                 a[0]
             )));
         }
-        wait_ready(g)?;
+        wait_ready(g, log)?;
         command(g, [0x1E, 0x83])?;
         g.bulk_out(&READ_83)?;
         read_exact(g, 600, "1E 83")?;
@@ -439,7 +453,7 @@ fn run<T: Transport>(
         table(g, &setup::ramp_header(m.ramp.len()), &ramp_bytes(&m.ramp))?;
         send(g, [0x1E, 0x01], &m.block)?;
         command(g, [0x1E, 0x05])?;
-        wait_ready(g)?;
+        wait_ready(g, log)?;
     }
 
     // The image.
@@ -472,10 +486,10 @@ fn run<T: Transport>(
         &ramp_bytes(&p.ramp_data),
     )?;
     send(g, [0x1E, 0x01], &p.move_data)?;
-    wait_ready(g)?;
+    wait_ready(g, log)?;
     log(format!("reading {} lines", p.lines));
     let raw = read_lines(g, p.lines, p.lines_per_block, p.bytes_per_line, progress)?;
-    wait_ready(g)?;
+    wait_ready(g, log)?;
     lamp_is_the_glass(g)?;
     let image = assemble(&raw, &p);
     Ok(Scanned {
