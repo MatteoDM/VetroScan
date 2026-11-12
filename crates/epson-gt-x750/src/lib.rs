@@ -34,6 +34,7 @@ pub mod setup;
 pub mod shading;
 #[cfg(windows)]
 mod sti;
+pub mod table07;
 pub mod tables;
 #[cfg(windows)]
 mod usbscan;

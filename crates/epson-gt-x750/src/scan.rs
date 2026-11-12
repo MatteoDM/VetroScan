@@ -23,6 +23,7 @@ use crate::guard::Guarded;
 use crate::protocol::{State, ACK, GET_STATE};
 use crate::setup::{self, Plan, Request, XCorrection, TRAILER_LEN};
 use crate::shading::{black_block, Shading};
+use crate::table07;
 use crate::tables::{self, Curves};
 use crate::Transport;
 use scanner_api::{Error, Result};
@@ -599,21 +600,33 @@ fn run<T: Transport>(
     log("calibration read: black pixels, white, dark; lamp on again".into());
 
     if p.base == 2400 {
-        // 06: the scanner holds what Epson's driver would otherwise compute and load
-        // (1E 84 type 07, seen once, capture 05); then it reads 600 bytes back.
+        // 1E 8B: 06, the scanner holds its 1200 dpi table (it keeps it until switched off),
+        // read back as Epson's driver does (captures 33, 37); 15, it does not: computed
+        // from a raw line of the sensor and loaded (captures 05, 42; `table07`).
         let a = ask(g, [0x1E, 0x8B], 1)?;
-        if a[0] != ACK {
-            return Err(other(format!(
-                "1E 8B answered {:02X}: the scanner wants the 1200 dpi table Epson's driver \
-                 computes (not known yet); a 1200 dpi scan with Epson's driver loads it until \
-                 the scanner is switched off",
-                a[0]
-            )));
-        }
         wait_ready(g, log)?;
-        command(g, [0x1E, 0x83])?;
-        g.bulk_out(&READ_83)?;
-        read_exact(g, 600, "1E 83")?;
+        match a[0] {
+            ACK => {
+                command(g, [0x1E, 0x83])?;
+                g.bulk_out(&READ_83)?;
+                read_exact(g, 600, "1E 83")?;
+            }
+            0x15 => {
+                command(g, [0x1E, 0x83])?;
+                g.bulk_out(&table07::READ_RAW)?;
+                let raw = read_exact(g, table07::RAW_LEN, "1E 83 (the raw line)")?;
+                command(g, [0x1E, 0x87])?;
+                g.bulk_out(&[0x00])?;
+                let xc = XCorrection::from_1e87(&read_exact(g, 10, "1E 87")?)?;
+                table(g, &table07::HEADER, &table07::compute(&raw, xc))?;
+                log("1E 8B answered 15: the 1200 dpi table computed and loaded".into());
+            }
+            other_ => {
+                return Err(other(format!(
+                    "1E 8B answered {other_:02X}, neither 06 nor 15"
+                )))
+            }
+        }
     }
     let at = ask(g, [0x1E, 0x86], 4)?;
     let at = u16::from_le_bytes([at[0], at[1]]);
@@ -694,6 +707,7 @@ fn run<T: Transport>(
 pub(crate) mod tests {
     use super::*;
     use crate::setup::tests::{parse, request_of, Line, CAPTURES};
+    use crate::table07;
     use std::collections::VecDeque;
 
     /// A scanner that answers as in a capture and checks every write against
@@ -843,22 +857,39 @@ pub(crate) mod tests {
         }
     }
 
-    /// At 1200 dpi, a scanner without the table Epson's driver computes (`1E 8B`
-    /// answering `15`, capture 05) stops the scan before the tone tables and the
-    /// start move.
+    /// At 1200 dpi, a scanner without its table (`1E 8B` answering `15`, capture 05): the
+    /// raw line read, `1E 87`, the table computed and written as Epson's driver wrote it,
+    /// then the scan as captured.
     #[test]
-    fn without_the_1200_dpi_table_the_scan_stops() {
+    fn without_its_1200_dpi_table_the_scanner_gets_it_computed() {
         let (_, text) = CAPTURES.iter().find(|(n, _)| *n == "05").unwrap();
-        let (r, at, _) = scan("05", text);
-        let e = r.unwrap_err().to_string();
-        assert!(e.contains("1E 8B answered 15"), "{e}");
-        let lines = parse(text);
-        let i8b = lines
-            .iter()
-            .position(|l| matches!(l, Line::W(b, None) if b == &[0x1E, 0x8B]))
-            .unwrap();
-        // 1E 8B and its answer, nothing after.
-        assert_eq!(at, i8b + 2);
+        let raw = include_bytes!("../testdata/05_1e83_7c3d60.bin");
+        assert_eq!(raw.len(), table07::RAW_LEN);
+        let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+        // The raw line's reads, from after its header up to 1E 87, become one answer.
+        let mut out = Vec::new();
+        let mut skipping = false;
+        for line in text.lines() {
+            if skipping && line == "W 1e87" {
+                out.push(format!("R {hex}"));
+                skipping = false;
+            }
+            if !skipping {
+                out.push(line.to_string());
+            }
+            if line == "W 07603d7c0040bc03" {
+                skipping = true;
+            }
+        }
+        let text = out.join(
+            "
+",
+        );
+        let text: &'static str = Box::leak(text.into_boxed_str());
+        let (r, _, writes) = scan("05", text);
+        let s = r.unwrap_or_else(|e| panic!("{e}"));
+        assert!(writes > 100);
+        assert_eq!((s.image.width, s.image.height), (945, 945));
     }
 
     #[test]

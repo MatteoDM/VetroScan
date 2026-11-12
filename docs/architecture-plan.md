@@ -1197,10 +1197,16 @@ native scan computes any area at 100, 200, 300, 400, 600, 1200 dpi (`scan.rs`), 
    does it by itself**, Epson's driver sends nothing but `1B 03` after the read starts (capture
    42, 250 s of reading); it only needs reading on. Not yet run by the native scan at 16 bits
    but at 600 dpi.
-9. **1200 dpi after every power-on**: the scanner answers `1E 8B` with `15` until Epson's driver
-   has loaded a 600-byte table (`1E 84` type 07) it computes from 245,824 bytes it reads with
-   `1E 83` (capture 05 has both). Decode the computation from capture 05 and a second capture of
-   a 1200 dpi scan right after power-on; until then the scan stops before anything moves.
+9. **1200 dpi after every power-on**: the scanner answers `1E 8B` with `15` until a 600-byte
+   table (`1E 84` type 07) is loaded, which Epson's driver computes from a raw line it reads
+   with `1E 83`. **Done** (12 November, evening; `table07.rs`, `captures/epson4490/05-catture.md`,
+   "La tabella dei 1200 dpi"): read in the interpreter (`0x40f4f0`): 244,800 bytes of 16-bit
+   big-endian samples, six interleaved (two rows of the sensor); per colour, the elements rising
+   1260 or more above their neighbours, then the 41 highest of the rest, after a header (the
+   length, then 4000, 19900, 35800 less `1E 87`'s correction); three lists of 100 u16. Rebuilt
+   byte for byte for captures 05 and 42 (different tables); a test runs capture 05's whole scan
+   with it. On the scanner after a power-on: `15`, the table loaded, the scan right; again:
+   `06`, the same image.
 10. **The stripes and the colour** on the 4490: "Misura le righe" and the colour matrix, as for
     the 3770 (phase 13's tools).
 11. **2400 dpi**: the rules already rebuild Epson Scan's capture 13 (2400 x 3200, reduced on the

@@ -34,6 +34,7 @@ use crate::firmware::PAYLOAD_LEN;
 use crate::protocol::{FIRMWARE_BEGIN, FIRMWARE_END, FIRMWARE_RUN, GET_BUTTONS, GET_STATE};
 use crate::scan::READ_83;
 use crate::setup::{self, MoveKind, Plan, Request};
+use crate::table07;
 use crate::tables::{self, Curves};
 use crate::Transport;
 use scanner_api::{Error, Result};
@@ -339,7 +340,7 @@ impl<T: Transport> Guarded<T> {
             return Err(refusal(data, "the scan's plan is not permitted yet"));
         };
         let next = match data {
-            [0x1E, 0x83] if p.base == 2400 => one(&[&READ_83]),
+            [0x1E, 0x83] if p.base == 2400 => one(&[READ_83, table07::READ_RAW]),
             [0x1E, 0x11] => one(&[&[p.e11]]),
             [0x1E, 0x46] => one(&[&p.e46[0], &p.e46[1]]),
             [0x1E, 0x21] => one(&[&p.e21_cal, &p.e21_data]),
@@ -415,6 +416,9 @@ impl<T: Transport> Guarded<T> {
                 }
                 if !tables_.is_empty() {
                     return Ok(Some(Expect::OneOf(tables_)));
+                }
+                if p.base == 2400 && table07::HEADER[..] == *data {
+                    return Ok(Some(Expect::Len(table07::LEN)));
                 }
                 if tables::TONE_HEADERS.iter().any(|h| h[..] == *data) {
                     return Ok(Some(Expect::OneOf(vec![
