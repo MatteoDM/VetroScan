@@ -1,10 +1,11 @@
 # Epson 4490 glass captures, stripped
 
-What Epson's drivers wrote to the Epson Perfection 4490 and what it answered, in 18 USB
+What Epson's drivers wrote to the Epson Perfection 4490 and what it answered, in 24 USB
 captures of glass scans made on 11-12 November 2026 (`captures/epson4490/*.pcap`, outside the
-repository; WIA but `13` and `15`, Epson Scan). The tests of `setup.rs` rebuild every set-up
-block of each one from its request, and those of `scan.rs` run the whole native scan against
-eleven of them, write by write.
+repository; WIA but `13`, `15` and `38`-`43`, Epson Scan at 16 bits, `38`-`43` the whole glass
+at 100-1200 dpi, their image data left out). The tests of `setup.rs` rebuild every set-up block
+of each one from its request, and those of `scan.rs` run the whole native scan against eleven
+of the WIA ones, write by write.
 
 Made from the captures with `tools/stream.py` (`captures/epson4490/tools`), one step per line:
 

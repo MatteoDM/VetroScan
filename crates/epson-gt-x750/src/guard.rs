@@ -22,8 +22,8 @@
 //!   `1E 31` and `1E 47`.
 //!
 //! What a scan may ask ([`check_request`], [`check_plan`]): the glass, colour,
-//! the resolutions WIA scanned at 8 bits (100, 200, 300, 400, 600, 1200 dpi)
-//! and 600 at 16 bits (Epson Scan); an area inside the glass; the line times
+//! 100, 200, 300, 400, 600 and 1200 dpi, at 8 bits (WIA) or 16 (Epson Scan,
+//! the whole glass at each); an area inside the glass; the line times
 //! (so the motor's speeds) each resolution was captured with; a start move
 //! of a kind seen; no read further than the furthest captured. Refused, as
 //! not captured: 800 (WIA asks 1200), 900, 2400 and 4800 dpi, black and
@@ -41,32 +41,39 @@ use scanner_api::{Error, Result};
 /// Reads the two 16-bit positions (carriage, transparency unit): 4 bytes.
 pub const GET_POSITIONS: [u8; 2] = [0x1E, 0x86];
 
-/// The resolutions and depths a glass scan may use: the ones captured.
-pub const COVERED: [(u32, u8); 7] = [
+/// The resolutions and depths a glass scan may use: the ones captured (WIA at 8 bits; Epson
+/// Scan at 16, captures 15 and 38-43, 12 November 2026).
+pub const COVERED: [(u32, u8); 12] = [
     (100, 8),
     (200, 8),
     (300, 8),
     (400, 8),
     (600, 8),
     (1200, 8),
+    (100, 16),
+    (200, 16),
+    (300, 16),
+    (400, 16),
     (600, 16),
+    (1200, 16),
 ];
 
 /// The line times (µs) each resolution was captured with: the motor's speed
 /// follows from them, so no other one goes out.
-pub const LINE_TIMES: [(u32, u32); 7] = [
+pub const LINE_TIMES: [(u32, u32); 8] = [
     (100, 4224),
     (200, 3840),
     (300, 3840),
     (300, 4224),
     (400, 3840),
     (600, 3840),
+    (600, 4224),
     (1200, 10_752),
 ];
 
-/// The furthest step from home a captured read reached (capture 07, A4 at
-/// 300 dpi).
-pub const MAX_READ_END: u32 = 29_587;
+/// The furthest step from home a captured read reached (capture 42, Epson Scan's whole glass
+/// at 1200 dpi; WIA's A4 at 300 dpi, capture 07, reached 29,587).
+pub const MAX_READ_END: u32 = 29_601;
 
 /// The glass as Epson's user guide gives it (216 x 297 mm, 8.5 x 11.7 in): no area outside it.
 /// The application is offered a little less (`crate::GLASS_INCHES`), so that its whole glass
@@ -107,7 +114,7 @@ pub fn check_request(r: &Request) -> Result<()> {
     if !COVERED.contains(&(r.dpi, r.bits)) {
         return refuse(format!(
             "{} dpi at {} bits was never captured on the glass (only 100, 200, 300, 400, 600 and \
-             1200 dpi at 8 bits, 600 at 16)",
+             1200 dpi, at 8 or 16 bits)",
             r.dpi, r.bits
         ));
     }
@@ -586,13 +593,8 @@ mod tests {
 
     #[test]
     fn what_was_never_captured_is_refused() {
-        let refused = |r: Result<Plan>| {
-            let r = r.and_then(|p| check_plan(&p));
-            assert!(r.is_err(), "{r:?}");
-            r.unwrap_err().to_string()
-        };
         // Resolutions and depths.
-        for (dpi, bits) in [(800, 8), (2400, 8), (300, 16), (1200, 16), (150, 8)] {
+        for (dpi, bits) in [(800, 8), (2400, 8), (800, 16), (2400, 16), (150, 8)] {
             let r = Request::new(dpi, 0, 0, 400, 400, bits);
             assert!(check_request(&r).is_err(), "{dpi} {bits}");
         }
@@ -606,13 +608,19 @@ mod tests {
         assert!(check_request(&Request::new(300, 2000, 0, 550, 100, 8)).is_ok());
         assert!(check_request(&Request::new(300, 0, 3500, 100, 11, 8)).is_err());
         assert!(check_request(&Request::new(300, 0, 3500, 100, 10, 8)).is_ok());
-        // The whole width at 600 dpi: 14 x 384 pixels read, a line time of 4224 µs, captured
-        // at 300 and 100 dpi but not at 600. A4's width keeps 3840 µs.
-        let e = refused(plan(600, 0, 0, 5100, 1000, 8));
+        // A line time never captured at a resolution: none left inside the glass since
+        // capture 43 (the whole width at 600 dpi, 4224 µs), refused if one were.
+        let mut p = plan(600, 0, 0, 5100, 1000, 8).unwrap();
+        assert_eq!(p.t, 4224);
+        assert!(check_plan(&p).is_ok());
+        p.t = 4608;
+        let e = check_plan(&p).unwrap_err().to_string();
         assert!(e.contains("line time"), "{e}");
-        assert!(check_plan(&plan(600, 0, 0, 4961, 1000, 8).unwrap()).is_ok());
-        // The last line of the physical glass: past the furthest capture.
-        let e = refused(plan(300, 0, 3400, 591, 110, 8));
+        // A read further than any capture: refused.
+        let mut p = plan(300, 0, 3400, 591, 100, 8).unwrap();
+        assert!(check_plan(&p).is_ok());
+        p.read_end = MAX_READ_END + 1;
+        let e = check_plan(&p).unwrap_err().to_string();
         assert!(e.contains("further"), "{e}");
         // No start move: never needed on the glass at the resolutions covered (the near
         // case leaves (1267 - R) mod num steps, 3 or 11), but refused if it were.
@@ -633,22 +641,15 @@ mod tests {
         assert!(check_plan(&p).is_err());
     }
 
-    /// The whole glass's height at every resolution covered, from the top: the app's preview
-    /// (200 dpi) and the longest scans. The whole width too, but at 600 dpi (step 2 of "What
-    /// is left": a line time never captured there).
+    /// The whole glass the application is offered, at every resolution and depth covered: its
+    /// preview (200 dpi) and the largest scans.
     #[test]
     fn the_whole_glass_is_accepted() {
         let caps = crate::capabilities();
         for (dpi, bits) in COVERED {
             let (w, h) = caps.glass_pixels(dpi as u16);
-            let full = plan(dpi, 0, 0, w, h, bits).unwrap();
-            let ok = check_plan(&full);
-            if dpi == 600 {
-                assert!(ok.unwrap_err().to_string().contains("line time"), "{dpi}");
-                assert!(check_plan(&plan(dpi, 0, 0, 4992, h, bits).unwrap()).is_ok());
-            } else {
-                assert!(ok.is_ok(), "{dpi} dpi, {w} x {h}: {ok:?}");
-            }
+            let ok = check_plan(&plan(dpi, 0, 0, w, h, bits).unwrap());
+            assert!(ok.is_ok(), "{dpi} dpi {bits} bits, {w} x {h}: {ok:?}");
         }
     }
 

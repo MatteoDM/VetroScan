@@ -1003,10 +1003,9 @@ on `usbscan` by itself.
   captures rebuilt (`testdata/`, the captures stripped of image data and long tables), the whole
   scan run against eleven WIA captures write by write, the realigning on made-up lines.
   - **The guard** lets a scan out only inside what the captures cover: glass, colour, 100, 200,
-    300, 400, 600 and 1200 dpi at 8 bits, 600 at 16 (Epson Scan's capture 15: its `1E 21`'s last
-    two values, 2 and 1002, sent the same); the area inside the glass; the line times each
-    resolution was captured with (the whole width at 600 dpi needs 4224 µs, captured only at
-    100 and 300: refused); start moves of the kinds seen (the 256-value ramp and "no move" never
+    300, 400, 600 and 1200 dpi at 8 bits, 600 at 16 (opened to every resolution at 16 bits the
+    same night, step 8 below); the area inside the glass; the line times each resolution was
+    captured with; start moves of the kinds seen (the 256-value ramp and "no move" never
     happen on the glass at these resolutions, refused anyway); no read further than capture 07's
     (29,587 steps); an x correction within ±300. Then only the plan's own blocks go out. Refused:
     800 (WIA asks 1200), 900, 2400, 4800 dpi, black and white, films, Epson Scan's draft mode.
@@ -1162,10 +1161,20 @@ native scan computes any area at 100, 200, 300, 400, 600, 1200 dpi (`scan.rs`), 
 **B. The glass complete** (milestone 3, second half)
 
 8. **16 bits at every resolution**: only 600 dpi was captured at 16 bits (Epson Scan; WIA gives
-   8). Decided: capture Epson Scan at 48 bits at 100, 200, 300, 400 and 1200 dpi (Matteo at the
-   interface, about half an hour), then open them in the guard and declare 16 in `depths`. The
-   contract stays as it is (`depths` not tied to the resolution), very likely right for this
-   scanner (an assumption the captures check).
+   8). Decided: capture Epson Scan at 48 bits at the other resolutions, then open them in the
+   guard; the contract stays as it is (`depths` not tied to the resolution). **Done** (12
+   November, evening; `captures/epson4490/05-catture.md`, "Epson Scan a 48 bit, tutto il
+   vetro"): captures 38-43, Epson Scan at 48 bits on the whole glass at 100 (it offers 96 and
+   asks the scanner 100), 200, 300, 400, 1200 and 600 dpi; every block as the rules say (the
+   tests, 24 captures now). The guard lets 16 bits through at all six, the line time 4224 µs at
+   600 dpi (the whole width, capture 43) and reads up to step 29,601 (capture 42). The last
+   two u16 of `1E 21` are zero in all of them, so capture 15's 2 and 1002 are not tied to 16
+   bits: the scan sends zero, as WIA. Epson Scan's whole height is 11.69 to 11.696 in, as the
+   `Capabilities` say. Learnt on the way: on the long reads at 16 bits the carriage stops,
+   goes back a little and starts again (Matteo heard it at 1200 and 600 dpi): **the scanner
+   does it by itself**, Epson's driver sends nothing but `1B 03` after the read starts (capture
+   42, 250 s of reading); it only needs reading on. Not yet run by the native scan at 16 bits
+   but at 600 dpi.
 9. **1200 dpi after every power-on**: the scanner answers `1E 8B` with `15` until Epson's driver
    has loaded a 600-byte table (`1E 84` type 07) it computes from 245,824 bytes it reads with
    `1E 83` (capture 05 has both). Decode the computation from capture 05 and a second capture of

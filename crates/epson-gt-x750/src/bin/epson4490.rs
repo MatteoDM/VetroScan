@@ -16,7 +16,7 @@
 //!
 //! `scan` computes the whole sequence from the request (`epson_gt_x750::scan`): the area in
 //! millimetres from the glass's corner, rounded to pixels as WIA does; the guard refuses what no
-//! capture covers (100, 200, 300, 400, 600, 1200 dpi at 8 bits, 600 at 16). OUT.png is the image
+//! capture covers (100, 200, 300, 400, 600, 1200 dpi, at 8 or 16 bits). OUT.png is the image
 //! realigned and cropped; `--raw` keeps the data as the scanner sent it (trailers removed).
 //! `--tone linear` loads identity tables in place of WIA's curves (to be measured).
 //! Without `--move` it only prints the plan and what the guard says of it. A lamp taken to be

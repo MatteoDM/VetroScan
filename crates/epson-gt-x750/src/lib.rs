@@ -58,10 +58,10 @@ pub const PRODUCT_ID: u16 = 0x0119;
 /// Name of this backend in the [`scanner_api::Registry`].
 pub const BACKEND: &str = "epson-gt-x750";
 /// The glass, width and height in inches: 8.5 in (216 mm, Epson's user guide) by 11.69 in
-/// (296.9 mm). The user guide's 11.7 in would let a scan of the whole glass end a few motor steps
-/// further than any capture did (WIA's A4 scans, captures 06 and 07, 29,587 steps from home);
-/// 11.69 in keeps the whole height inside them at every resolution. A capture of the whole glass
-/// may give that millimetre back later.
+/// (296.9 mm), Epson Scan's own height (1,169 lines at 100 dpi, capture 38; a line or less more
+/// at the other resolutions). The user guide's 11.7 in would let a scan of the whole glass end a
+/// few motor steps further than any capture did (the guard's `MAX_READ_END`); 11.69 in keeps the
+/// whole height inside them at every resolution (a test).
 pub const GLASS_INCHES: (f64, f64) = (8.5, 11.69);
 /// Timeout of a bulk transfer.
 pub const BULK_TIMEOUT: Duration = Duration::from_secs(30);
