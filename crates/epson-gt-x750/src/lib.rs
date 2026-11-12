@@ -6,10 +6,10 @@
 //! (all confirmed by USB captures of Epson's driver), and scans an area of
 //! the glass in colour ([`scan`]), the whole sequence computed from the
 //! request ([`setup`]) with the shading from its own calibration
-//! ([`shading`]). The application does not scan with it yet
-//! ([`Scanner::scan`] answers an error): only the `epson4490` command does.
-//! Every write goes through the [`guard`], which lets out a scan only inside
-//! what the captures cover.
+//! ([`shading`]); the application scans with it ([`Gt4490`]), as does the
+//! `epson4490` command. Every write goes through the [`guard`] (but the
+//! command's `replay`), which lets out a scan only inside what the captures
+//! cover.
 //!
 //! The scanner does not speak ESC/I: it runs a firmware the host sends at
 //! every power-on ([`firmware`]), then answers two-byte native commands
@@ -88,6 +88,9 @@ pub trait Transport: Send + fmt::Debug {
     fn hold(&mut self) -> Result<()> {
         Ok(())
     }
+    /// Lets the upload of this firmware `image` (the whole checked `esfw54.bin`) out: only the
+    /// [`guard`] keeps it, to let through that payload and nothing else after `1B 06`.
+    fn permit_upload(&mut self, _image: &[u8]) {}
     /// Writes `data` while reading the IN endpoint at the same time, each read handed to
     /// `on_read` until it answers `false`: a scanner left half-way through a scan takes a
     /// command only while what it sends is read (capture 52, 12 November 2026). The default,
@@ -122,6 +125,10 @@ impl<T: Transport + ?Sized> Transport for Box<T> {
 
     fn hold(&mut self) -> Result<()> {
         (**self).hold()
+    }
+
+    fn permit_upload(&mut self, image: &[u8]) {
+        (**self).permit_upload(image)
     }
 
     fn write_reading(
@@ -193,9 +200,8 @@ pub fn open_unlocked(location: &str) -> Result<Box<dyn Transport>> {
     open(location)
 }
 
-/// What the 4490 can do, **provisionally**: from Epson's user guide, none of
-/// it tried. Only the glass, until films are driven; no lamp until it is
-/// known whether the host switches it.
+/// What the 4490 can do: what the guard lets out, as captured and tried on the scanner
+/// (11-12 November 2026). Only the glass, until films are driven.
 pub fn capabilities() -> Capabilities {
     let button = |id: &str, label: &str, action| ButtonInfo {
         id: id.into(),
@@ -531,18 +537,14 @@ impl scanner_api::Scanner for Gt4490 {
             last_used: self.lamp_used,
             curves: tables::Curves::Linear,
         };
-        let mut warming = false;
         let scanned = scan::scan_glass(
             &mut self.transport,
             r,
             options,
             &mut |_| {},
             &mut |event| match event {
-                scan::Event::WarmingUp { .. } if warming => true,
-                scan::Event::WarmingUp { .. } => {
-                    warming = true;
-                    progress(Progress::WarmingUp)
-                }
+                // Every second of the warm-up, so that Cancel is heard during it.
+                scan::Event::WarmingUp { .. } => progress(Progress::WarmingUp),
                 scan::Event::Calibrating => progress(Progress::Calibrating),
                 scan::Event::Reading { done, total } => {
                     progress(Progress::Scanning { done, total })

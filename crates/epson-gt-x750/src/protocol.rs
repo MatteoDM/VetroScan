@@ -1,18 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! The scanner's native commands that this backend sends: only the ones
-//! that move nothing.
+//! The scanner's native commands outside a scan: the state, the buttons, the
+//! firmware upload and the lamp switched off. Nothing here moves the carriage
+//! (the scan's commands are in [`crate::scan`]).
 //!
 //! Everything goes over two bulk endpoints (no control transfers): a
 //! command is two bytes, `1B xx` or `1E xx`, often followed by a data
 //! block, and most are answered by one byte, [`ACK`]. What is here was read
 //! from Epson's Windows driver (`esxwia54.dll`, `esxuin54.dll`; notes in
 //! `captures/epson4490/`, outside the repository) under the EU
-//! interoperability exception, and **has not been checked on a scanner
-//! yet**: the first USB capture must confirm every byte.
-//!
-//! Nothing that moves the carriage, nor switches a lamp, may be added here
-//! before the scan sequence is understood (phase 12 of
-//! `docs/architecture-plan.md`).
+//! interoperability exception, then checked byte for byte against USB
+//! captures of Epson's driver and tried on the scanner (11-12 November 2026).
 
 use crate::firmware::{self, Firmware, HEADER_LEN, PAYLOAD_LEN};
 use crate::Transport;
@@ -206,11 +203,13 @@ pub fn ensure_firmware(
     // half-way, capture 44) must never start an upload.
     if s.0 != State::NO_FIRMWARE {
         return Err(Error::Other(format!(
-            "the Epson 4490 answered {:02X} {:02X} to 1B 03, a state never seen: switch it off              and on",
+            "the Epson 4490 answered {:02X} {:02X} to 1B 03, a state never seen: switch it off \
+             and on",
             s.0[0], s.0[1]
         )));
     }
     let fw = load()?;
+    t.permit_upload(fw.image());
     upload_firmware(t, fw.image())?;
     Ok(FirmwareOutcome::Uploaded {
         build: fw.build(),

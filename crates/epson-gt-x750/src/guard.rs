@@ -8,16 +8,18 @@
 //!
 //! * always: `1B 03` (state), `1E 86` (the two positions) and `1E 85` (the
 //!   button pressed), read-only; `1E A2 00`, the lamp off;
-//! * always: the firmware upload: `1B 06`, then only its own data (the length
-//!   `01 00 01 00`, 65,536 bytes, the checksum), `1B 16`, and `80` right
-//!   after `1B 16`;
+//! * once [`Transport::permit_upload`] has given it a checked firmware, and
+//!   outside a scan: its upload, `1B 06`, then only its own data (the length
+//!   `01 00 01 00`, that firmware's 65,536 bytes, their checksum), `1B 16`
+//!   right after them, and `80` right after `1B 16`;
 //! * during a glass scan ([`crate::scan`]), once [`Guarded::permit_request`]
 //!   has accepted the request: the opening and the read-only commands of
 //!   Epson's sequence, the gamma tables, that request's `1E 57`, the lamp
 //!   (`1E A2 00`/`01`) and `1E 87`;
 //! * once [`Guarded::permit_plan`] has accepted the plan computed from it:
 //!   exactly the plan's blocks (`1E 11`, `21`, `41`, `43`, `46`, the ramps
-//!   and moves `1E 84` type 04 and `1E 01`, `1E 05` only for its start move,
+//!   and moves `1E 84` type 04 and `1E 01`, `1E 05` only right after the start
+//!   move's `1E 01`, once,
 //!   the tone tables and a shading table as wide as its columns), `1E 42`,
 //!   `1E 31` and `1E 47`.
 //!
@@ -30,8 +32,10 @@
 //! white, films, Epson Scan's draft mode. Anything else is refused with an
 //! error and never reaches the scanner.
 
-use crate::firmware::PAYLOAD_LEN;
-use crate::protocol::{FIRMWARE_BEGIN, FIRMWARE_END, FIRMWARE_RUN, GET_BUTTONS, GET_STATE};
+use crate::firmware::{HEADER_LEN, PAYLOAD_LEN};
+use crate::protocol::{
+    checksum, FIRMWARE_BEGIN, FIRMWARE_END, FIRMWARE_RUN, GET_BUTTONS, GET_STATE,
+};
 use crate::scan::{CANCEL, READ_83};
 use crate::setup::{self, MoveKind, Plan, Request};
 use crate::table07;
@@ -121,9 +125,10 @@ pub fn check_request(r: &Request) -> Result<()> {
     }
     // The physical glass, counted as the application counts pixels; how far the carriage may
     // go is `check_plan`'s.
-    let px = |inches: f64| (inches * f64::from(r.dpi)).round() as u32;
+    let px = |inches: f64| (inches * f64::from(r.dpi)).round() as u64;
     let (max_w, max_h) = (px(PHYSICAL_GLASS_INCHES.0), px(PHYSICAL_GLASS_INCHES.1));
-    if r.width == 0 || r.height == 0 || r.x + r.width > max_w || r.y + r.height > max_h {
+    let end = |a: u32, b: u32| u64::from(a) + u64::from(b);
+    if r.width == 0 || r.height == 0 || end(r.x, r.width) > max_w || end(r.y, r.height) > max_h {
         return refuse(format!(
             "the area {}x{} at {},{} is not inside the glass ({max_w} x {max_h} pixels at {} dpi)",
             r.width, r.height, r.x, r.y, r.dpi
@@ -191,6 +196,8 @@ pub fn check_plan(p: &Plan) -> Result<()> {
 enum Expect {
     /// One of these blocks.
     OneOf(Vec<Vec<u8>>),
+    /// One of the plan's `1E 01` blocks (the start move's arms `1E 05`).
+    Move(Vec<Vec<u8>>),
     /// Any block of this length (values computed from the calibration, or
     /// the scanner's own written back).
     Len(usize),
@@ -221,6 +228,8 @@ enum Stage {
     Payload(usize),
     /// The checksum byte comes next.
     Checksum,
+    /// After the checksum: `1B 16` may follow.
+    Uploaded,
     /// After `1B 16`: `80` may follow.
     Run,
 }
@@ -236,6 +245,12 @@ pub struct Guarded<T: Transport> {
     /// `1E 18` may go out without a scan: a scanner left half-way through one
     /// ([`Guarded::permit_recovery`]).
     recovering: bool,
+    /// The payload of the firmware [`Transport::permit_upload`] gave, until it is run.
+    upload: Option<Vec<u8>>,
+    /// The last write was the start move's `1E 01` block: `1E 05` may follow.
+    start_armed: bool,
+    /// The start move's `1E 05` went out: not again in this scan.
+    start_done: bool,
 }
 
 impl<T: Transport> Guarded<T> {
@@ -247,6 +262,9 @@ impl<T: Transport> Guarded<T> {
             permit: None,
             expect: None,
             recovering: false,
+            upload: None,
+            start_armed: false,
+            start_done: false,
         }
     }
 
@@ -265,6 +283,8 @@ impl<T: Transport> Guarded<T> {
             plan: None,
         });
         self.expect = None;
+        self.start_armed = false;
+        self.start_done = false;
         Ok(())
     }
 
@@ -289,6 +309,8 @@ impl<T: Transport> Guarded<T> {
         self.permit = None;
         self.expect = None;
         self.recovering = false;
+        self.start_armed = false;
+        self.start_done = false;
     }
 
     /// Lets `1E 18` out without a scan, to stop the one a scanner was left in by a program
@@ -301,21 +323,28 @@ impl<T: Transport> Guarded<T> {
     /// Whether `data` may be written now: the stage and what to expect after.
     fn check(&self, data: &[u8]) -> Result<(Stage, Option<Expect>)> {
         let idle = |e| Ok((Stage::Idle, e));
-        match self.stage {
-            Stage::Length if data == UPLOAD_LENGTH => {
+        match (self.stage, self.upload.as_deref()) {
+            (Stage::Length, Some(_)) if data == UPLOAD_LENGTH => {
                 return Ok((Stage::Payload(PAYLOAD_LEN - 1), None))
             }
-            Stage::Payload(left) if !data.is_empty() && data.len() <= left => {
-                return Ok((
-                    match left - data.len() {
-                        0 => Stage::Checksum,
-                        left => Stage::Payload(left),
-                    },
-                    None,
-                ))
+            (Stage::Payload(left), Some(payload)) if !data.is_empty() && data.len() <= left => {
+                // Only the permitted firmware's own bytes, in their place.
+                let at = PAYLOAD_LEN - 1 - left;
+                if payload[at..at + data.len()] == *data {
+                    return Ok((
+                        match left - data.len() {
+                            0 => Stage::Checksum,
+                            left => Stage::Payload(left),
+                        },
+                        None,
+                    ));
+                }
             }
-            Stage::Checksum if data.len() == 1 => return idle(None),
-            Stage::Run if data == [FIRMWARE_RUN] => return idle(None),
+            (Stage::Checksum, Some(payload)) if data == [checksum(payload)] => {
+                return Ok((Stage::Uploaded, None))
+            }
+            (Stage::Uploaded, Some(_)) if data == FIRMWARE_END => return Ok((Stage::Run, None)),
+            (Stage::Run, Some(_)) if data == [FIRMWARE_RUN] => return idle(None),
             // Anything else ends an upload: judged as a command.
             _ => {}
         }
@@ -324,8 +353,10 @@ impl<T: Transport> Guarded<T> {
         }
         match data {
             d if d == GET_STATE || d == GET_POSITIONS || d == GET_BUTTONS => return idle(None),
-            d if d == FIRMWARE_BEGIN => return Ok((Stage::Length, None)),
-            d if d == FIRMWARE_END => return Ok((Stage::Run, None)),
+            // An upload only of a firmware given to the guard, never during a scan.
+            d if d == FIRMWARE_BEGIN && self.upload.is_some() && self.permit.is_none() => {
+                return Ok((Stage::Length, None))
+            }
             _ => {}
         }
         let Some(permit) = &self.permit else {
@@ -364,13 +395,14 @@ impl<T: Transport> Guarded<T> {
             [0x1E, 0x43] => one(&[&setup::GAIN_CAL, &setup::GAIN_DATA]),
             [0x1E, 0x84] => Some(Expect::TableHeader),
             [0x1E, 0x01] => {
-                let mut moves: Vec<&[u8]> = vec![&p.move_cal, &p.move_data];
+                let mut moves: Vec<Vec<u8>> = vec![p.move_cal.to_vec(), p.move_data.to_vec()];
                 if let Some(m) = &p.start_move {
-                    moves.push(&m.block);
+                    moves.push(m.block.to_vec());
                 }
-                one(&moves)
+                Some(Expect::Move(moves))
             }
-            [0x1E, 0x05] if p.start_move.is_some() => None,
+            // Only right after the start move's 1E 01, and once.
+            [0x1E, 0x05] if self.start_armed && !self.start_done => None,
             [0x1E, 0x47] => None,
             // Stops the read (capture 11).
             [0x1E, 0x18] => None,
@@ -390,8 +422,10 @@ impl<T: Transport> Guarded<T> {
             )))
         };
         match expect {
-            Expect::OneOf(blocks) if blocks.iter().any(|b| b == data) => Ok(None),
-            Expect::OneOf(_) => bad("after its command"),
+            Expect::OneOf(blocks) | Expect::Move(blocks) if blocks.iter().any(|b| b == data) => {
+                Ok(None)
+            }
+            Expect::OneOf(_) | Expect::Move(_) => bad("after its command"),
             Expect::Len(n) if data.len() == *n => Ok(None),
             Expect::Len(_) => bad("of the wrong length"),
             Expect::Block41 => {
@@ -457,6 +491,43 @@ fn one<B: AsRef<[u8]>>(blocks: &[B]) -> Option<Expect> {
     ))
 }
 
+impl<T: Transport> Guarded<T> {
+    /// Writes `data` with `write` if [`Guarded::check`] lets it out. A refusal or a failed
+    /// write leaves nothing awaited (no block, no upload stage, no `1E 05` armed).
+    fn pass(&mut self, data: &[u8], write: impl FnOnce(&mut T, &[u8]) -> Result<()>) -> Result<()> {
+        let sent = self
+            .check(data)
+            .and_then(|next| write(&mut self.inner, data).map(|()| next));
+        let (stage, expect) = match sent {
+            Ok(next) => next,
+            Err(e) => {
+                self.stage = Stage::Idle;
+                self.expect = None;
+                self.start_armed = false;
+                return Err(e);
+            }
+        };
+        let was_command = self.expect.is_none() && self.stage == Stage::Idle;
+        let start_block = self
+            .permit
+            .as_ref()
+            .and_then(|p| p.plan.as_ref())
+            .and_then(|p| p.start_move.as_ref())
+            .is_some_and(|m| m.block[..] == *data);
+        self.start_armed = matches!(self.expect, Some(Expect::Move(_))) && start_block;
+        if was_command && data == [0x1E, 0x05] {
+            self.start_done = true;
+        }
+        if self.stage == Stage::Run && stage == Stage::Idle {
+            // 80 went out: the upload is over.
+            self.upload = None;
+        }
+        self.stage = stage;
+        self.expect = expect;
+        Ok(())
+    }
+}
+
 fn refusal(data: &[u8], why: &str) -> Error {
     let head: Vec<String> = data.iter().take(4).map(|b| format!("{b:02X}")).collect();
     let more = if data.len() > 4 { " ..." } else { "" };
@@ -476,18 +547,7 @@ fn refusal(data: &[u8], why: &str) -> Error {
 
 impl<T: Transport> Transport for Guarded<T> {
     fn bulk_out(&mut self, data: &[u8]) -> Result<()> {
-        let (stage, expect) = match self.check(data) {
-            Ok(next) => next,
-            Err(e) => {
-                self.stage = Stage::Idle;
-                self.expect = None;
-                return Err(e);
-            }
-        };
-        self.inner.bulk_out(data)?;
-        self.stage = stage;
-        self.expect = expect;
-        Ok(())
+        self.pass(data, |t, data| t.bulk_out(data))
     }
 
     fn bulk_in(&mut self, buf: &mut [u8]) -> Result<usize> {
@@ -496,11 +556,24 @@ impl<T: Transport> Transport for Guarded<T> {
         if matches!(self.stage, Stage::Payload(_) | Stage::Checksum) {
             self.stage = Stage::Idle;
         }
-        self.inner.bulk_in(buf)
+        let read = self.inner.bulk_in(buf);
+        if read.is_err() {
+            // The answer to a command never came: its block must not go out after it.
+            self.stage = Stage::Idle;
+            self.expect = None;
+            self.start_armed = false;
+        }
+        read
     }
 
     fn hold(&mut self) -> Result<()> {
         self.inner.hold()
+    }
+
+    fn permit_upload(&mut self, image: &[u8]) {
+        if crate::firmware::check_image(image).is_ok() {
+            self.upload = Some(image[HEADER_LEN..].to_vec());
+        }
     }
 
     fn write_reading(
@@ -508,18 +581,7 @@ impl<T: Transport> Transport for Guarded<T> {
         data: &[u8],
         on_read: &mut (dyn FnMut(&[u8]) -> bool + Send),
     ) -> Result<()> {
-        let (stage, expect) = match self.check(data) {
-            Ok(next) => next,
-            Err(e) => {
-                self.stage = Stage::Idle;
-                self.expect = None;
-                return Err(e);
-            }
-        };
-        self.inner.write_reading(data, on_read)?;
-        self.stage = stage;
-        self.expect = expect;
-        Ok(())
+        self.pass(data, |t, data| t.write_reading(data, on_read))
     }
 }
 
@@ -603,31 +665,65 @@ mod tests {
         let mut direct = Mock::answering(&[&[ACK][..]; 4]);
         protocol::upload_firmware(&mut direct, &image).unwrap();
         let mut t = guarded(&[&[ACK][..]; 4]);
+        t.permit_upload(&image);
         protocol::upload_firmware(&mut t, &image).unwrap();
         assert_eq!(t.inner().writes, direct.writes);
-        // Over: 80 and moves are refused again.
+        // Over: 80, another upload and moves are refused again.
         assert!(t.bulk_out(&[FIRMWARE_RUN]).is_err());
+        assert!(t.bulk_out(&FIRMWARE_BEGIN).is_err());
         assert!(t.bulk_out(&[0x1E, 0x05]).is_err());
+    }
+
+    #[test]
+    fn only_the_permitted_firmware_goes_out() {
+        let image = image();
+        let payload = &image[HEADER_LEN..];
+        // Without a firmware given, no upload at all; nor 1B 16 and 80 alone.
+        let mut t = guarded(&[]);
+        assert!(t.bulk_out(&FIRMWARE_BEGIN).is_err());
+        assert!(t.bulk_out(&FIRMWARE_END).is_err());
+        assert!(t.bulk_out(&[FIRMWARE_RUN]).is_err());
+        // Given one: other bytes in its place are refused.
+        t.permit_upload(&image);
+        t.bulk_out(&FIRMWARE_BEGIN).unwrap();
+        t.bulk_out(&UPLOAD_LENGTH).unwrap();
+        let mut other = payload[..100].to_vec();
+        other[50] ^= 1;
+        assert!(t.bulk_out(&other).is_err());
+        // Its own bytes, then a wrong checksum: refused, and no 1B 16 after.
+        t.bulk_out(&FIRMWARE_BEGIN).unwrap();
+        t.bulk_out(&UPLOAD_LENGTH).unwrap();
+        t.bulk_out(&payload[..PAYLOAD_LEN - 1]).unwrap();
+        assert!(t.bulk_out(&[checksum(payload).wrapping_add(1)]).is_err());
+        assert!(t.bulk_out(&FIRMWARE_END).is_err());
+        // Never during a scan.
+        let p = plan(300, 472, 709, 591, 591, 8).unwrap();
+        t.permit_request(&p.request).unwrap();
+        assert!(t.bulk_out(&FIRMWARE_BEGIN).is_err());
     }
 
     #[test]
     fn a_refused_upload_leaves_nothing_open() {
         // 1B 06 answered with a NAK: the upload stops after its command.
+        let image = image();
         let mut t = guarded(&[&[0x15]]);
-        assert!(protocol::upload_firmware(&mut t, &image()).is_err());
+        t.permit_upload(&image);
+        assert!(protocol::upload_firmware(&mut t, &image).is_err());
         assert!(t.bulk_out(&[0x1E, 0x05]).is_err());
         // Stopped in the middle of the data, after a read.
         let mut t = guarded(&[&[ACK], &[0x00]]);
+        t.permit_upload(&image);
         t.bulk_out(&FIRMWARE_BEGIN).unwrap();
         t.bulk_out(&UPLOAD_LENGTH).unwrap();
-        t.bulk_out(&[0; 100]).unwrap();
+        t.bulk_out(&image[HEADER_LEN..HEADER_LEN + 100]).unwrap();
         t.bulk_in(&mut [0]).unwrap();
         assert!(t.bulk_out(&[0x1E, 0x47]).is_err());
         // More data than the firmware has is refused.
         let mut t = guarded(&[]);
+        t.permit_upload(&image);
         t.bulk_out(&FIRMWARE_BEGIN).unwrap();
         t.bulk_out(&UPLOAD_LENGTH).unwrap();
-        assert!(t.bulk_out(&vec![0; PAYLOAD_LEN]).is_err());
+        assert!(t.bulk_out(&image[HEADER_LEN - 1..]).is_err());
     }
 
     fn plan(dpi: u32, x: u32, y: u32, w: u32, h: u32, bits: u8) -> Result<Plan> {
@@ -747,8 +843,18 @@ mod tests {
         t.permit_plan(&p).unwrap();
         t.bulk_out(&[0x1E, 0x01]).unwrap();
         assert!(t.bulk_out(&setup::move_block(100, 0, 0, 0x18)).is_err());
+        // 1E 05 only right after the start move's 1E 01, and once.
+        assert!(t.bulk_out(&[0x1E, 0x05]).is_err());
+        t.bulk_out(&[0x1E, 0x01]).unwrap();
+        t.bulk_out(&p.move_data).unwrap();
+        assert!(t.bulk_out(&[0x1E, 0x05]).is_err());
         t.bulk_out(&[0x1E, 0x01]).unwrap();
         t.bulk_out(&p.start_move.as_ref().unwrap().block).unwrap();
+        t.bulk_out(&[0x1E, 0x05]).unwrap();
+        assert!(t.bulk_out(&[0x1E, 0x05]).is_err());
+        t.bulk_out(&[0x1E, 0x01]).unwrap();
+        t.bulk_out(&p.start_move.as_ref().unwrap().block).unwrap();
+        assert!(t.bulk_out(&[0x1E, 0x05]).is_err());
         // A ramp: its header, then only its values.
         t.bulk_out(&[0x1E, 0x84]).unwrap();
         t.bulk_out(&setup::ramp_header(512)).unwrap();
@@ -788,6 +894,21 @@ mod tests {
         t.end_scan();
         assert!(t.bulk_out(&[0x1E, 0x01]).is_err());
         assert!(t.bulk_out(&[0x1E, 0x47]).is_err());
+    }
+
+    #[test]
+    fn an_answer_that_never_came_leaves_no_block_awaited() {
+        // 1E A2 out, its 06 never read: the next command is judged as a command.
+        let mut t = guarded(&[]);
+        assert!(protocol::lamp_off(&mut t).is_err());
+        t.bulk_out(&GET_STATE).unwrap();
+        assert_eq!(t.inner().writes, [vec![0x1E, 0xA2], GET_STATE.to_vec()]);
+    }
+
+    #[test]
+    fn an_area_past_the_end_of_u32_is_refused() {
+        assert!(check_request(&Request::new(300, u32::MAX - 10, 0, 100, 100, 8)).is_err());
+        assert!(check_request(&Request::new(300, 0, u32::MAX - 10, 100, 100, 8)).is_err());
     }
 
     #[test]

@@ -126,9 +126,8 @@ impl Transport for NusbTransport {
             .bulk_in
             .transfer_blocking(self.bulk_in.allocate(requested), BULK_TIMEOUT);
         completion.status.map_err(|e| err("bulk IN", e))?;
-        let n = completion.actual_len.min(buf.len());
-        buf[..n].copy_from_slice(&completion.buffer[..n]);
-        Ok(n)
+        let got = completion.actual_len.min(completion.buffer.len());
+        copy_bulk_in(buf, &completion.buffer[..got])
     }
 
     fn bulk_out(&mut self, data: &[u8]) -> Result<()> {
@@ -165,6 +164,21 @@ impl Transport for NusbTransport {
     }
 }
 
+/// Copies what a bulk IN transfer received into `buf`. The request is rounded up to whole
+/// packets, so the scanner could send more than `buf` holds (a packet of image where a state
+/// was asked): that is an error, as on `usbscan.sys`, not data to drop in silence.
+fn copy_bulk_in(buf: &mut [u8], received: &[u8]) -> Result<usize> {
+    let n = received.len();
+    if n > buf.len() {
+        return Err(Error::Other(format!(
+            "bulk IN: the scanner sent {n} bytes, {} expected",
+            buf.len()
+        )));
+    }
+    buf[..n].copy_from_slice(received);
+    Ok(n)
+}
+
 fn write(bulk_out: &mut Endpoint<Bulk, Out>, data: &[u8]) -> Result<()> {
     let completion = bulk_out.transfer_blocking(Buffer::from(data), BULK_TIMEOUT);
     completion.status.map_err(|e| err("bulk OUT", e))?;
@@ -176,4 +190,21 @@ fn write(bulk_out: &mut Endpoint<Bulk, Out>, data: &[u8]) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_bulk_in_longer_than_the_buffer_is_an_error() {
+        let mut buf = [0u8; 2];
+        assert_eq!(copy_bulk_in(&mut buf, &[0x18, 0x81]).unwrap(), 2);
+        assert_eq!(buf, [0x18, 0x81]);
+        assert_eq!(copy_bulk_in(&mut buf, &[0x06]).unwrap(), 1);
+        let e = copy_bulk_in(&mut buf, &[0x0C; 512])
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("sent 512 bytes, 2 expected"), "{e}");
+    }
 }

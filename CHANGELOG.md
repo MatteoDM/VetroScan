@@ -61,6 +61,11 @@ GitHub; here they are in English.
   Scanjet 3770).
 - HP Scanjet 3770: a film scan with the flatbed lamp off no longer waits 10 s for that lamp to
   warm up; the film adapter's own lamp is waited for as before.
+- Epson Perfection 4490: Cancel works during the lamp's two-minute warm-up, not only after it.
+- Epson Perfection 4490: a scan whose image data fails half-way (a timeout, a broken block) is
+  stopped as a cancelled one is, so the scanner does not go on sending it into the next scan;
+  and a scan whose carriage is not at home before the calibration stops there with an error,
+  instead of moving the carriage further.
 
 ## [0.7.0] - 2026-11-11
 

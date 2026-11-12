@@ -20,7 +20,7 @@
 //! ([`Guarded::permit_request`], [`Guarded::permit_plan`]).
 
 use crate::guard::Guarded;
-use crate::protocol::{State, ACK, GET_STATE};
+use crate::protocol::{is_state, State, ACK, GET_STATE};
 use crate::setup::{self, Plan, Request, XCorrection, TRAILER_LEN};
 use crate::shading::{black_block, Shading};
 use crate::table07;
@@ -152,6 +152,8 @@ fn ramp_bytes(r: &[u16]) -> Vec<u8> {
 
 /// Polls `1B 03` until the scanner is idle with its lamp warm (`18 81` at rest
 /// in every capture; `0x40` moving, `0x02` busy, `0x01` the lamp warming).
+/// An answer that is not a state ([`is_state`]: bytes of an image a scanner is still
+/// sending) is an error at once.
 /// A wait longer than one poll goes to `log`, with the states seen. Answers when it first
 /// saw the lamp warming, if it did.
 fn wait_ready(t: &mut dyn Transport, log: &mut dyn FnMut(String)) -> Result<Option<Instant>> {
@@ -161,6 +163,13 @@ fn wait_ready(t: &mut dyn Transport, log: &mut dyn FnMut(String)) -> Result<Opti
     let mut seen: Vec<(f64, [u8; 2])> = Vec::new();
     loop {
         let s = State(read_two(ask(t, GET_STATE, 2)?));
+        if !is_state(&s.0) {
+            return Err(other(format!(
+                "1B 03 answered {:02X} {:02X}, not a state: a scan still under way (it is \
+                 stopped when the scanner is opened again)",
+                s.0[0], s.0[1]
+            )));
+        }
         let at = start.elapsed().as_secs_f64();
         if s.0[0] & 0x01 != 0 && warming.is_none() {
             warming = Some(Instant::now());
@@ -336,6 +345,17 @@ fn cancel(t: &mut dyn Transport, log: &mut dyn FnMut(String)) -> Result<()> {
     lamp_is_the_glass(t)?;
     log("cancelled (1E 18): the carriage went home".into());
     Ok(())
+}
+
+/// After a read failed (its `1E 47` sent, its data not all taken): stops it as a cancel does,
+/// so that the scanner is not left sending its image to the next scan. The read's error is
+/// kept; what the stop did goes to `log`.
+fn stop_after(t: &mut dyn Transport, log: &mut dyn FnMut(String), e: Error) -> Error {
+    log(format!("the read failed ({e}): stopping it with 1E 18"));
+    if let Err(also) = cancel(t, log) {
+        log(format!("stopping it failed too: {also}"));
+    }
+    e
 }
 
 /// Stops the scan a scanner was left in by a program that went away half-way through its
@@ -586,7 +606,15 @@ fn run<T: Transport>(
 
     ask(g, [0x1E, 0x53], 42)?;
     send(g, [0x1E, 0x57], &e57)?;
-    ask(g, [0x1E, 0x86], 4)?;
+    // The carriage at home (0 in every capture): the calibration's move is counted from there.
+    let home = ask(g, [0x1E, 0x86], 4)?;
+    let home = u16::from_le_bytes([home[0], home[1]]);
+    if home != 0 {
+        return Err(other(format!(
+            "before the calibration the carriage is {home} steps from home: switch the scanner \
+             off and on"
+        )));
+    }
     send(g, [0x1E, 0x46], &p.e46[0])?;
     wait_04(g)?;
     send(g, [0x1E, 0x46], &p.e46[1])?;
@@ -610,7 +638,7 @@ fn run<T: Transport>(
     )?;
     wait_ready(g, log)?;
     let black_cols = p.black_column_count();
-    let black = read_all(g, 4, 4, black_cols * 6)?;
+    let black = read_all(g, 4, 4, black_cols * 6).map_err(|e| stop_after(g, log, e))?;
     let e42_black = black_block(&black);
 
     // The white strip: 16 lines at 16 bits, the carriage moving 160 steps.
@@ -628,7 +656,7 @@ fn run<T: Transport>(
     send(g, [0x1E, 0x01], &p.move_cal)?;
     wait_ready(g, log)?;
     let cols = p.column_count();
-    let white = read_all(g, 16, 16, cols * 6)?;
+    let white = read_all(g, 16, 16, cols * 6).map_err(|e| stop_after(g, log, e))?;
 
     // The lamp off, the dark, still.
     wait_ready(g, log)?;
@@ -643,7 +671,7 @@ fn run<T: Transport>(
         &setup::GAIN_CAL,
     )?;
     wait_ready(g, log)?;
-    let dark = read_all(g, 16, 16, cols * 6)?;
+    let dark = read_all(g, 16, 16, cols * 6).map_err(|e| stop_after(g, log, e))?;
     wait_ready(g, log)?;
     send(g, [0x1E, 0xA2], &[0x01])?;
     log("calibration read: black pixels, white, dark; lamp on again".into());
@@ -736,7 +764,8 @@ fn run<T: Transport>(
         p.lines_per_block,
         p.bytes_per_line,
         &mut |done, total| events(Event::Reading { done, total }),
-    )?;
+    )
+    .map_err(|e| stop_after(g, log, e))?;
     let Some(raw) = raw else {
         cancel(g, log)?;
         return Err(Error::Cancelled);
@@ -1068,6 +1097,99 @@ pub(crate) mod tests {
             "{:?}",
             &lines[at - 3..at]
         );
+    }
+
+    /// A capture's scanner whose `n`-th read (`1E 47`) fails at its first block.
+    #[derive(Debug)]
+    struct FailingRead {
+        inner: Cancelling,
+        e47: usize,
+        fail_at: usize,
+    }
+
+    impl Transport for FailingRead {
+        fn bulk_out(&mut self, data: &[u8]) -> Result<()> {
+            if data == [0x1E, 0x47] {
+                self.e47 += 1;
+            }
+            self.inner.bulk_out(data)
+        }
+
+        fn bulk_in(&mut self, buf: &mut [u8]) -> Result<usize> {
+            if self.e47 == self.fail_at {
+                self.fail_at = 0;
+                return Err(Error::Other("bulk IN: timed out".into()));
+            }
+            self.inner.bulk_in(buf)
+        }
+    }
+
+    /// A read that fails is stopped with 1E 18, as a cancel, in the calibration (the white
+    /// strip, the second read) and in the image (the fourth); the error is the read's.
+    #[test]
+    fn a_failed_read_is_stopped_with_1e_18() {
+        let (_, text) = CAPTURES.iter().find(|(n, _)| *n == "29").unwrap();
+        let (request, _, _) = request_of(&parse(text));
+        for fail_at in [2, 4] {
+            let mut g = Guarded::new(FailingRead {
+                inner: Cancelling {
+                    follow: Follow::new("29", text),
+                    after: Vec::new(),
+                    answers: VecDeque::new(),
+                    leftover: 0,
+                },
+                e47: 0,
+                fail_at,
+            });
+            let mut said = Vec::new();
+            let r = scan_glass(
+                &mut g,
+                request,
+                Options {
+                    last_used: Some(SystemTime::now()),
+                    curves: Curves::Wia,
+                },
+                &mut |l| said.push(l),
+                &mut |_| true,
+            );
+            let e = r.unwrap_err().to_string();
+            assert!(e.contains("timed out"), "{e}");
+            assert_eq!(
+                g.inner().inner.after,
+                [CANCEL.to_vec(), GET_STATE.to_vec(), vec![0x1E, 0xA1]],
+                "read {fail_at}"
+            );
+            assert!(said.iter().any(|l| l.contains("stopping it with 1E 18")));
+        }
+    }
+
+    /// A carriage not at home before the calibration: nothing moves, the scan stops there.
+    #[test]
+    fn a_carriage_away_from_home_is_not_calibrated() {
+        let (_, text) = CAPTURES.iter().find(|(n, _)| *n == "29").unwrap();
+        // The first 1E 86 answers 160 steps out instead of 0.
+        let at = text.find("W 1e86").expect("a 1E 86");
+        let moved = format!(
+            "{}{}",
+            &text[..at],
+            text[at..].replacen("A 00000000", "A a0000000", 1)
+        );
+        assert_ne!(moved.as_str(), *text);
+        let text: &'static str = Box::leak(moved.into_boxed_str());
+        let (r, _, _) = scan("29", text);
+        let e = r.unwrap_err().to_string();
+        assert!(e.contains("160 steps from home"), "{e}");
+    }
+
+    #[test]
+    fn what_is_not_a_state_is_not_waited_for() {
+        use crate::protocol::tests::Mock;
+        // Two bytes of an image whose first has the firmware's bit: not taken for idle.
+        let mut t = Mock::answering(&[&[0x10, 0x00]]);
+        let e = wait_ready(&mut t, &mut |_| {}).unwrap_err().to_string();
+        assert!(e.contains("not a state"), "{e}");
+        let mut t = Mock::answering(&[&[0x58, 0x81], &[0x18, 0x81]]);
+        assert!(wait_ready(&mut t, &mut |_| {}).is_ok());
     }
 
     #[test]
