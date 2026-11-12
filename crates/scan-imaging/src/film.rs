@@ -237,11 +237,20 @@ impl Negative {
             Some(b) => b,
             None => base_auto(samples)?,
         };
-        let base_log = base.map(|b| b.clamp(1.0 / FULL, 1.0).log10());
+        // Density above the base of each sample value, per channel, worked
+        // out once.
+        let densities_of: [Vec<f32>; 3] = std::array::from_fn(|c| {
+            let base_log = base[c].clamp(1.0 / FULL, 1.0).log10();
+            (0..=u16::MAX)
+                .map(|v| base_log - transmission(v).log10())
+                .collect()
+        });
+        let density_of =
+            |p: &[u16]| -> [f32; 3] { std::array::from_fn(|c| densities_of[c][usize::from(p[c])]) };
         let mut histograms = vec![[0u64; 3]; DENSITY_BINS];
         let mut counted = 0u64;
         for p in samples.chunks_exact(3).filter(|p| is_film(p)) {
-            let d: [f32; 3] = std::array::from_fn(|c| base_log[c] - transmission(p[c]).log10());
+            let d = density_of(p);
             if d.iter().all(|&d| d < NEAR_BASE) {
                 continue;
             }
@@ -280,7 +289,7 @@ impl Negative {
         let mut totals = vec![0u64; total_bins];
         let mut densities = Vec::with_capacity(counted as usize);
         for p in samples.chunks_exact(3).filter(|p| is_film(p)) {
-            let d: [f32; 3] = std::array::from_fn(|c| base_log[c] - transmission(p[c]).log10());
+            let d = density_of(p);
             if d.iter().all(|&d| d < NEAR_BASE) {
                 continue;
             }
@@ -556,7 +565,7 @@ pub fn measure_slides(
 /// 35 mm negatives. A slot left empty, or the leader of a strip never
 /// exposed, gives nothing.
 pub fn frames(image: &Image, film: Film) -> Vec<Found> {
-    if image.format != Format::Rgb {
+    if image.format != Format::Rgb || image.data.len() != image.width * image.height * 3 {
         return Vec::new();
     }
     let mm = f32::from(image.dpi) / 25.4;

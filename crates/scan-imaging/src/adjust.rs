@@ -194,48 +194,54 @@ impl Curve {
         self.points() == Curve::IDENTITY.points()
     }
 
-    /// The output at input `t`.
+    /// The output at input `t`. To evaluate a curve many times, take
+    /// [`Curve::prepared`] once.
     pub fn eval(&self, t: f32) -> f32 {
-        if self.is_identity() {
-            return t;
-        }
+        self.prepared().eval(t)
+    }
+
+    /// The curve with its tangents worked out, for evaluating it many times.
+    pub fn prepared(&self) -> Prepared {
+        let identity = self.is_identity();
         let p = self.points();
         let n = p.len();
+        let mut m = [0.0f32; Curve::MAX];
+        if !identity {
+            // Secant slopes, then tangents limited so that each piece stays
+            // monotone (Fritsch-Carlson).
+            m[..n].copy_from_slice(&tangents(p));
+        }
+        Prepared {
+            curve: *self,
+            identity,
+            m,
+        }
+    }
+}
+
+/// A [`Curve`] ready to be evaluated: its tangents worked out once.
+#[derive(Debug, Clone, Copy)]
+pub struct Prepared {
+    curve: Curve,
+    identity: bool,
+    m: [f32; Curve::MAX],
+}
+
+impl Prepared {
+    /// The output at input `t`.
+    pub fn eval(&self, t: f32) -> f32 {
+        if self.identity {
+            return t;
+        }
+        let p = self.curve.points();
+        let n = p.len();
+        let m = &self.m;
         let t = t.clamp(0.0, 1.0);
         if t <= p[0][0] {
             return p[0][1];
         }
         if t >= p[n - 1][0] {
             return p[n - 1][1];
-        }
-        // Secant slopes, then tangents limited so that each piece stays
-        // monotone (Fritsch-Carlson).
-        let d: Vec<f32> = (0..n - 1)
-            .map(|i| (p[i + 1][1] - p[i][1]) / (p[i + 1][0] - p[i][0]))
-            .collect();
-        let mut m = vec![0.0f32; n];
-        m[0] = d[0];
-        m[n - 1] = d[n - 2];
-        for i in 1..n - 1 {
-            m[i] = if d[i - 1] * d[i] <= 0.0 {
-                0.0
-            } else {
-                (d[i - 1] + d[i]) / 2.0
-            };
-        }
-        for i in 0..n - 1 {
-            if d[i] == 0.0 {
-                m[i] = 0.0;
-                m[i + 1] = 0.0;
-            } else {
-                let (a, b) = (m[i] / d[i], m[i + 1] / d[i]);
-                let r = a * a + b * b;
-                if r > 9.0 {
-                    let k = 3.0 / r.sqrt();
-                    m[i] = k * a * d[i];
-                    m[i + 1] = k * b * d[i];
-                }
-            }
         }
         let i = (0..n - 1).find(|&i| t < p[i + 1][0]).unwrap_or(n - 2);
         let h = p[i + 1][0] - p[i][0];
@@ -247,6 +253,41 @@ impl Curve {
             + (u3 - u2) * h * m[i + 1];
         v.clamp(0.0, 1.0)
     }
+}
+
+/// The tangents at the points of a monotone cubic through `p` (2 or more
+/// points): secant slopes, then limited so that each piece stays monotone
+/// (Fritsch-Carlson).
+fn tangents(p: &[[f32; 2]]) -> Vec<f32> {
+    let n = p.len();
+    let d: Vec<f32> = (0..n - 1)
+        .map(|i| (p[i + 1][1] - p[i][1]) / (p[i + 1][0] - p[i][0]))
+        .collect();
+    let mut m = vec![0.0f32; n];
+    m[0] = d[0];
+    m[n - 1] = d[n - 2];
+    for i in 1..n - 1 {
+        m[i] = if d[i - 1] * d[i] <= 0.0 {
+            0.0
+        } else {
+            (d[i - 1] + d[i]) / 2.0
+        };
+    }
+    for i in 0..n - 1 {
+        if d[i] == 0.0 {
+            m[i] = 0.0;
+            m[i + 1] = 0.0;
+        } else {
+            let (a, b) = (m[i] / d[i], m[i + 1] / d[i]);
+            let r = a * a + b * b;
+            if r > 9.0 {
+                let k = 3.0 / r.sqrt();
+                m[i] = k * a * d[i];
+                m[i + 1] = k * b * d[i];
+            }
+        }
+    }
+    m
 }
 
 /// How strongly temperature and tint move the channels at ±100.
@@ -329,6 +370,7 @@ impl Adjustments {
         let shadows = self.shadows.clamp(-100.0, 100.0) / 100.0;
         let whites = self.whites.clamp(-100.0, 100.0) / 100.0;
         let blacks = self.blacks.clamp(-100.0, 100.0) / 100.0;
+        let curve = self.curve.map(|c| c.prepared());
         move |c: usize, i: f32| {
             let x = (i * gains[c] * exposure).min(255.0);
             let v = if linear {
@@ -344,17 +386,20 @@ impl Adjustments {
             let v = 255.0 * v.powf(1.0 / gamma);
             let v = (v - 128.0) * contrast + 128.0 + brightness;
             let v = (v / 255.0).clamp(0.0, 1.0);
-            self.curve[0].eval(self.curve[c + 1].eval(v))
+            curve[0].eval(curve[c + 1].eval(v))
         }
     }
 }
 
 /// Box blur of radius `r` across and down, `channels` samples per pixel.
 pub fn box_blur(data: &mut [u8], width: usize, channels: usize, r: usize) {
-    if r == 0 || width == 0 {
+    if r == 0 || width == 0 || channels == 0 {
         return;
     }
     let height = data.len() / (width * channels);
+    if height == 0 {
+        return;
+    }
     let mut tmp = vec![0u8; data.len()];
     // Across.
     for y in 0..height {
@@ -751,18 +796,24 @@ pub fn render16(
         linear,
         tone,
     );
-    let tone16: Vec<u16> = match mode {
+    // Each sample's 16-bit tone, and the 8-bit tone it had in `finished`
+    // before the later steps (from the same tables, so rounded the same).
+    let tone16: Vec<(u16, u8)> = match mode {
         Mode::Colour => {
             let t = adjustments.tables_fine16(tone, linear);
+            let t8 = adjustments.tables_fine(tone, linear);
             samples
                 .iter()
                 .enumerate()
-                .map(|(i, &v)| t[i % 3][usize::from(v >> 4)])
+                .map(|(i, &v)| {
+                    let at = usize::from(v >> 4);
+                    (t[i % 3][at], t8[i % 3][at])
+                })
                 .collect()
         }
         Mode::Grey => {
             let gains = adjustments.gains();
-            let t = Adjustments {
+            let grey = Adjustments {
                 temperature: 0.0,
                 tint: 0.0,
                 curve: [
@@ -772,14 +823,15 @@ pub fn render16(
                     Curve::IDENTITY,
                 ],
                 ..*adjustments
-            }
-            .tables_fine16(&tone.grey(), linear);
+            };
+            let t = grey.tables_fine16(&tone.grey(), linear);
+            let t8 = grey.tables_fine(&tone.grey(), linear);
             samples
                 .chunks_exact(3)
                 .map(|p| {
                     let sum: f32 = (0..3).map(|c| f32::from(p[c]) / 256.0 * gains[c]).sum();
                     let level = (sum / 3.0 * 16.0).round().clamp(0.0, 4095.0) as usize;
-                    t[1][level]
+                    (t[1][level], t8[1][level])
                 })
                 .collect()
         }
@@ -789,10 +841,8 @@ pub fn render16(
         tone16
             .iter()
             .zip(&finished.data)
-            .map(|(&t, &f)| {
-                // The 8-bit tone this sample had before the later steps.
-                let t8 = (f32::from(t) / 257.0).round();
-                let delta = (f32::from(f) - t8) * 257.0;
+            .map(|(&(t, t8), &f)| {
+                let delta = (f32::from(f) - f32::from(t8)) * 257.0;
                 (f32::from(t) + delta).round().clamp(0.0, 65535.0) as u16
             })
             .collect(),
@@ -1061,5 +1111,56 @@ mod tests {
         let mut q = [200, 100, 100];
         saturate(&mut q, -100.0);
         assert!(q[0] == q[1] && q[1] == q[2]);
+    }
+
+    #[test]
+    fn an_empty_image_renders_empty() {
+        let a = Adjustments {
+            noise: 50.0,
+            descreen: 150.0,
+            ..Adjustments::default()
+        };
+        let mut nothing: Vec<u8> = Vec::new();
+        box_blur(&mut nothing, 10, 3, 2);
+        let out = render(&[], 10, 0, 300, Mode::Colour, &a, false, &TONE);
+        assert!(out.data.is_empty());
+        let bw = render(
+            &[],
+            0,
+            0,
+            300,
+            Mode::Lineart { threshold: 55 },
+            &a,
+            false,
+            &TONE,
+        );
+        assert!(bw.data.is_empty());
+    }
+
+    #[test]
+    fn render16_has_no_step_without_the_later_steps() {
+        // Every 12-bit level, nothing after the tones: the 16-bit output is
+        // the 16-bit tone itself, with no jump of a whole 8-bit level.
+        let rgb16: Vec<u16> = (0..4096u16).flat_map(|i| [i << 4; 3]).collect();
+        let a = Adjustments {
+            sharpen: 0.0,
+            ..Adjustments::default()
+        };
+        let out = render16(&rgb16, 4096, 1, 300, Mode::Colour, &a, false, &TONE).unwrap();
+        let t = a.tables_fine16(&TONE, false);
+        for (i, (&o, &v)) in out.iter().zip(&rgb16).enumerate() {
+            assert_eq!(o, t[i % 3][usize::from(v >> 4)], "sample {i}");
+        }
+    }
+
+    #[test]
+    fn a_prepared_curve_is_the_curve() {
+        let c = Curve::new(&[[0.0, 0.1], [0.3, 0.2], [0.6, 0.8], [1.0, 0.9]]);
+        let p = c.prepared();
+        for i in 0..=100 {
+            let t = i as f32 / 100.0;
+            assert_eq!(p.eval(t), c.eval(t));
+        }
+        assert_eq!(Curve::IDENTITY.prepared().eval(0.37), 0.37);
     }
 }

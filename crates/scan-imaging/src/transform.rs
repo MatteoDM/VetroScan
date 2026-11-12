@@ -112,6 +112,10 @@ impl Transform {
     /// The crop in pixels of the turned frame: left, top, width, height.
     pub fn crop_pixels(&self, width: usize, height: usize) -> (usize, usize, usize, usize) {
         let (w, h) = self.oriented_size(width, height);
+        if w == 0 || h == 0 {
+            // An empty image: nothing to crop.
+            return (0, 0, 0, 0);
+        }
         let c = self.effective_crop(width, height);
         let x = ((c.x * w as f32).round() as usize).min(w.saturating_sub(1));
         let y = ((c.y * h as f32).round() as usize).min(h.saturating_sub(1));
@@ -123,6 +127,9 @@ impl Transform {
     /// Size of the result for an image `width` × `height`.
     pub fn output_size(&self, width: usize, height: usize) -> (usize, usize) {
         let (_, _, cw, ch) = self.crop_pixels(width, height);
+        if cw == 0 || ch == 0 {
+            return (0, 0);
+        }
         match self.scale {
             Some([sx, sy]) => (
                 ((cw as f32 * sx).round() as usize).max(1),
@@ -138,6 +145,9 @@ impl Transform {
             return d.max(1);
         }
         let (_, _, cw, _) = self.crop_pixels(width, height);
+        if cw == 0 {
+            return dpi.max(1);
+        }
         let (ow, _) = self.output_size(width, height);
         ((f32::from(dpi) * ow as f32 / cw as f32).round() as u16).max(1)
     }
@@ -808,5 +818,23 @@ mod tests {
         assert_eq!(inscribed(100.0, 50.0, 0.0), Crop::FULL);
         let c = inscribed(100.0, 100.0, 45.0);
         assert!((c.width - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-3);
+    }
+
+    #[test]
+    fn an_empty_image_is_zero_by_zero() {
+        let t = Transform {
+            crop: Some(Crop {
+                x: 0.1,
+                y: 0.1,
+                width: 0.5,
+                height: 0.5,
+            }),
+            scale: Some([2.0, 2.0]),
+            ..Transform::default()
+        };
+        assert_eq!(t.crop_pixels(0, 10), (0, 0, 0, 0));
+        assert_eq!(t.output_size(0, 10), (0, 0));
+        assert_eq!(t.output_size(10, 0), (0, 0));
+        assert_eq!(t.output_dpi(0, 0, 300), 300);
     }
 }

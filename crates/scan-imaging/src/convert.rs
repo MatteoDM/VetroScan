@@ -65,6 +65,9 @@ pub fn to_grey(rgb: &[u8], tone: &[u8; 256]) -> Vec<u8> {
 /// in the high bit, each line padded to a whole byte; 1 is white (as the
 /// PNG format has it for a 1-bit grey image).
 pub fn to_lineart(grey: &[u8], width: usize, threshold: u8) -> Vec<u8> {
+    if width == 0 {
+        return Vec::new();
+    }
     let cut = 255 - threshold;
     let stride = width.div_ceil(8);
     let mut out = Vec::with_capacity(stride * grey.len() / width.max(1));

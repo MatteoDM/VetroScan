@@ -89,6 +89,9 @@ pub fn objects(image: &Image) -> Vec<Found> {
         Format::Grey => 1,
         Format::Lineart => return Vec::new(),
     };
+    if image.data.len() != image.width * image.height * channels {
+        return Vec::new();
+    }
     // Blocks of about 0.5 mm.
     let block = (usize::from(image.dpi) / 50).max(1);
     let (bw, bh) = (image.width / block, image.height / block);
@@ -163,8 +166,13 @@ pub fn objects(image: &Image) -> Vec<Found> {
             .max_by_key(|v| v.len())
             .cloned()
             .unwrap_or_default();
+        // No lid along the edges (the lid open, originals over every
+        // edge): nothing to tell the originals from, so nothing found.
+        if peak.is_empty() {
+            return Vec::new();
+        }
         std::array::from_fn::<f32, 3, _>(|c| {
-            peak.iter().map(|&i| mean[i][c]).sum::<f32>() / peak.len().max(1) as f32
+            peak.iter().map(|&i| mean[i][c]).sum::<f32>() / peak.len() as f32
         })
     };
     let level = (lid[0] + lid[1] + lid[2]) / 3.0;
@@ -260,19 +268,37 @@ pub fn objects(image: &Image) -> Vec<Found> {
 }
 
 /// Sorts in reading order: rows of objects side by side, that is
-/// overlapping for at least half the height of the lower one (a postcard
-/// askew reaches a little into the row under it without being part of it).
+/// overlapping the row's topmost object for at least half the height of
+/// the lower one (a postcard askew reaches a little into the row under it
+/// without being part of it), then left to right in each row. The rows are
+/// decided first, top to bottom, so the order is the same whatever order
+/// the objects came in.
 pub(crate) fn reading_order(found: &mut [Found]) {
     found.sort_by(|a, b| {
         let (ta, tb) = (a.bounds(), b.bounds());
-        let overlap = (ta[1] + ta[3]).min(tb[1] + tb[3]) - ta[1].max(tb[1]);
-        let same_row = overlap > 0.5 * ta[3].min(tb[3]);
-        if same_row {
-            ta[0].total_cmp(&tb[0])
-        } else {
-            ta[1].total_cmp(&tb[1])
-        }
+        ta[1].total_cmp(&tb[1]).then(ta[0].total_cmp(&tb[0]))
     });
+    let mut rows = Vec::with_capacity(found.len());
+    let mut first: Option<[f32; 4]> = None;
+    for f in found.iter() {
+        let t = f.bounds();
+        let same_row = first.is_some_and(|r| {
+            let overlap = (r[1] + r[3]).min(t[1] + t[3]) - r[1].max(t[1]);
+            overlap > 0.5 * r[3].min(t[3])
+        });
+        if !same_row {
+            first = Some(t);
+        }
+        rows.push(
+            rows.last()
+                .map_or(0, |&n: &usize| n + usize::from(!same_row)),
+        );
+    }
+    let mut keyed: Vec<(usize, Found)> = rows.into_iter().zip(found.iter().copied()).collect();
+    keyed.sort_by(|(ra, a), (rb, b)| ra.cmp(rb).then(a.bounds()[0].total_cmp(&b.bounds()[0])));
+    for (slot, (_, f)) in found.iter_mut().zip(keyed) {
+        *slot = f;
+    }
 }
 
 /// Each side of `f` moved to where the image really changes from the lid,
@@ -967,5 +993,74 @@ mod tests {
         let c = image.cropped(10, 20, 30, 40);
         assert_eq!((c.width, c.height, c.data.len()), (30, 40, 30 * 40 * 3));
         assert_eq!(c.data[0..3], image.data[(20 * 1000 + 10) * 3..][..3]);
+    }
+
+    #[test]
+    fn the_reading_order_does_not_depend_on_the_order_found() {
+        // Staggered: A and B overlap, B and C overlap, A and C do not.
+        let at = |cx: f32, cy: f32| Found {
+            cx,
+            cy,
+            width: 100.0,
+            height: 100.0,
+            angle: 0.0,
+        };
+        let (a, b, c, d) = (
+            at(100.0, 100.0),
+            at(300.0, 140.0),
+            at(500.0, 180.0),
+            at(100.0, 400.0),
+        );
+        let orders = [
+            [a, b, c, d],
+            [c, b, a, d],
+            [b, d, c, a],
+            [d, c, a, b],
+            [a, c, d, b],
+        ];
+        let mut first = None;
+        for order in orders {
+            let mut v = order.to_vec();
+            reading_order(&mut v);
+            match &first {
+                None => first = Some(v),
+                Some(f) => assert_eq!(&v, f),
+            }
+        }
+        // A, then B beside it; C below A's row starts the next one, then D.
+        assert_eq!(first.unwrap(), [a, b, c, d]);
+    }
+
+    #[test]
+    fn without_a_lid_nothing_is_found() {
+        // The lid open: black all round, a grey photo in the middle.
+        let (w, h) = (400, 400);
+        let mut data = vec![0u8; w * h * 3];
+        for y in 150..250 {
+            for x in 150..250 {
+                data[(y * w + x) * 3..][..3].copy_from_slice(&[120, 120, 120]);
+            }
+        }
+        let image = Image {
+            width: w,
+            height: h,
+            dpi: 100,
+            format: Format::Rgb,
+            data,
+        };
+        assert!(objects(&image).is_empty());
+    }
+
+    #[test]
+    fn an_image_shorter_than_its_size_finds_nothing() {
+        let image = Image {
+            width: 1000,
+            height: 1300,
+            dpi: 200,
+            format: Format::Rgb,
+            data: vec![240; 1000 * 1300 * 3 - 3],
+        };
+        assert!(objects(&image).is_empty());
+        assert!(crate::film::frames(&image, crate::film::Film::Slide).is_empty());
     }
 }

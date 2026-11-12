@@ -66,6 +66,13 @@ GitHub; here they are in English.
   stopped as a cancelled one is, so the scanner does not go on sending it into the next scan;
   and a scan whose carriage is not at home before the calibration stops there with an error,
   instead of moving the carriage further.
+- The originals found on the glass, and the slides and frames found in the film holder, come
+  in the same reading order every time: row by row from the top, left to right in each row.
+- With nothing like the lid along the edges of the glass (the lid left open), the search for
+  originals finds none, so that the areas can be drawn by hand, instead of taking the whole
+  glass for one original.
+- 16-bit scans no longer have a few tones a whole 8-bit level off, which showed as spikes in
+  their histogram.
 
 ## [0.7.0] - 2026-11-11
 
