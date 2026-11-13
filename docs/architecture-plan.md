@@ -1256,7 +1256,40 @@ never run by us (step 12).
 12. **Our upload and `nusb` on the scanner**: the scanner on Linux, either a Linux machine or WSL
     with `usbipd` (the scanner taken from Windows' driver meanwhile: Matteo chooses), both
     firmware copies (Windows driver's and AVASYS'), then a glass scan. macOS: no Mac here, the CI
-    only.
+    only. **Next, on a real Linux machine** (Matteo, 13 November 2026, evening: the work moves to
+    another computer, so this is the hand-over; nothing tried on Linux yet, everything committed
+    and pushed up to here).
+    What is tested: `nusb` (usbfs) as the transport, with no STI lock, no Epson driver and no
+    button poll in between; **our firmware upload** (`protocol::upload_firmware`), never sent
+    by this program to the scanner (on Windows Epson's driver sends it at switch-on; its bytes
+    are capture 01's), with the two copies `known_firmware.rs` accepts: the Windows driver's,
+    embedded by default from `crates/epson-gt-x750/firmware/esfw54.bin` (private repository),
+    and AVASYS' (the iscan plugin, or Fedora's `iscan-firmware`, looked for in
+    `/usr/lib/firmware/epson/` and `/usr/share/iscan/`); then a glass scan, and the opening's
+    recovery (`Transport::write_reading`) through `nusb`, never run. Matteo present, one step
+    at a time, each said before it is run:
+    1. Clone, then `cargo build --release -p epson-gt-x750 --bin epson4490` (the app's build
+       needs the packages of `docs/install-linux.md`).
+    2. The udev rule: `sudo cp packaging/linux/70-epson-4490.rules /etc/udev/rules.d/`,
+       `sudo udevadm control --reload`, then plug the scanner in or switch it on.
+    3. The scanner just switched on (no firmware running): `epson4490 list`, `epson4490
+       firmware` (which copy would go), `epson4490 probe`: expect `28 00`.
+    4. `epson4490 upload` (the embedded Windows copy): expect the `06`s, about 9 s, then
+       `probe`: `18 81`.
+    5. Switched off and on, the same with AVASYS' copy (`--firmware PATH`) if Matteo has it.
+    6. `epson4490 scan 300 40 60 50 50 out.png --tone linear --move` (two minutes of warm-up
+       when the lamp is cold), set against `scansioni/blocco_20261112/dopo_recover*.png` (the
+       same area, with the same photo; on the Windows machine, not in git: copy it across).
+    7. The app (`cargo build --release`, `target/release/vetroscan`): a preview, a scan; then
+       closed half-way through a scan and opened again (the recovery through `nusb`).
+    Meanwhile: `1B 03` answering with bit `80` (`98 81`, the front light flashing red) is the
+    scanner's own error since `33d30de`; on Linux there is no Epson Scan to clear it, so if it
+    comes, switch the scanner off and on, and note whether that clears it. Captures there with
+    `usbmon` and Wireshark/tshark (`sudo modprobe usbmon`), if wanted. The checks on that
+    machine too: `cargo fmt --all --check`, `clippy -D warnings`, `cargo test --workspace
+    --locked`. The project's memory and the session notes stay on the Windows machine: this
+    plan, `CLAUDE.md` and `../captures` (not in git; copy `captures/epson4490` across if the
+    capture notes are wanted there) are what a session on Linux has.
 
 **D. Films** (milestone 5)
 
