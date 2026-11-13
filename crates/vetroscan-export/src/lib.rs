@@ -15,7 +15,8 @@ mod raw;
 
 use scan_imaging::{Format, Image};
 use std::fmt;
-use std::io::{Seek, Write};
+use std::fs::File;
+use std::io::{BufWriter, Seek, Write};
 use std::path::{Path, PathBuf};
 
 pub use compress::{Encoding, Planned, Sample};
@@ -102,6 +103,34 @@ impl fmt::Display for ImageFormat {
     }
 }
 
+/// Writes the file `path` with `write`, into a temporary file next to it that
+/// replaces `path` only once it is complete: an export that fails half-way
+/// leaves the file that was there as it was.
+pub(crate) fn write_file(
+    path: &Path,
+    write: impl FnOnce(&mut BufWriter<File>) -> Result<()>,
+) -> Result<()> {
+    let name = path
+        .file_name()
+        .ok_or_else(|| format!("{}: not a file name", path.display()))?;
+    let mut temporary = std::ffi::OsString::from(".");
+    temporary.push(name);
+    temporary.push(".part");
+    let temporary = path.with_file_name(temporary);
+    let written = (|| -> Result<()> {
+        let mut file = BufWriter::new(File::create(&temporary)?);
+        write(&mut file)?;
+        file.flush()?;
+        file.get_ref().sync_all()?;
+        Ok(())
+    })();
+    let done = written.and_then(|()| Ok(std::fs::rename(&temporary, path)?));
+    if done.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    done
+}
+
 /// Black and white expanded to 8-bit grey (0 or 255).
 fn lineart_to_grey(image: &Image) -> Vec<u8> {
     let stride = image.width.div_ceil(8);
@@ -178,10 +207,7 @@ pub fn save(path: &Path, image: &Image) -> Result<()> {
 
 /// Writes one image to a file in `format`.
 pub fn save_as(path: &Path, image: &Image, format: ImageFormat) -> Result<()> {
-    let mut file = std::io::BufWriter::new(std::fs::File::create(path)?);
-    write_image(&mut file, image, format)?;
-    file.flush()?;
-    Ok(())
+    write_file(path, |file| write_image(file, image, format))
 }
 
 fn write_png<W: Write>(out: &mut W, image: &Image) -> Result<()> {
@@ -209,10 +235,14 @@ fn write_png<W: Write>(out: &mut W, image: &Image) -> Result<()> {
 
 /// Writes `pages` as one TIFF file, one page each (Deflate compression,
 /// resolution recorded). Black and white is stored as 8-bit grey 0/255,
-/// which Deflate shrinks almost as much as 1 bit.
+/// which Deflate shrinks almost as much as 1 bit. No pages is an error: a
+/// TIFF needs one.
 pub fn write_tiff<W: Write + Seek>(out: &mut W, pages: &[Image]) -> Result<()> {
     use tiff::encoder::{colortype, compression::DeflateLevel, Compression, Rational, TiffEncoder};
     use tiff::tags::ResolutionUnit;
+    if pages.is_empty() {
+        return Err("no pages".into());
+    }
     let mut encoder =
         TiffEncoder::new(out)?.with_compression(Compression::Deflate(DeflateLevel::Balanced));
     for page in pages {
@@ -245,10 +275,7 @@ pub fn write_tiff<W: Write + Seek>(out: &mut W, pages: &[Image]) -> Result<()> {
 
 /// Writes `pages` as a multi-page TIFF file.
 pub fn save_tiff(path: &Path, pages: &[Image]) -> Result<()> {
-    let mut file = std::io::BufWriter::new(std::fs::File::create(path)?);
-    write_tiff(&mut file, pages)?;
-    file.flush()?;
-    Ok(())
+    write_file(path, |file| write_tiff(file, pages))
 }
 
 /// Writes `pages` as a PDF document (see [`pdf`]), laid out on `layout`'s
@@ -259,19 +286,13 @@ pub fn save_pdf(
     layout: impl Into<Layout>,
     jpeg_quality: u8,
 ) -> Result<()> {
-    let mut file = std::io::BufWriter::new(std::fs::File::create(path)?);
-    pdf::write(&mut file, pages, layout, jpeg_quality)?;
-    file.flush()?;
-    Ok(())
+    write_file(path, |file| pdf::write(file, pages, layout, jpeg_quality))
 }
 
 /// Writes a PDF document whose pages each have their own sheet and
 /// encoding.
 pub fn save_pdf_pages(path: &Path, pages: &[PdfPage]) -> Result<()> {
-    let mut file = std::io::BufWriter::new(std::fs::File::create(path)?);
-    pdf::write_pages(&mut file, pages)?;
-    file.flush()?;
-    Ok(())
+    write_file(path, |file| pdf::write_pages(file, pages))
 }
 
 /// File name of page `n` (from 1) of `count`: `name-01.png` and so on.
@@ -303,18 +324,19 @@ pub fn save_folder(
 /// Writes each page as an image into a ZIP file (stored as they are: the
 /// images are already compressed).
 pub fn save_zip(path: &Path, name: &str, pages: &[Image], format: ImageFormat) -> Result<()> {
-    let file = std::fs::File::create(path)?;
-    let mut zip = zip::ZipWriter::new(file);
-    let options =
-        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-    for (i, page) in pages.iter().enumerate() {
-        let mut buffer = std::io::Cursor::new(Vec::new());
-        write_image(&mut buffer, page, format)?;
-        zip.start_file(page_name(name, i + 1, pages.len(), format), options)?;
-        zip.write_all(buffer.get_ref())?;
-    }
-    zip.finish()?;
-    Ok(())
+    write_file(path, |file| {
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        for (i, page) in pages.iter().enumerate() {
+            let mut buffer = std::io::Cursor::new(Vec::new());
+            write_image(&mut buffer, page, format)?;
+            zip.start_file(page_name(name, i + 1, pages.len(), format), options)?;
+            zip.write_all(buffer.get_ref())?;
+        }
+        zip.finish()?;
+        Ok(())
+    })
 }
 
 #[cfg(test)]
@@ -394,5 +416,21 @@ mod tests {
     fn page_names_sort() {
         assert_eq!(page_name("doc", 3, 12, ImageFormat::Png), "doc-03.png");
         assert_eq!(page_name("doc", 7, 120, ImageFormat::Tiff), "doc-007.tif");
+    }
+
+    #[test]
+    fn a_failed_save_leaves_the_old_file() {
+        let dir = std::env::temp_dir().join(format!("vetroscan-export-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("doc.tif");
+        std::fs::write(&path, b"the old file").unwrap();
+        // No pages: an error, and the old file as it was, nothing left beside it.
+        assert!(save_tiff(&path, &[]).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"the old file");
+        assert!(!dir.join(".doc.tif.part").exists());
+        // A good save replaces it.
+        save_tiff(&path, &[sample(Format::Grey)]).unwrap();
+        assert_eq!(&std::fs::read(&path).unwrap()[..2], b"II");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -79,6 +79,17 @@ GitHub; here they are in English.
   open, what each answered is kept, the busy one first.
 - A film scan asked of a scanner without a film adapter is refused for that reason, not for
   its resolution.
+- Saving over a file that is already there no longer destroys it when the save fails half-way
+  (a full disk, an encoder error): every file is written beside it first and takes its place
+  only once complete.
+- A PDF below 100 % quality keeps a page in colour when it has any real colour on it, a
+  signature in blue ink or a red stamp included; before, a page whose colour covered under
+  0.3 % of it was stored in grey.
+- Fitting a PDF to a size no longer lowers a page's quality by a step that would not make the
+  file any smaller.
+- A PDF with an empty page is refused with the number of that page, instead of a broken file;
+  a multi-page TIFF with no pages is refused instead of written unreadable.
+- Long PDFs take much less memory to save: they are written page by page.
 
 ## [0.7.0] - 2026-11-11
 

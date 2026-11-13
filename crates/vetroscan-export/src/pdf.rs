@@ -257,38 +257,66 @@ pub struct PdfPage<'a> {
     pub encoding: Encoding,
 }
 
+/// A writer that counts the bytes written: the offsets of the PDF's
+/// objects, without holding the document in memory.
+struct Counting<W> {
+    inner: W,
+    written: usize,
+}
+
+impl<W: Write> Counting<W> {
+    fn put(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        self.inner.write_all(bytes)?;
+        self.written += bytes.len();
+        Ok(())
+    }
+}
+
 /// Writes `pages` as a PDF document to `out`, each on its own sheet and
-/// with its own encoding.
+/// with its own encoding. The document goes out page by page: only one
+/// page's picture is held at a time.
 pub fn write_pages<W: Write>(out: &mut W, pages: &[PdfPage]) -> Result<()> {
     if pages.is_empty() {
         return Err("no pages".into());
     }
-    let mut pdf = Vec::new();
+    if let Some(i) = pages
+        .iter()
+        .position(|p| p.image.width == 0 || p.image.height == 0)
+    {
+        return Err(format!("page {} is empty", i + 1).into());
+    }
+    let mut pdf = Counting {
+        inner: out,
+        written: 0,
+    };
     let mut offsets = Vec::new();
-    pdf.extend_from_slice(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n");
+    pdf.put(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")?;
     // Objects: 1 catalog, 2 page tree, then 3 per page (page, contents,
     // image).
     let page_id = |i: usize| 3 + 3 * i;
-    let mut object = |pdf: &mut Vec<u8>, id: usize, body: &[u8]| {
-        offsets.push((id, pdf.len()));
-        pdf.extend_from_slice(format!("{id} 0 obj\n").as_bytes());
-        pdf.extend_from_slice(body);
-        pdf.extend_from_slice(b"\nendobj\n");
+    // An object: its number, then its parts as they come.
+    let mut object = |pdf: &mut Counting<&mut W>, id: usize, parts: &[&[u8]]| {
+        offsets.push((id, pdf.written));
+        pdf.put(format!("{id} 0 obj\n").as_bytes())?;
+        for part in parts {
+            pdf.put(part)?;
+        }
+        pdf.put(b"\nendobj\n")
     };
-    object(&mut pdf, 1, b"<< /Type /Catalog /Pages 2 0 R >>");
+    object(&mut pdf, 1, &[b"<< /Type /Catalog /Pages 2 0 R >>"])?;
     let kids: Vec<String> = (0..pages.len())
         .map(|i| format!("{} 0 R", page_id(i)))
         .collect();
     object(
         &mut pdf,
         2,
-        format!(
+        &[format!(
             "<< /Type /Pages /Kids [{}] /Count {} >>",
             kids.join(" "),
             pages.len()
         )
-        .as_bytes(),
-    );
+        .as_bytes()],
+    )?;
     for (i, page) in pages.iter().enumerate() {
         let (image, layout) = (page.image, page.layout);
         let id = page_id(i);
@@ -303,14 +331,14 @@ pub fn write_pages<W: Write>(out: &mut W, pages: &[PdfPage]) -> Result<()> {
         object(
             &mut pdf,
             id,
-            format!(
+            &[format!(
                 "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {pw:.2} {ph:.2}] \
                  /Resources << /XObject << /Im0 {} 0 R >> >> /Contents {} 0 R >>",
                 id + 2,
                 id + 1
             )
-            .as_bytes(),
-        );
+            .as_bytes()],
+        )?;
         // What overflows the sheet (Fill) is clipped to the margin.
         let clip = clip.map_or(String::new(), |[cx, cy, cw, ch]| {
             format!("{cx:.3} {cy:.3} {cw:.3} {ch:.3} re W n ")
@@ -319,34 +347,31 @@ pub fn write_pages<W: Write>(out: &mut W, pages: &[PdfPage]) -> Result<()> {
         object(
             &mut pdf,
             id + 1,
-            format!(
+            &[format!(
                 "<< /Length {} >>\nstream\n{content}\nendstream",
                 content.len()
             )
-            .as_bytes(),
-        );
+            .as_bytes()],
+        )?;
         // On the sheet at the size of the scan; the picture maybe smaller.
-        let (dict, data) = encode(&prepare(image, &page.encoding), page.encoding.quality)?;
-        let mut body = format!(
+        let prepared = prepare(image, &page.encoding)?;
+        let (dict, data) = encode(&prepared, page.encoding.quality)?;
+        let head = format!(
             "<< /Type /XObject /Subtype /Image {dict} /Length {} >>\nstream\n",
             data.len()
-        )
-        .into_bytes();
-        body.extend_from_slice(&data);
-        body.extend_from_slice(b"\nendstream");
-        object(&mut pdf, id + 2, &body);
+        );
+        object(&mut pdf, id + 2, &[head.as_bytes(), &data, b"\nendstream"])?;
     }
     let count = 3 + 3 * pages.len();
     offsets.sort_unstable();
-    let xref = pdf.len();
-    pdf.extend_from_slice(format!("xref\n0 {count}\n0000000000 65535 f \n").as_bytes());
+    let xref = pdf.written;
+    pdf.put(format!("xref\n0 {count}\n0000000000 65535 f \n").as_bytes())?;
     for (_, offset) in &offsets {
-        pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        pdf.put(format!("{offset:010} 00000 n \n").as_bytes())?;
     }
-    pdf.extend_from_slice(
+    pdf.put(
         format!("trailer\n<< /Size {count} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes(),
-    );
-    out.write_all(&pdf)?;
+    )?;
     Ok(())
 }
 
@@ -736,5 +761,17 @@ mod tests {
         let mut out = Vec::new();
         write(&mut out, &[sample(Format::Grey)], PageSize::Fit, 85).unwrap();
         assert!(String::from_utf8_lossy(&out).contains("/MediaBox [0 0 3.84 1.92]"));
+    }
+
+    #[test]
+    fn an_empty_page_is_refused_by_name() {
+        let mut empty = sample(Format::Rgb);
+        empty.width = 0;
+        empty.data.clear();
+        let pages = [sample(Format::Grey), empty];
+        let mut out = Vec::new();
+        let e = write(&mut out, &pages, PageSize::A4, 85).unwrap_err();
+        assert!(e.to_string().contains("page 2 is empty"), "{e}");
+        assert!(out.is_empty(), "nothing written");
     }
 }

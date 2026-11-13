@@ -113,32 +113,63 @@ pub fn ladder(base: Encoding) -> Vec<Encoding> {
     steps
 }
 
-/// Whether a colour image has no colour worth keeping: nearly every pixel
-/// has its three channels within a few levels of each other.
+/// Side of the squares, pixels, whose mean colour [`is_neutral`] looks at.
+const NEUTRAL_BLOCK: usize = 16;
+
+/// How far, in levels, a square's mean colour may be from the page's tint
+/// and still be no colour: the coloured fringes a scanner leaves along black
+/// text average out within a square, a pen stroke or a stamp does not.
+const NEUTRAL_TINT: i32 = 10;
+
+/// Whether a colour image has no colour worth keeping: the mean colour of
+/// every square of [`NEUTRAL_BLOCK`] pixels is the page's own tint (the
+/// paper's), within [`NEUTRAL_TINT`] levels. A single square of colour (a
+/// signature in blue ink, a red stamp) keeps the page in colour.
 pub fn is_neutral(image: &Image) -> bool {
-    if image.format != Format::Rgb {
+    let (w, h) = (image.width, image.height);
+    if image.format != Format::Rgb || image.data.len() != w * h * 3 {
         return false;
     }
-    let pixels = image.data.len() / 3;
-    // A pixel in every 7: plenty to tell, and fast.
-    let (mut seen, mut coloured) = (0usize, 0usize);
-    for i in (0..pixels).step_by(7) {
-        let p = &image.data[i * 3..i * 3 + 3];
-        let (lo, hi) = (p.iter().min().unwrap(), p.iter().max().unwrap());
-        seen += 1;
-        if hi - lo > 12 {
-            coloured += 1;
+    // Each square's mean red and blue against its green.
+    let mut tints: Vec<[i32; 2]> = Vec::new();
+    for by in (0..h).step_by(NEUTRAL_BLOCK) {
+        for bx in (0..w).step_by(NEUTRAL_BLOCK) {
+            let (mut sum, mut n) = ([0i64; 3], 0i64);
+            for y in by..(by + NEUTRAL_BLOCK).min(h) {
+                let row = &image.data[(y * w + bx) * 3..(y * w + (bx + NEUTRAL_BLOCK).min(w)) * 3];
+                for p in row.chunks_exact(3) {
+                    for c in 0..3 {
+                        sum[c] += i64::from(p[c]);
+                    }
+                    n += 1;
+                }
+            }
+            let mean = sum.map(|v| (v / n.max(1)) as i32);
+            tints.push([mean[0] - mean[1], mean[2] - mean[1]]);
         }
     }
-    coloured * 1000 <= seen * 3
+    if tints.is_empty() {
+        return true;
+    }
+    // The page's tint: the median square's.
+    let median = |c: usize| {
+        let mut v: Vec<i32> = tints.iter().map(|t| t[c]).collect();
+        let mid = v.len() / 2;
+        *v.select_nth_unstable(mid).1
+    };
+    let page = [median(0), median(1)];
+    tints
+        .iter()
+        .all(|t| (0..2).all(|c| (t[c] - page[c]).abs() <= NEUTRAL_TINT))
 }
 
 /// The image as it goes into the PDF with `encoding`: grey if neutral and
-/// so asked, resampled down if finer than its cap.
-pub fn prepare<'a>(image: &'a Image, encoding: &Encoding) -> Cow<'a, Image> {
+/// so asked, resampled down if finer than its cap. An error for an image
+/// whose data is not as long as its size says.
+pub fn prepare<'a>(image: &'a Image, encoding: &Encoding) -> Result<Cow<'a, Image>> {
     let mut out = Cow::Borrowed(image);
     if image.format == Format::Lineart {
-        return out;
+        return Ok(out);
     }
     if encoding.neutral_to_grey && is_neutral(image) {
         out = Cow::Owned(Image {
@@ -160,32 +191,43 @@ pub fn prepare<'a>(image: &'a Image, encoding: &Encoding) -> Cow<'a, Image> {
         let ratio = f64::from(cap) / f64::from(out.dpi);
         let w = ((out.width as f64 * ratio).round() as usize).max(1);
         let h = ((out.height as f64 * ratio).round() as usize).max(1);
-        out = Cow::Owned(resize(&out, w, h, cap));
+        out = Cow::Owned(resize(&out, w, h, cap)?);
     }
-    out
+    Ok(out)
 }
 
-/// `image` resampled to `w` × `h` pixels at `dpi`.
-fn resize(image: &Image, w: usize, h: usize, dpi: u16) -> Image {
+/// `image` resampled to `w` × `h` pixels at `dpi`; an error for an image
+/// whose data is not as long as its size says.
+fn resize(image: &Image, w: usize, h: usize, dpi: u16) -> Result<Image> {
     use image::imageops::{resize, FilterType};
-    let (iw, ih) = (image.width as u32, image.height as u32);
+    let (iw, ih) = (u32::try_from(image.width)?, u32::try_from(image.height)?);
+    let (ow, oh) = (u32::try_from(w)?, u32::try_from(h)?);
+    let wrong = || {
+        format!(
+            "an image of {} x {} with {} bytes of data",
+            image.width,
+            image.height,
+            image.data.len()
+        )
+    };
     let data = match image.format {
         Format::Rgb => {
-            let buffer = image::RgbImage::from_raw(iw, ih, image.data.clone()).expect("size");
-            resize(&buffer, w as u32, h as u32, FilterType::CatmullRom).into_raw()
+            let buffer = image::RgbImage::from_raw(iw, ih, image.data.clone()).ok_or_else(wrong)?;
+            resize(&buffer, ow, oh, FilterType::CatmullRom).into_raw()
         }
         _ => {
-            let buffer = image::GrayImage::from_raw(iw, ih, image.data.clone()).expect("size");
-            resize(&buffer, w as u32, h as u32, FilterType::CatmullRom).into_raw()
+            let buffer =
+                image::GrayImage::from_raw(iw, ih, image.data.clone()).ok_or_else(wrong)?;
+            resize(&buffer, ow, oh, FilterType::CatmullRom).into_raw()
         }
     };
-    Image {
+    Ok(Image {
         width: w,
         height: h,
         dpi,
         format: image.format,
         data,
-    }
+    })
 }
 
 /// The picture of a page as stored in the PDF: its dictionary entries and
@@ -261,7 +303,9 @@ impl Sample {
             let ratio = (SAMPLE_PIXELS as f64 / pixels as f64).sqrt();
             let w = ((copy.width as f64 * ratio) as usize).max(1);
             let h = ((copy.height as f64 * ratio) as usize).max(1);
-            resize(copy, w, h, copy.dpi)
+            // A copy that cannot be resampled is measured as it is (its
+            // encoding then says what is wrong with it).
+            resize(copy, w, h, copy.dpi).unwrap_or_else(|_| copy.clone())
         };
         Self {
             image,
@@ -295,9 +339,9 @@ pub fn estimate(sample: &Sample, encoding: &Encoding) -> Result<u64> {
         max_dpi: None,
         ..*encoding
     };
-    let prepared = prepare(image, &encoding);
+    let prepared = prepare(image, &encoding)?;
     if w * h <= prepared.width * prepared.height {
-        let small = resize(&prepared, w, h, dpi);
+        let small = resize(&prepared, w, h, dpi)?;
         return Ok(encode(&small, encoding.quality)?.1.len() as u64);
     }
     let bytes = encode(&prepared, encoding.quality)?.1.len() as f64;
@@ -338,24 +382,33 @@ pub fn plan(samples: &[Sample], base: Encoding, limit: Option<u64>) -> Result<Pl
     }
     if let Some(limit) = limit {
         while total > limit {
-            // The page whose next step saves the most.
-            let mut best: Option<(usize, u64, u64)> = None;
+            // The page whose next step that saves anything saves the most
+            // (a step that saves nothing, as grey on a page already grey, is
+            // passed over, never taken for nothing).
+            let mut best: Option<(usize, usize, u64, u64)> = None;
             for page in 0..samples.len() {
-                if samples[page].image.format == Format::Lineart || at[page] + 1 >= steps.len() {
+                if samples[page].image.format == Format::Lineart {
                     continue;
                 }
                 let now = size(page, at[page])?;
-                let next = size(page, at[page] + 1)?;
-                let saves = now.saturating_sub(next);
-                if best.is_none_or(|(_, s, _)| saves > s) {
-                    best = Some((page, saves, next));
+                let mut step = at[page] + 1;
+                while step < steps.len() && size(page, step)? >= now {
+                    step += 1;
+                }
+                if step >= steps.len() {
+                    continue;
+                }
+                let next = size(page, step)?;
+                let saves = now - next;
+                if best.is_none_or(|(_, _, s, _)| saves > s) {
+                    best = Some((page, step, saves, next));
                 }
             }
-            let Some((page, _, next)) = best else {
+            let Some((page, step, _, next)) = best else {
                 break;
             };
             total = total - size(page, at[page])? + next;
-            at[page] += 1;
+            at[page] = step;
         }
     }
     Ok(Planned {
@@ -423,14 +476,17 @@ mod tests {
             ..Encoding::default()
         };
         assert_eq!(
-            prepare(&page(60, 40, 300, false), &grey).format,
+            prepare(&page(60, 40, 300, false), &grey).unwrap().format,
             Format::Grey
         );
-        assert_eq!(prepare(&page(60, 40, 300, true), &grey).format, Format::Rgb);
+        assert_eq!(
+            prepare(&page(60, 40, 300, true), &grey).unwrap().format,
+            Format::Rgb
+        );
         // Not asked: left in colour.
         let as_is = Encoding::default();
         assert_eq!(
-            prepare(&page(60, 40, 300, false), &as_is).format,
+            prepare(&page(60, 40, 300, false), &as_is).unwrap().format,
             Format::Rgb
         );
     }
@@ -442,7 +498,7 @@ mod tests {
             max_dpi: Some(200),
             ..Encoding::default()
         };
-        let out = prepare(&image, &capped);
+        let out = prepare(&image, &capped).unwrap();
         assert_eq!((out.width, out.height, out.dpi), (200, 100, 200));
     }
 
@@ -475,7 +531,7 @@ mod tests {
     fn the_estimate_is_close_to_the_real_size() {
         let image = page(1000, 1400, 300, true);
         for encoding in ladder(Encoding::default()) {
-            let real = encode(&prepare(&image, &encoding), encoding.quality)
+            let real = encode(&prepare(&image, &encoding).unwrap(), encoding.quality)
                 .unwrap()
                 .1
                 .len() as f64;
@@ -485,5 +541,60 @@ mod tests {
                 "{encoding:?}: {estimated} for {real}"
             );
         }
+    }
+
+    #[test]
+    fn a_blue_signature_keeps_the_page_in_colour() {
+        // A grey page (with the slight tint of `page`) and, low down, a short
+        // stroke of blue ink: a few hundred pixels of a 600 x 400 page.
+        let mut image = page(600, 400, 300, false);
+        assert!(is_neutral(&image));
+        for y in 330..336 {
+            for x in 400..480 {
+                image.data[(y * 600 + x) * 3..][..3].copy_from_slice(&[30, 40, 140]);
+            }
+        }
+        assert!(!is_neutral(&image));
+        let grey = Encoding {
+            neutral_to_grey: true,
+            ..Encoding::default()
+        };
+        assert_eq!(prepare(&image, &grey).unwrap().format, Format::Rgb);
+    }
+
+    #[test]
+    fn an_image_shorter_than_its_size_is_an_error_not_a_panic() {
+        let mut image = page(600, 300, 600, true);
+        image.data.truncate(image.data.len() - 3);
+        let capped = Encoding {
+            max_dpi: Some(200),
+            ..Encoding::default()
+        };
+        assert!(prepare(&image, &capped).is_err());
+    }
+
+    #[test]
+    fn a_step_that_saves_nothing_is_never_taken() {
+        // A page already grey: the grey step saves nothing, so a plan that
+        // must shrink it goes straight to a lower quality.
+        let grey_page = Image {
+            format: Format::Grey,
+            data: page(400, 400, 300, false)
+                .data
+                .chunks_exact(3)
+                .map(|p| p[0])
+                .collect(),
+            ..page(400, 400, 300, false)
+        };
+        let samples = [Sample::new(&grey_page)];
+        let free = plan(&samples, Encoding::default(), None).unwrap();
+        let p = plan(&samples, Encoding::default(), Some(free.bytes - 1)).unwrap();
+        let steps = ladder(Encoding::default());
+        assert!(steps[1].neutral_to_grey && steps[1].quality == steps[0].quality);
+        assert_ne!(
+            p.encodings[0], steps[1],
+            "the grey step, which saves nothing"
+        );
+        assert!(p.encodings[0].quality < steps[0].quality, "{p:?}");
     }
 }

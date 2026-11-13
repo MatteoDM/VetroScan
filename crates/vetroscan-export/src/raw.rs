@@ -262,7 +262,6 @@ fn write_tiff(
     }
     tags.sort_by_key(|(t, _)| *t);
 
-    let mut file = std::io::BufWriter::new(std::fs::File::create(path)?);
     // Values that do not fit in the entry go after the pixels.
     let mut extra: Vec<u8> = Vec::new();
     let extra_start = data_start + data_len as u32;
@@ -289,25 +288,26 @@ fn write_tiff(
         extra.push(0);
     }
     let ifd = extra_start + extra.len() as u32;
-    file.write_all(b"II")?;
-    file.write_all(&42u16.to_le_bytes())?;
-    file.write_all(&ifd.to_le_bytes())?;
-    let mut line = Vec::with_capacity(line_bytes);
-    for row in image.data.chunks_exact(w * ch) {
-        line.clear();
-        for v in row {
-            line.extend_from_slice(&v.to_le_bytes());
+    crate::write_file(path, |file| {
+        file.write_all(b"II")?;
+        file.write_all(&42u16.to_le_bytes())?;
+        file.write_all(&ifd.to_le_bytes())?;
+        let mut line = Vec::with_capacity(line_bytes);
+        for row in image.data.chunks_exact(w * ch) {
+            line.clear();
+            for v in row {
+                line.extend_from_slice(&v.to_le_bytes());
+            }
+            file.write_all(&line)?;
         }
-        file.write_all(&line)?;
-    }
-    file.write_all(&extra)?;
-    file.write_all(&(entries.len() as u16).to_le_bytes())?;
-    for e in &entries {
-        file.write_all(e)?;
-    }
-    file.write_all(&0u32.to_le_bytes())?;
-    file.flush()?;
-    Ok(())
+        file.write_all(&extra)?;
+        file.write_all(&(entries.len() as u16).to_le_bytes())?;
+        for e in &entries {
+            file.write_all(e)?;
+        }
+        file.write_all(&0u32.to_le_bytes())?;
+        Ok(())
+    })
 }
 
 // --------------------------------------------------------------- formats
@@ -471,26 +471,28 @@ pub fn save_deep(
         let photometric = if channels == 1 { 1 } else { 2 };
         return write_tiff(path, image, photometric, software, Vec::new());
     }
-    let file = std::io::BufWriter::new(std::fs::File::create(path)?);
-    let mut encoder = png::Encoder::new(file, u32::try_from(width)?, u32::try_from(height)?);
-    encoder.set_color(if channels == 1 {
-        png::ColorType::Grayscale
-    } else {
-        png::ColorType::Rgb
-    });
-    encoder.set_depth(png::BitDepth::Sixteen);
-    let ppm = (f64::from(dpi) / 0.0254).round() as u32;
-    encoder.set_pixel_dims(Some(png::PixelDimensions {
-        xppu: ppm,
-        yppu: ppm,
-        unit: png::Unit::Meter,
-    }));
-    encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
-    let mut writer = encoder.write_header()?;
-    let bytes: Vec<u8> = data.iter().flat_map(|v| v.to_be_bytes()).collect();
-    writer.write_image_data(&bytes)?;
-    writer.finish()?;
-    Ok(())
+    let (w, h) = (u32::try_from(width)?, u32::try_from(height)?);
+    crate::write_file(path, |file| {
+        let mut encoder = png::Encoder::new(file, w, h);
+        encoder.set_color(if channels == 1 {
+            png::ColorType::Grayscale
+        } else {
+            png::ColorType::Rgb
+        });
+        encoder.set_depth(png::BitDepth::Sixteen);
+        let ppm = (f64::from(dpi) / 0.0254).round() as u32;
+        encoder.set_pixel_dims(Some(png::PixelDimensions {
+            xppu: ppm,
+            yppu: ppm,
+            unit: png::Unit::Meter,
+        }));
+        encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
+        let mut writer = encoder.write_header()?;
+        let bytes: Vec<u8> = data.iter().flat_map(|v| v.to_be_bytes()).collect();
+        writer.write_image_data(&bytes)?;
+        writer.finish()?;
+        Ok(())
+    })
 }
 
 #[cfg(test)]
