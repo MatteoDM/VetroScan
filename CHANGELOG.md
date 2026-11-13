@@ -50,8 +50,9 @@ GitHub; here they are in English.
 ### Fixed
 - Epson Perfection 4490: a scan at 1200 dpi wider than about 115 mm no longer hangs before
   reading, leaving the scanner deaf until switched off and on with its carriage away from
-  home: its shading table, over 64 KB there, now goes to the scanner in pieces, as Epson's
-  own driver sends it. Tried on the scanner: 150 x 150 mm at 1200 dpi and 16 bits.
+  home: its shading table, over 64 KB there, now goes to the scanner in pieces with a short
+  pause between them, as Epson's own driver sends it. Tried on the scanner on Linux and on
+  Windows: 150 x 150 mm at 1200 dpi and 16 bits.
 - Epson Perfection 4490 switched off and on with its carriage left away from home (after a scan
   that hung): VetroScan now sends it its firmware, which brings the carriage home by itself,
   instead of refusing an answer it did not know.

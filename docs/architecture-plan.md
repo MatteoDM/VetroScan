@@ -1381,7 +1381,20 @@ never run by us (step 12).
        pass on Windows (404 passed, 10 ignored) and in WSL (403 passed, 10 ignored).
     2. `epson4490 scan 1200 30 40 150 150 out.png --bits 16 --tone linear --move` through
        `usbscan.sys`: the shading in pieces (`TABLE_CHUNK`), so far only through `nusb`; then
-       the same scan in the app.
+       the same scan in the app. **Done**, in the app too (Matteo, 13 November 2026, with the
+       pause below). From the command line (13 November 2026, notes and
+       logs in `../scansioni/epson_1200_larga_20261113`): the pieces back to back went
+       unanswered after the shading (no `06`, `usbscan` gave up after 30 s, error 995) three
+       times out of three, the scanner then deaf until switched off and on; with USBPcap
+       capturing, seven out of seven went through (capture 55, 150 x 150 mm: our URBs the same
+       as capture 42's, 65,520 and 19,536 bytes, the second 1.7 ms after the first; capture 56,
+       six of 150 x 20 mm). Epson Scan waits 1.2 ms between them (42): a pause of 5 ms before
+       each piece but the first (`protocol::TABLE_PAUSE`, a test). With it and no capture: six
+       of 150 x 20 mm and one of 150 x 150 mm (103 s, the image sound). On Linux the pieces
+       went through with no pause (once): `nusb` may leave its own gap. Seen on the way: a
+       scan within `LAMP_OFF_AFTER` of the last, after the scanner was switched off and on,
+       does not warm the lamp up if `1B 03`'s warming flag (about 20 s) went by before it (the
+       first of the six, 13 November); the scanner's switching on is not seen otherwise.
     3. The app's memory limit there: the Scan tab with a scan over half the PC's memory (the
        memory read with PowerShell, `ram.rs`; until read, no limit). In part (13 November
        2026): `ram.rs`' command, run alone, prints 34,274,361,344 (32 GB) in about 0.5 s,
@@ -1392,8 +1405,8 @@ never run by us (step 12).
     4. Capture 42's `.pcap`: the first piece of its shading, 65,508 or 65,520 bytes (the
        stripped text says 65,508, the header's length says 65,520). **Done** (13 November
        2026, read from the `.pcap`): USBPcap's `dataLength` is 65,520 (`0xFFF0`, the 65,508
-       are the snaplen's cut: 65,535 less the 27-byte header), then 56,976, back to back with
-       no `06` between, one `06` after both; `TABLE_CHUNK` does the same.
+       are the snaplen's cut: 65,535 less the 27-byte header), then 56,976, 1.2 ms after the
+       first was done, no `06` between, one `06` after both; `TABLE_CHUNK` does the same.
     Then the steps that need Epson Scan's captures: 11a/11b (2400, 4800 dpi), 13-15 (films),
     17 (Digital ICE).
 

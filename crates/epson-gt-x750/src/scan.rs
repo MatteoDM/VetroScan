@@ -20,7 +20,7 @@
 //! ([`Guarded::permit_request`], [`Guarded::permit_plan`]).
 
 use crate::guard::Guarded;
-use crate::protocol::{is_state, State, ACK, GET_STATE, TABLE_CHUNK};
+use crate::protocol::{is_state, State, ACK, GET_STATE, TABLE_CHUNK, TABLE_PAUSE};
 use crate::setup::{self, Plan, Request, XCorrection, TRAILER_LEN};
 use crate::shading::{black_block, Shading};
 use crate::table07;
@@ -144,7 +144,10 @@ fn ask(t: &mut dyn Transport, cmd: [u8; 2], n: usize) -> Result<Vec<u8>> {
 fn table(t: &mut dyn Transport, header: &[u8; 8], values: &[u8]) -> Result<()> {
     command(t, [0x1E, 0x84])?;
     t.bulk_out(header)?;
-    for piece in values.chunks(TABLE_CHUNK) {
+    for (i, piece) in values.chunks(TABLE_CHUNK).enumerate() {
+        if i > 0 {
+            std::thread::sleep(TABLE_PAUSE);
+        }
         t.bulk_out(piece)?;
     }
     ack(t, "a 1E 84 table")
@@ -1281,6 +1284,37 @@ pub(crate) mod tests {
         let (r, _, _) = scan("29", text);
         let e = r.unwrap_err().to_string();
         assert!(e.contains("160 steps from home"), "{e}");
+    }
+
+    #[test]
+    fn a_long_table_goes_in_pieces_with_a_pause_between() {
+        use crate::protocol::tests::Mock;
+        /// Records when each write came.
+        #[derive(Debug)]
+        struct Timed(Mock, Vec<Instant>);
+        impl Transport for Timed {
+            fn bulk_out(&mut self, data: &[u8]) -> Result<()> {
+                self.1.push(Instant::now());
+                self.0.bulk_out(data)
+            }
+            fn bulk_in(&mut self, buf: &mut [u8]) -> Result<usize> {
+                self.0.bulk_in(buf)
+            }
+        }
+        // 1200 dpi, 150 mm wide: 85,056 bytes of shading (13 November 2026).
+        let values = vec![0u8; 85_056];
+        let mut t = Timed(Mock::answering(&[&[ACK], &[ACK]]), Vec::new());
+        table(
+            &mut t,
+            &[0x05, 0, 0x04, 0x01, 0x02, 0x40, 0x4C, 0x01],
+            &values,
+        )
+        .unwrap();
+        let lens: Vec<usize> = t.0.writes.iter().map(Vec::len).collect();
+        assert_eq!(lens, [2, 8, TABLE_CHUNK, 85_056 - TABLE_CHUNK]);
+        // No pause before the first piece; one before the second.
+        assert!(t.1[3] - t.1[2] >= TABLE_PAUSE);
+        assert!(t.0.answers.is_empty(), "the 06 after the table was read");
     }
 
     #[test]

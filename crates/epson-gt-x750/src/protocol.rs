@@ -14,6 +14,7 @@
 use crate::firmware::{self, Firmware, HEADER_LEN, PAYLOAD_LEN};
 use crate::Transport;
 use scanner_api::{Error, Result};
+use std::time::Duration;
 
 /// The scanner's "yes".
 pub const ACK: u8 = 0x06;
@@ -40,6 +41,14 @@ pub const FIRMWARE_CHUNK: usize = 0xFFF0;
 /// 85,056 bytes of shading (1200 dpi, 150 mm wide) went unanswered and left the scanner taking
 /// whatever came next as more of the table (13 November 2026, the scanner switched off and on).
 pub const TABLE_CHUNK: usize = FIRMWARE_CHUNK;
+
+/// The pause before each piece of a `1E 84` table but the first. Epson Scan wrote capture
+/// 42's second piece 1.2 ms after its first was done. Ours, with no pause, went unanswered
+/// through `usbscan.sys` three times out of three (1200 dpi, 150 mm wide, 13 November 2026),
+/// and was answered seven times out of seven with USBPcap capturing (capture 55: 1.7 ms
+/// between the pieces, the capture's own delay): the scanner seems to need a moment to take
+/// a piece before the next.
+pub const TABLE_PAUSE: Duration = Duration::from_millis(5);
 
 /// The two bytes of [`GET_STATE`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
