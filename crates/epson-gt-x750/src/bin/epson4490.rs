@@ -53,7 +53,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: epson4490 list | firmware [--firmware FILE] | probe | \
-                     upload [--firmware FILE] [--carriage-away] | buttons [SECONDS] | replay SCRIPT OUT --move | \
+                     upload [--firmware FILE] | buttons [SECONDS] | replay SCRIPT OUT --move | \
                      scan DPI X Y W H OUT.png [--bits 16] [--tone wia|linear] [--raw FILE] [--cancel-after BLOCKS] --move   (X Y W H in mm) | probe/drain [--no-lock] | recover | lamp-off";
 
 fn main() -> ExitCode {
@@ -68,7 +68,6 @@ fn main() -> ExitCode {
     let mut raw_path = None;
     let mut curves = Curves::Wia;
     let mut cancel_after = None;
-    let mut carriage_away = false;
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
@@ -78,7 +77,6 @@ fn main() -> ExitCode {
             },
             "--move" => moves = true,
             "--no-lock" => no_lock = true,
-            "--carriage-away" => carriage_away = true,
             "--bits" => match rest.next().map(|b| b.parse()) {
                 Some(Ok(b)) => bits = b,
                 _ => return usage(),
@@ -123,7 +121,7 @@ fn main() -> ExitCode {
         }
         Some("firmware") => show_firmware(firmware_path.as_deref()),
         Some("probe") => probe(firmware_path.as_deref(), no_lock),
-        Some("upload") => upload(firmware_path, carriage_away),
+        Some("upload") => upload(firmware_path),
         Some("buttons") => buttons(seconds.unwrap_or(10)),
         Some("drain") => drain(no_lock),
         Some("lamp-off") => lamp_off(),
@@ -253,14 +251,12 @@ fn probe(path: Option<&std::path::Path>, no_lock: bool) -> Result<(), Error> {
     Ok(())
 }
 
-fn upload(path: Option<PathBuf>, carriage_away: bool) -> Result<(), Error> {
+fn upload(path: Option<PathBuf>) -> Result<(), Error> {
     let mut t = open_first()?;
-    let load = || firmware::find(path.as_deref()).map_err(Error::Other);
-    let outcome = if carriage_away {
-        protocol::ensure_firmware_carriage_away(&mut t, load)?
-    } else {
-        protocol::ensure_firmware(&mut t, load)?
-    };
+    let outcome = protocol::ensure_firmware(&mut t, || {
+        firmware::find(path.as_deref()).map_err(Error::Other)
+    })?;
+    let uploaded = matches!(outcome, FirmwareOutcome::Uploaded { .. });
     match outcome {
         FirmwareOutcome::AlreadyRunning => println!("the firmware was running already"),
         FirmwareOutcome::Uploaded { build, origin } => {
@@ -274,8 +270,9 @@ fn upload(path: Option<PathBuf>, carriage_away: bool) -> Result<(), Error> {
              and come back; run `epson4490 probe`"
         ),
     }
-    if carriage_away {
-        // What the firmware does with the carriage: every change of state for a minute.
+    if uploaded {
+        // What the firmware does by itself (the lamp; the carriage home, if it was away):
+        // every change of state, until it is at rest or for a minute.
         let start = std::time::Instant::now();
         let mut last = None;
         while start.elapsed() < std::time::Duration::from_secs(60) {
@@ -287,6 +284,9 @@ fn upload(path: Option<PathBuf>, carriage_away: bool) -> Result<(), Error> {
                     describe(s)
                 );
                 last = Some(s);
+            }
+            if s.0 == [0x18, 0x81] {
+                break;
             }
             std::thread::sleep(std::time::Duration::from_millis(500));
         }

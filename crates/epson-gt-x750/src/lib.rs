@@ -760,6 +760,26 @@ mod tests {
         assert!(s.status().unwrap().ready);
     }
 
+    /// A scanner switched off and on with its carriage away (`08 00`, 13 November 2026): a
+    /// state, not a scan left half-way (no `1E 18` to a scanner without its firmware); the
+    /// firmware is sent, and brings the carriage home by itself.
+    #[test]
+    fn opening_with_the_carriage_away_sends_the_firmware() {
+        const AWAY: [u8; 2] = protocol::State::NO_FIRMWARE_CARRIAGE_AWAY;
+        let t = Mock::answering(&[&AWAY, &AWAY, &[6], &[6], &[6], &[6], &IDLE]);
+        let image = protocol::tests::image();
+        let mut s =
+            Gt4490::start(Box::new(t), || Ok(firmware::Firmware::unchecked(image))).unwrap();
+        assert!(matches!(s.firmware(), FirmwareOutcome::Uploaded { .. }));
+        let status = s.status().unwrap();
+        assert!(status.ready);
+        // Nothing stopped (a stop would have read answers the mock does not have).
+        assert!(!status
+            .details
+            .iter()
+            .any(|(k, _)| k == "Scan left half-way"));
+    }
+
     #[test]
     fn without_leave_the_firmware_is_not_sent() {
         assert!(EpsonBackend::new().upload);

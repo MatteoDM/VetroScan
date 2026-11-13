@@ -51,10 +51,11 @@ impl State {
     /// The only state seen without the firmware: switched on, before Epson's driver sent it
     /// (capture 01).
     pub const NO_FIRMWARE: [u8; 2] = [0x28, 0x00];
-    /// Without the firmware, the carriage left away from home: seen on 13 November 2026 after
-    /// a scan hung half-way and the scanner was switched off and on (the carriage stayed where
-    /// it was, the front light green). Bit `0x20` is then taken to be "the carriage at home"
-    /// (a guess). Sent the firmware only when asked ([`ensure_firmware_carriage_away`]).
+    /// Without the firmware, the carriage left away from home: seen twice on 13 November 2026
+    /// after a scan hung half-way and the scanner was switched off and on (the carriage stayed
+    /// where it was, the front light green). Bit `0x20` is then taken to be "the carriage at
+    /// home" (a guess, twice consistent). The firmware sent then brought the carriage home by
+    /// itself both times (`5A 81` about 13 s in, `18 81` at 20-22 s), as after every upload.
     pub const NO_FIRMWARE_CARRIAGE_AWAY: [u8; 2] = [0x08, 0x00];
     /// In the first byte: busy (Epson's interpreter waits, polling every
     /// 50 ms, until both are clear).
@@ -96,7 +97,7 @@ impl State {
 pub fn is_state(answer: &[u8]) -> bool {
     match answer {
         [a, 0x81] => a & State::FIRMWARE_RUNNING != 0,
-        a => a == State::NO_FIRMWARE,
+        a => a == State::NO_FIRMWARE || a == State::NO_FIRMWARE_CARRIAGE_AWAY,
     }
 }
 
@@ -225,35 +226,13 @@ pub fn ensure_firmware(
     t: &mut dyn Transport,
     load: impl FnOnce() -> Result<Firmware>,
 ) -> Result<FirmwareOutcome> {
-    ensure(t, load, &[State::NO_FIRMWARE])
-}
-
-/// As [`ensure_firmware`], and also on a scanner without the firmware whose carriage is away
-/// from home ([`State::NO_FIRMWARE_CARRIAGE_AWAY`]): asked for by hand (`epson4490 upload
-/// --carriage-away`), never by the app.
-pub fn ensure_firmware_carriage_away(
-    t: &mut dyn Transport,
-    load: impl FnOnce() -> Result<Firmware>,
-) -> Result<FirmwareOutcome> {
-    ensure(
-        t,
-        load,
-        &[State::NO_FIRMWARE, State::NO_FIRMWARE_CARRIAGE_AWAY],
-    )
-}
-
-fn ensure(
-    t: &mut dyn Transport,
-    load: impl FnOnce() -> Result<Firmware>,
-    accepted: &[[u8; 2]],
-) -> Result<FirmwareOutcome> {
     let s = state(t)?;
     if s.firmware_running() {
         return Ok(FirmwareOutcome::AlreadyRunning);
     }
-    // Only on the state seen before the firmware: two bytes of something else (a scan left
-    // half-way, capture 44) must never start an upload.
-    if !accepted.contains(&s.0) {
+    // Only on the states seen before the firmware (the carriage at home or away): two bytes
+    // of something else (a scan left half-way, capture 44) must never start an upload.
+    if s.0 != State::NO_FIRMWARE && s.0 != State::NO_FIRMWARE_CARRIAGE_AWAY {
         return Err(Error::Other(format!(
             "the Epson 4490 answered {:02X} {:02X} to 1B 03, a state never seen: switch it off \
              and on",
@@ -427,27 +406,23 @@ pub(crate) mod tests {
         }
     }
 
-    /// The carriage left away (`08 00`): the app's upload refuses it, the one asked for by hand
-    /// sends the firmware; neither takes any other unknown state.
+    /// The carriage left away (`08 00`) is a state without the firmware: it is sent; no other
+    /// unknown state is taken.
     #[test]
-    fn the_carriage_away_is_uploaded_only_when_asked() {
+    fn the_carriage_away_gets_the_firmware() {
         let away = State::NO_FIRMWARE_CARRIAGE_AWAY;
-        let mut t = Mock::answering(&[&away]);
-        let e = ensure_firmware(&mut t, || panic!("never loaded")).unwrap_err();
-        assert!(e.to_string().contains("never seen"), "{e}");
-        assert_eq!(t.writes, vec![GET_STATE.to_vec()]);
-
+        assert!(is_state(&away));
         let image = image();
         let mut answers: Vec<&[u8]> = vec![&away];
         answers.extend(ACKS);
         let mut t = Mock::answering(&answers);
-        let r = ensure_firmware_carriage_away(&mut t, || Ok(Firmware::unchecked(image.clone())));
+        let r = ensure_firmware(&mut t, || Ok(Firmware::unchecked(image.clone())));
         assert!(matches!(r, Ok(FirmwareOutcome::Uploaded { .. })), "{r:?}");
         assert_eq!(t.writes[1], FIRMWARE_BEGIN);
-
         for answer in [[0x00, 0x00], [0x81, 0x00], [0x48, 0x00]] {
+            assert!(!is_state(&answer), "{answer:02X?}");
             let mut t = Mock::answering(&[&answer]);
-            let e = ensure_firmware_carriage_away(&mut t, || panic!("never loaded")).unwrap_err();
+            let e = ensure_firmware(&mut t, || panic!("never loaded")).unwrap_err();
             assert!(e.to_string().contains("never seen"), "{e}");
         }
     }

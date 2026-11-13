@@ -1272,7 +1272,12 @@ never run by us (step 12).
    app refuses to send the firmware then (a state never seen); `epson4490 upload
    --carriage-away` sends it on `08 00` only (a test): both times the firmware moved the
    carriage home by itself (`5A 81` for 1.5 s about 13 s in, `18 81` at 20-22 s), as after
-   every upload. Whether the app should do the same is to decide.
+   every upload. **Then decided** (Matteo): `08 00` is a state without the firmware for
+   the app too (`protocol::is_state`, `ensure_firmware`); before, the app's opening would have
+   taken it for a scan left half-way and sent `1E 18` to a scanner without its firmware (never
+   happened: the app was never opened on `08 00`). `--carriage-away` is gone; `epson4490
+   upload` prints the state until the scanner is at rest. Tests: the opening on `08 00` sends
+   the firmware and stops nothing. Not yet seen in the app on the scanner.
 9. **1200 dpi after every power-on**: the scanner answers `1E 8B` with `15` until a 600-byte
    table (`1E 84` type 07) is loaded, which Epson's driver computes from a raw line it reads
    with `1E 83`. **Done** (12 November, evening; `table07.rs`, `captures/epson4490/05-catture.md`,
