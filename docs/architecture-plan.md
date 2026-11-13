@@ -1316,7 +1316,11 @@ never run by us (step 12).
       NVIDIA card. With `VK_DRIVER_FILES=/usr/share/vulkan/icd.d/intel_icd.json` the e2e
       passes (127, 4 ignored). Not our code; a Linux machine with a stray Vulkan driver.
       With `nvidia-utils` removed, `cargo test --workspace --locked` passes as it is.
-    Left of step 12: AVASYS' copy (step 5) and the scan set against Windows' (step 6).
+    Step 12 is done (Matteo, 13 November 2026). The scan set against Windows' (step 6) is
+    dropped: the scan is clean and nothing it could show would change what comes next.
+    AVASYS' copy (step 5) is put off, not dropped: the private releases carry the Windows
+    copy, which works; it must be tried on the scanner before any public package carries it
+    (point 3 of "The firmware and its licence").
 
 **D. Films** (milestone 5)
 
