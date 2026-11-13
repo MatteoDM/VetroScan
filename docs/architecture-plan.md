@@ -1313,7 +1313,8 @@ never run by us (step 12).
     step 29,129), 44 MB in 43 s; against Epson Scan's TIFF the same place to the pixel (0
     lines, 0 columns), the same picture through a monotonic map (Epson's is not linear),
     Epson's 10 % sharper line to line both ways, no pattern every 3 lines (0.005 % of the
-    level; Epson's 0.02 %). Not tried on the scanner: 8 bits at 2400, a wide area, the app.
+    level; Epson's 0.02 %). Then in the app (Matteo, 14 November 2026): 2400 dpi at 8 bits on
+    a small area drawn on the preview, through. Not tried on the scanner: a wide area at 2400.
     **4800 dpi**: another path (other columns, T `0x9480`): its own captures and rules. Both need
     the size limit of "Risks" (4800 dpi at 16 bits is gigabytes). **The limit, done** (13
     November 2026, step 11c): measured in the app on Linux, a 1200 dpi 16-bit scan of 150 x 150
@@ -1424,6 +1425,12 @@ never run by us (step 12).
        starts above an estimate of about 6.9 GB, out of reach of the Epson at 1200 dpi (A4,
        16 bits: 0.9 GB) and of `VETROSCAN_FAKE_SCANNER` (2400 dpi, 16 bits, the whole glass:
        3.4 GB); it needs a PC under about 17 GB with the made-up scanner, or 4800 dpi (11b).
+       **Seen** once 2400 dpi came in (14 November 2026, Matteo): the Scan tab with the
+       Epson's whole A4 at 2400 dpi, 8 bits (19,843 x 28,056 px, "in memoria 10021 MB") says
+       "servirebbero circa 25,1 GB, il computer ne ha 34,3", in red, and nothing is sent: the
+       memory read with PowerShell on Windows. Left: `App::bytes` doubles the estimate above
+       1200 dpi for the HP 3770's reasons (its chip's half-width data), a scanner's number in
+       the app; for the Epson the estimate is cautious (1.7 GB of image there).
     4. Capture 42's `.pcap`: the first piece of its shading, 65,508 or 65,520 bytes (the
        stripped text says 65,508, the header's length says 65,520). **Done** (13 November
        2026, read from the `.pcap`): USBPcap's `dataLength` is 65,520 (`0xFFF0`, the 65,508
