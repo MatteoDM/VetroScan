@@ -129,11 +129,15 @@ pub fn objects(image: &Image) -> Vec<Found> {
     // The lid: the commonest colour along the edges of the glass (the lid
     // is even, so its colour is a sharp peak; originals touching the edges
     // spread over many colours). Not the brightest colour: white paper is
-    // often whiter than an old lid.
+    // often whiter than an old lid. Taken from 1 to 10 mm in, not just the
+    // first millimetres: the Epson 4490's lid darkens over its last 10 mm
+    // towards the left and top edges (207 to 145, measured on a preview of
+    // 13 November 2026), and a band within them took that darker grey for
+    // the lid and the whole glass for one original.
     let lid = {
         let ring = |bx: usize, by: usize| {
             let d = bx.min(by).min(bw - 1 - bx).min(bh - 1 - by);
-            (2..6).contains(&d)
+            (2..20).contains(&d)
         };
         // The lid is light and nearly neutral: a green envelope along an
         // edge must not pass for it.
@@ -800,6 +804,62 @@ mod tests {
             },
         ];
         let found = objects(&glass(&truth));
+        assert_eq!(found.len(), 3, "{found:?}");
+        for (f, t) in found.iter().zip(&truth) {
+            near(f, t);
+        }
+    }
+
+    /// A lid that darkens over its last 10 mm towards the edges, as the
+    /// Epson 4490's towards its left and top (207 inside, 145 at the edge,
+    /// measured on 13 November 2026, steepest in the first millimetre): the
+    /// lid is still the lid, the photos are found, not the whole glass.
+    #[test]
+    fn a_lid_darker_along_its_edges_is_still_the_lid() {
+        let truth = [
+            Found {
+                cx: 250.0,
+                cy: 220.0,
+                width: 300.0,
+                height: 200.0,
+                angle: 0.0,
+            },
+            Found {
+                cx: 700.0,
+                cy: 260.0,
+                width: 320.0,
+                height: 240.0,
+                angle: 7.0,
+            },
+            Found {
+                cx: 450.0,
+                cy: 850.0,
+                width: 500.0,
+                height: 350.0,
+                angle: -3.0,
+            },
+        ];
+        let mut image = glass(&truth);
+        // 10 mm at 200 dpi: 79 pixels; from 0.7 of the lid at the edge (145 / 207)
+        // to 1, as measured: 0.76 half a millimetre in, 0.86 at 3 mm.
+        let reach = 79.0;
+        for y in 0..image.height {
+            for x in 0..image.width {
+                let inside = truth
+                    .iter()
+                    .any(|f| f.contains(x as f32 + 0.5, y as f32 + 0.5));
+                let edge =
+                    (x.min(y).min(image.width - 1 - x).min(image.height - 1 - y) as f32).min(reach);
+                if inside || edge >= reach {
+                    continue;
+                }
+                let k = 0.7 + 0.3 * (edge / reach).sqrt();
+                for v in &mut image.data[(y * image.width + x) * 3..][..3] {
+                    *v = (f32::from(*v) * k).round() as u8;
+                }
+            }
+        }
+        let found = objects(&image);
         assert_eq!(found.len(), 3, "{found:?}");
         for (f, t) in found.iter().zip(&truth) {
             near(f, t);

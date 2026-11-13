@@ -119,19 +119,28 @@ const NEUTRAL_BLOCK: usize = 16;
 /// How far, in levels, a square's mean colour may be from the page's tint
 /// and still be no colour: the coloured fringes a scanner leaves along black
 /// text average out within a square, a pen stroke or a stamp does not.
-const NEUTRAL_TINT: i32 = 10;
+/// Measured on 13 November 2026 (the Epson 4490, an A4 at 300 dpi): a page of
+/// black text came out at most 9 levels from its paper's tint, a page with a
+/// blue signature up to 42, 75 of its squares beyond 15.
+const NEUTRAL_TINT: i32 = 15;
 
 /// Whether a colour image has no colour worth keeping: the mean colour of
 /// every square of [`NEUTRAL_BLOCK`] pixels is the page's own tint (the
 /// paper's), within [`NEUTRAL_TINT`] levels. A single square of colour (a
 /// signature in blue ink, a red stamp) keeps the page in colour.
+///
+/// The paper's tint is the scanner's light on white: a darker square that
+/// is still neutral has less of it, in proportion to its brightness (on the
+/// Epson 4490 the paper is 10 levels bluer than green, black text none), so
+/// each square is set against the tint scaled to its own brightness.
 pub fn is_neutral(image: &Image) -> bool {
     let (w, h) = (image.width, image.height);
     if image.format != Format::Rgb || image.data.len() != w * h * 3 {
         return false;
     }
-    // Each square's mean red and blue against its green.
+    // Each square's mean red and blue against its green, and its green.
     let mut tints: Vec<[i32; 2]> = Vec::new();
+    let mut greens: Vec<i32> = Vec::new();
     for by in (0..h).step_by(NEUTRAL_BLOCK) {
         for bx in (0..w).step_by(NEUTRAL_BLOCK) {
             let (mut sum, mut n) = ([0i64; 3], 0i64);
@@ -146,21 +155,28 @@ pub fn is_neutral(image: &Image) -> bool {
             }
             let mean = sum.map(|v| (v / n.max(1)) as i32);
             tints.push([mean[0] - mean[1], mean[2] - mean[1]]);
+            greens.push(mean[1]);
         }
     }
     if tints.is_empty() {
         return true;
     }
-    // The page's tint: the median square's.
-    let median = |c: usize| {
-        let mut v: Vec<i32> = tints.iter().map(|t| t[c]).collect();
+    // The paper: the median square's tint and brightness.
+    let median = |mut v: Vec<i32>| {
         let mid = v.len() / 2;
         *v.select_nth_unstable(mid).1
     };
-    let page = [median(0), median(1)];
-    tints
-        .iter()
-        .all(|t| (0..2).all(|c| (t[c] - page[c]).abs() <= NEUTRAL_TINT))
+    let page = [
+        median(tints.iter().map(|t| t[0]).collect()),
+        median(tints.iter().map(|t| t[1]).collect()),
+    ];
+    let paper = median(greens.clone()).max(1);
+    tints.iter().zip(&greens).all(|(t, &green)| {
+        (0..2).all(|c| {
+            let expected = page[c] * green / paper;
+            (t[c] - expected).abs() <= NEUTRAL_TINT
+        })
+    })
 }
 
 /// The image as it goes into the PDF with `encoding`: grey if neutral and
@@ -596,5 +612,31 @@ mod tests {
             "the grey step, which saves nothing"
         );
         assert!(p.encodings[0].quality < steps[0].quality, "{p:?}");
+    }
+
+    #[test]
+    fn black_text_on_a_tinted_paper_is_neutral() {
+        // As measured on the Epson 4490: paper 10 levels bluer than green,
+        // black text neutral. Text is darker: less of the paper's tint.
+        let (w, h) = (320, 320);
+        let mut data = Vec::with_capacity(w * h * 3);
+        for y in 0..h {
+            for x in 0..w {
+                let text = (y / 16) % 3 == 1 && (x / 16) % 2 == 0;
+                data.extend_from_slice(if text {
+                    &[58, 60, 58]
+                } else {
+                    &[225, 228, 238]
+                });
+            }
+        }
+        let image = Image {
+            width: w,
+            height: h,
+            dpi: 300,
+            format: Format::Rgb,
+            data,
+        };
+        assert!(is_neutral(&image));
     }
 }

@@ -68,6 +68,10 @@ GitHub; here they are in English.
   instead of moving the carriage further.
 - The originals found on the glass, and the slides and frames found in the film holder, come
   in the same reading order every time: row by row from the top, left to right in each row.
+- The originals on the glass of the Epson Perfection 4490 are found on the preview: its lid
+  darkens towards the edges, and the search took that darker grey for the lid and the whole
+  glass for one original (three photos came out as one). The lid's colour is now taken from
+  1 to 10 mm in from the edges.
 - With nothing like the lid along the edges of the glass (the lid left open), the search for
   originals finds none, so that the areas can be drawn by hand, instead of taking the whole
   glass for one original.
@@ -84,7 +88,8 @@ GitHub; here they are in English.
   only once complete.
 - A PDF below 100 % quality keeps a page in colour when it has any real colour on it, a
   signature in blue ink or a red stamp included; before, a page whose colour covered under
-  0.3 % of it was stored in grey.
+  0.3 % of it was stored in grey. A page of black text on a paper the scanner sees slightly
+  tinted still goes grey (measured on the Epson 4490).
 - Fitting a PDF to a size no longer lowers a page's quality by a step that would not make the
   file any smaller.
 - A PDF with an empty page is refused with the number of that page, instead of a broken file;

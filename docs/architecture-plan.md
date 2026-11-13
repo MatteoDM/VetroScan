@@ -1634,13 +1634,29 @@ decide. None changes the commands a scanner gets in the normal cases.
 - HP 3770 on Windows: the reason a scanner is not found (in use by another program, access
   denied, through `Backend::why_none`) shown in the app with the 3770 held by another program.
 
+**Tried on the Epson 4490 the same afternoon** (Matteo at the scanner; the release build of
+`98a9f39` and after): Cancel during the two-minute warm-up stops at once; a whole preview after
+it came out normal, the first full run of the review's code. The preview of three photos found
+**one** original, the whole glass, with the code of before the review too: the 4490's lid
+darkens towards its left and top edges over 10 mm (207 inside, 145 at the edge, measured on
+that preview) and the lid's colour was taken 1-2.5 mm in; taken 1-10 mm in, the preview finds
+the three photos, in reading order (tried in the app); the two previews of the 3770 kept from
+8 November give the same as before. To check on the 3770 with separate photos.
+
 **On real scans** (in software, made on made-up images so far):
 - the originals on the glass in reading order (a row is the objects that overlap its topmost
-  one by half), and the search with the lid open, which now finds nothing;
+  one by half), and the search with the lid open, which now finds nothing (reading order tried
+  on the Epson, above; the lid open not yet);
 - the PDF's grey pages below 100 %: a page stays in colour when the mean colour of any square
   of 16 pixels is more than 10 levels from the paper's tint. Both numbers are estimates:
   measure them on real documents (a signature in blue ink, a red stamp, a page with only the
-  coloured fringes of black text), as the `scanner-measuring` skill does.
+  coloured fringes of black text), as the `scanner-measuring` skill does. **Measured the same
+  day** on the Epson 4490 (A4 at 300 dpi, 90 %): the page with a blue signature stayed in
+  colour, the page of black text too, wrongly: its paper is 10 levels bluer than green, black
+  none, and the rule took a dark neutral corner for colour (14 levels). Now the paper's tint
+  is scaled to each square's brightness, and the threshold is 15: on the same two pages the
+  text page comes out at most 9 levels off (grey), the signature up to 42 (75 squares beyond
+  15). Two pages only: to measure again on more documents and on the HP 3770.
 
 ## Summary
 
