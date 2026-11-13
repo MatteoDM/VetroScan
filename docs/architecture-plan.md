@@ -1377,14 +1377,23 @@ never run by us (step 12).
     ran; commits `7c3cf9c` to `a8cb1f3`):
     1. The checks of `CLAUDE.md` on Windows and in WSL (the commits touch `#[cfg]` code:
        `vetroscan/src/ram.rs`); clippy for `x86_64-pc-windows-msvc` passed on Linux, nothing
-       ran on Windows.
+       ran on Windows. **Done** (13 November 2026, on `9631cb8`): build, fmt, clippy and tests
+       pass on Windows (404 passed, 10 ignored) and in WSL (403 passed, 10 ignored).
     2. `epson4490 scan 1200 30 40 150 150 out.png --bits 16 --tone linear --move` through
        `usbscan.sys`: the shading in pieces (`TABLE_CHUNK`), so far only through `nusb`; then
        the same scan in the app.
     3. The app's memory limit there: the Scan tab with a scan over half the PC's memory (the
-       memory read with PowerShell, `ram.rs`; until read, no limit).
+       memory read with PowerShell, `ram.rs`; until read, no limit). In part (13 November
+       2026): `ram.rs`' command, run alone, prints 34,274,361,344 (32 GB) in about 0.5 s,
+       which `number()` reads. The refusal itself cannot be seen on this PC: with 32 GB it
+       starts above an estimate of about 6.9 GB, out of reach of the Epson at 1200 dpi (A4,
+       16 bits: 0.9 GB) and of `VETROSCAN_FAKE_SCANNER` (2400 dpi, 16 bits, the whole glass:
+       3.4 GB); it needs a PC under about 17 GB with the made-up scanner, or 4800 dpi (11b).
     4. Capture 42's `.pcap`: the first piece of its shading, 65,508 or 65,520 bytes (the
-       stripped text says 65,508, the header's length says 65,520).
+       stripped text says 65,508, the header's length says 65,520). **Done** (13 November
+       2026, read from the `.pcap`): USBPcap's `dataLength` is 65,520 (`0xFFF0`, the 65,508
+       are the snaplen's cut: 65,535 less the 27-byte header), then 56,976, back to back with
+       no `06` between, one `06` after both; `TABLE_CHUNK` does the same.
     Then the steps that need Epson Scan's captures: 11a/11b (2400, 4800 dpi), 13-15 (films),
     17 (Digital ICE).
 

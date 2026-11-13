@@ -34,11 +34,11 @@ pub const GET_BUTTONS: [u8; 2] = [0x1E, 0x85];
 /// The longest write of the firmware's bytes, as Epson's driver does them.
 pub const FIRMWARE_CHUNK: usize = 0xFFF0;
 /// The longest write of a `1E 84` table: a longer one is written in pieces of this size, as
-/// Epson Scan did with capture 42's shading (122,496 bytes, at 1200 dpi on the whole glass;
-/// the first piece stripped as 65,508 bytes, the second 56,976, which add up to 12 short of
-/// the header's length: 65,520, the firmware's piece, is taken). Sent whole, 85,056 bytes of
-/// shading (1200 dpi, 150 mm wide) went unanswered and left the scanner taking whatever came
-/// next as more of the table (13 November 2026, the scanner switched off and on).
+/// Epson Scan did with capture 42's shading (122,496 bytes, at 1200 dpi on the whole glass):
+/// after the 8-byte header, a write of 65,520 bytes (its USBPcap length; the capture's snaplen
+/// keeps 65,508 of them) and one of 56,976, back to back, then the one `06`. Sent whole,
+/// 85,056 bytes of shading (1200 dpi, 150 mm wide) went unanswered and left the scanner taking
+/// whatever came next as more of the table (13 November 2026, the scanner switched off and on).
 pub const TABLE_CHUNK: usize = FIRMWARE_CHUNK;
 
 /// The two bytes of [`GET_STATE`].
