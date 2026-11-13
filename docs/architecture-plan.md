@@ -1373,6 +1373,20 @@ never run by us (step 12).
     AVASYS' copy (step 5) is put off, not dropped: the private releases carry the Windows
     copy, which works; it must be tried on the scanner before any public package carries it
     (point 3 of "The firmware and its licence").
+    **Back on Windows, first** (what the Linux evening of 13 November changed and only Linux
+    ran; commits `7c3cf9c` to `a8cb1f3`):
+    1. The checks of `CLAUDE.md` on Windows and in WSL (the commits touch `#[cfg]` code:
+       `vetroscan/src/ram.rs`); clippy for `x86_64-pc-windows-msvc` passed on Linux, nothing
+       ran on Windows.
+    2. `epson4490 scan 1200 30 40 150 150 out.png --bits 16 --tone linear --move` through
+       `usbscan.sys`: the shading in pieces (`TABLE_CHUNK`), so far only through `nusb`; then
+       the same scan in the app.
+    3. The app's memory limit there: the Scan tab with a scan over half the PC's memory (the
+       memory read with PowerShell, `ram.rs`; until read, no limit).
+    4. Capture 42's `.pcap`: the first piece of its shading, 65,508 or 65,520 bytes (the
+       stripped text says 65,508, the header's length says 65,520).
+    Then the steps that need Epson Scan's captures: 11a/11b (2400, 4800 dpi), 13-15 (films),
+    17 (Digital ICE).
 
 **D. Films** (milestone 5)
 
