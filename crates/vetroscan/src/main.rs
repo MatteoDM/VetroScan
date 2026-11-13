@@ -2394,10 +2394,10 @@ impl App {
                 worker: None,
                 status: None,
                 known_usb: models.iter().filter_map(|m| m.usb).collect(),
-                caps: models
-                    .into_iter()
-                    .next()
-                    .unwrap_or_else(Capabilities::placeholder),
+                caps: models.into_iter().next().unwrap_or_else(|| Capabilities {
+                    model: tr("Nessuno scanner").into(),
+                    ..Capabilities::placeholder()
+                }),
                 device: None,
                 devices: Vec::new(),
                 access_denied: false,

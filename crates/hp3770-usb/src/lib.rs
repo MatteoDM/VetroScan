@@ -218,6 +218,20 @@ impl scanner_api::Backend for UsbBackend {
             .collect()
     }
 
+    /// On Windows, the `\\.\UsbscanN` that exist but cannot be opened (in
+    /// use by another program, access denied), which [`list`] leaves out.
+    /// Elsewhere `nusb` lists what it sees, and opening it gives the reason.
+    fn why_none(&self) -> Option<String> {
+        #[cfg(windows)]
+        {
+            let unopened = usbscan::unopened();
+            if !unopened.is_empty() {
+                return Some(unopened.join("; "));
+            }
+        }
+        None
+    }
+
     /// Opens the scanner as [`open`] does (`usbscan.sys` first on Windows),
     /// so its errors say what each way of opening it found.
     fn open(

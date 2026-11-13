@@ -475,7 +475,7 @@ impl Scanner for FakeScanner {
 
     fn poll_buttons(&mut self) -> Result<u32> {
         self.plugged()?;
-        let mask = (1u32 << self.caps.buttons.len()) - 1;
+        let mask = crate::button_mask(self.caps.buttons.len());
         Ok(self.controls.held.load(Ordering::SeqCst) & mask)
     }
 
@@ -742,5 +742,24 @@ mod tests {
         assert!(Registry::new().open_first().is_err());
         assert_eq!(registry.models().len(), 2);
         assert_eq!(registry.models()[1].model, "Flatbed A3");
+    }
+
+    #[test]
+    fn a_film_without_an_adapter_is_refused_for_its_source() {
+        let mut r = request(1200, 8);
+        r.dpi = 2400;
+        r.source = Source::Negative;
+        let e = check(FakeScanner::a3().capabilities(), &r)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("does not scan from Negative"), "{e}");
+    }
+
+    #[test]
+    fn the_button_mask_covers_up_to_32_buttons() {
+        assert_eq!(crate::button_mask(0), 0);
+        assert_eq!(crate::button_mask(3), 0b111);
+        assert_eq!(crate::button_mask(32), u32::MAX);
+        assert_eq!(crate::button_mask(40), u32::MAX);
     }
 }

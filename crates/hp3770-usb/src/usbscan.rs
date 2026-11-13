@@ -261,6 +261,21 @@ pub(crate) fn list() -> Vec<Found> {
         .collect()
 }
 
+/// The `\\.\UsbscanN` that exist but cannot be opened, with why (in use by
+/// another program, access denied): [`list`] leaves them out, and without
+/// opening one it cannot tell whether it is a 3770 or another scanner.
+/// Only handles are opened and closed: nothing is sent to a scanner.
+pub(crate) fn unopened() -> Vec<String> {
+    (0..MAX_DEVICES)
+        .filter_map(|n| match Handle::open(n, false, "device") {
+            Err(failure @ OpenFailure::Os { .. }) => Some(format!(
+                r"\\.\Usbscan{n} (an HP Scanjet 3770 or another scanner): {failure}"
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
 /// A pending `IOCTL_WAIT_ON_DEVICE_EVENT`. Boxed so that the OVERLAPPED and
 /// the buffer do not move while the kernel owns them.
 struct PendingEvent {

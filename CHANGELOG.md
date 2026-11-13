@@ -73,6 +73,12 @@ GitHub; here they are in English.
   glass for one original.
 - 16-bit scans no longer have a few tones a whole 8-bit level off, which showed as spikes in
   their histogram.
+- When no scanner is found, the reason the scanner's drivers know now reaches VetroScan: on
+  Windows with HP's driver, a scanner device that another program holds or that access is
+  denied to is named, instead of a bare "no scanner found". With several scanners that do not
+  open, what each answered is kept, the busy one first.
+- A film scan asked of a scanner without a film adapter is refused for that reason, not for
+  its resolution.
 
 ## [0.7.0] - 2026-11-11
 

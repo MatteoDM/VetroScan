@@ -87,7 +87,8 @@ pub struct Capabilities {
     /// Its adapter for slides and negatives, if it has one.
     pub transparency: Option<Adapter>,
     /// The front-panel buttons, in the order of the bits of
-    /// [`Scanner::poll_buttons`].
+    /// [`Scanner::poll_buttons`]: at most [`MAX_BUTTONS`], the bits of its
+    /// answer (any further one is never reported).
     pub buttons: Vec<ButtonInfo>,
     /// The lamp, if it has one the host switches on and off.
     pub lamp: Option<LampInfo>,
@@ -130,11 +131,12 @@ pub struct Stripes {
 
 impl Capabilities {
     /// What to assume when no backend knows any model: an A4 glass at 300
-    /// dpi, no buttons, no lamp, a plain gamma 2.2 up to full white.
+    /// dpi, no buttons, no lamp, a plain gamma 2.2 up to full white. It has
+    /// no name: the application gives it one, in the user's language.
     pub fn placeholder() -> Self {
         Self {
             manufacturer: String::new(),
-            model: "Nessuno scanner".into(),
+            model: String::new(),
             usb: None,
             glass_inches: (8.27, 11.69),
             resolutions: vec![300],
@@ -274,6 +276,15 @@ pub enum ColourMode {
     Grey,
     /// Black and white.
     Lineart,
+}
+
+/// The most buttons [`Scanner::poll_buttons`] can report: one bit each.
+pub const MAX_BUTTONS: usize = 32;
+
+/// The bits of [`Scanner::poll_buttons`] that `buttons` buttons use.
+pub fn button_mask(buttons: usize) -> u32 {
+    1u32.checked_shl(buttons.min(MAX_BUTTONS) as u32)
+        .map_or(u32::MAX, |bit| bit - 1)
 }
 
 /// A front-panel button.
@@ -435,6 +446,12 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// Checks a request against what the scanner can do, as every backend
 /// should before it moves anything.
 pub fn check(caps: &Capabilities, request: &ScanRequest) -> Result<()> {
+    if !caps.offers(request.source) {
+        return Err(Error::InvalidRequest(format!(
+            "this scanner does not scan from {:?}",
+            request.source
+        )));
+    }
     let resolutions = caps.resolutions_for(request.source);
     if !resolutions.contains(&request.dpi) {
         return Err(Error::InvalidRequest(format!(
