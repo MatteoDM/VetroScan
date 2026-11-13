@@ -218,7 +218,7 @@ fn open_first() -> Result<Guarded<Box<dyn Transport>>, Error> {
 
 fn describe(state: State) -> String {
     format!(
-        "{:02X} {:02X}: firmware {}, {}",
+        "{:02X} {:02X}: firmware {}, {}{}",
         state.0[0],
         state.0[1],
         if state.firmware_running() {
@@ -226,7 +226,12 @@ fn describe(state: State) -> String {
         } else {
             "not running"
         },
-        if state.busy() { "busy" } else { "not busy" }
+        if state.busy() { "busy" } else { "not busy" },
+        if state.error() {
+            ", ERROR (the scanner's own, its light flashing red)"
+        } else {
+            ""
+        }
     )
 }
 

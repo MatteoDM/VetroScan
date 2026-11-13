@@ -153,7 +153,7 @@ fn ramp_bytes(r: &[u16]) -> Vec<u8> {
 /// Polls `1B 03` until the scanner is idle with its lamp warm (`18 81` at rest
 /// in every capture; `0x40` moving, `0x02` busy, `0x01` the lamp warming).
 /// An answer that is not a state ([`is_state`]: bytes of an image a scanner is still
-/// sending) is an error at once.
+/// sending), or the scanner's own error flag (`0x80`, [`State::error`]), is an error at once.
 /// A wait longer than one poll goes to `log`, with the states seen. Answers when it first
 /// saw the lamp warming, if it did.
 fn wait_ready(t: &mut dyn Transport, log: &mut dyn FnMut(String)) -> Result<Option<Instant>> {
@@ -169,6 +169,9 @@ fn wait_ready(t: &mut dyn Transport, log: &mut dyn FnMut(String)) -> Result<Opti
                  stopped when the scanner is opened again)",
                 s.0[0], s.0[1]
             )));
+        }
+        if s.error() {
+            return Err(other(s.error_text()));
         }
         let at = start.elapsed().as_secs_f64();
         if s.0[0] & 0x01 != 0 && warming.is_none() {
@@ -1097,6 +1100,70 @@ pub(crate) mod tests {
             "{:?}",
             &lines[at - 3..at]
         );
+    }
+
+    /// A capture's scanner that answers its `at`-th `1B 03` with its own error (`98 81`, seen
+    /// on 13 November 2026); what is written after it is kept.
+    #[derive(Debug)]
+    struct Erring {
+        follow: Follow,
+        states: usize,
+        at: usize,
+        answer: Option<Vec<u8>>,
+        after: Option<Vec<Vec<u8>>>,
+    }
+
+    impl Transport for Erring {
+        fn bulk_out(&mut self, data: &[u8]) -> Result<()> {
+            if let Some(after) = &mut self.after {
+                after.push(data.to_vec());
+                return Ok(());
+            }
+            if data == GET_STATE {
+                self.states += 1;
+                if self.states == self.at {
+                    self.answer = Some(vec![0x98, 0x81]);
+                    self.after = Some(Vec::new());
+                    return Ok(());
+                }
+            }
+            self.follow.bulk_out(data)
+        }
+
+        fn bulk_in(&mut self, buf: &mut [u8]) -> Result<usize> {
+            match self.answer.take() {
+                Some(a) => {
+                    buf[..a.len()].copy_from_slice(&a);
+                    Ok(a.len())
+                }
+                None => self.follow.bulk_in(buf),
+            }
+        }
+    }
+
+    /// The scanner's own error flag stops the scan where it is seen, with nothing more sent:
+    /// at the opening, before the lamp, in the calibration.
+    #[test]
+    fn the_scanners_own_error_stops_the_scan() {
+        let (_, text) = CAPTURES.iter().find(|(n, _)| *n == "29").unwrap();
+        let (request, _, _) = request_of(&parse(text));
+        let options = Options {
+            last_used: Some(SystemTime::now()),
+            curves: Curves::Wia,
+        };
+        for at in [1, 4, 8, 12] {
+            let mut g = Guarded::new(Erring {
+                follow: Follow::new("29", text),
+                states: 0,
+                at,
+                answer: None,
+                after: None,
+            });
+            let r = scan_glass(&mut g, request, options, &mut |_| {}, &mut |_| true);
+            let e = r.unwrap_err().to_string();
+            assert!(e.contains("98 81"), "at {at}: {e}");
+            assert_eq!(g.inner().after, Some(Vec::new()), "at {at}");
+        }
     }
 
     /// A capture's scanner whose `n`-th read (`1E 47`) fails at its first block.

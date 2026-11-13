@@ -145,11 +145,17 @@ pub fn objects(image: &Image) -> Vec<Found> {
             .iter()
             .map(|m| m[0] + m[1] + m[2])
             .fold(0.0f32, f32::max);
+        // Light against the whole scale too, not only against the brightest block: with the
+        // lid open and the glass empty the whole image is the room, dark (on the Epson 4490,
+        // 13 November 2026: blocks of 6-32 levels of 255, and the darkest edge of its closed
+        // lid 145), and its edges would pass for a lid against its own brightest block, the
+        // whole glass then taken for one original. A white lid on a scanner calibrated to white
+        // is far above a third of the scale.
         let lid_like = |m: &[f32; 3]| {
             let sum = m[0] + m[1] + m[2];
             let spread = m.iter().copied().fold(0.0f32, f32::max)
                 - m.iter().copied().fold(f32::MAX, f32::min);
-            sum > 0.55 * brightest && spread < 0.12 * sum / 3.0 + 6.0
+            sum > 0.55 * brightest && sum > 255.0 && spread < 0.12 * sum / 3.0 + 6.0
         };
         let mut bins = std::collections::HashMap::<[u8; 3], Vec<usize>>::new();
         for by in 0..bh {
@@ -1105,6 +1111,34 @@ mod tests {
             width: w,
             height: h,
             dpi: 100,
+            format: Format::Rgb,
+            data,
+        };
+        assert!(objects(&image).is_empty());
+    }
+
+    /// The lid open and the glass empty, as the Epson 4490 saw it on 13 November 2026 (200
+    /// dpi): the room, dark (6-11 levels at the sides), a smooth lighter band down the middle
+    /// (about 19), a few specks; it found the whole glass as one original before.
+    #[test]
+    fn the_lid_open_on_an_empty_glass_finds_nothing() {
+        let (w, h) = (1700, 2338);
+        let mut data = vec![0u8; w * h * 3];
+        for y in 0..h {
+            for x in 0..w {
+                let d = (x as f32 - 850.0) / 400.0;
+                let v = 7.0 + 12.0 * (-d * d).exp() + ((x * 13 + y * 7) % 3) as f32;
+                let speck = (x % 397 == 0 && y % 211 == 0) as u8 * 100;
+                let p = (y * w + x) * 3;
+                data[p] = v as u8 + 2 + speck;
+                data[p + 1] = v as u8 + 1 + speck;
+                data[p + 2] = v as u8 + speck;
+            }
+        }
+        let image = Image {
+            width: w,
+            height: h,
+            dpi: 200,
             format: Format::Rgb,
             data,
         };

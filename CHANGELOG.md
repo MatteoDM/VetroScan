@@ -74,7 +74,14 @@ GitHub; here they are in English.
   1 to 10 mm in from the edges.
 - With nothing like the lid along the edges of the glass (the lid left open), the search for
   originals finds none, so that the areas can be drawn by hand, instead of taking the whole
-  glass for one original.
+  glass for one original. This holds when the room seen through the open lid is dark and even
+  too: the lid is now taken to be light against the whole scale, not only against the
+  brightest part of the preview (tried with the Epson Perfection 4490's lid open on an empty
+  glass).
+- Epson Perfection 4490: when the scanner flags an error of its own (its front light flashing
+  red), VetroScan no longer shows it as ready, says so in the scanner's details, and a scan stops
+  at the first sign of it without sending the scanner anything more. Opening Epson Scan cleared
+  it once; switching the scanner off and on starts it afresh.
 - 16-bit scans no longer have a few tones a whole 8-bit level off, which showed as spikes in
   their histogram.
 - When no scanner is found, the reason the scanner's drivers know now reaches VetroScan: on

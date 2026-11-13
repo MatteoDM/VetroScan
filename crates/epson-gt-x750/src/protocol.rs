@@ -47,6 +47,10 @@ impl State {
     /// In the first byte: busy (Epson's interpreter waits, polling every
     /// 50 ms, until both are clear).
     pub const BUSY: u8 = 0x42;
+    /// In the first byte: the scanner's own error. Seen on 13 November 2026 as `98 81`, its
+    /// front light flashing red, after a preview with the lid open (the lamp did not light and
+    /// nothing moved); Epson Scan, opened then, cleared it. Never in a capture.
+    pub const ERROR: u8 = 0x80;
 
     /// Whether the firmware is running (nothing to upload).
     pub fn firmware_running(self) -> bool {
@@ -56,6 +60,20 @@ impl State {
     /// Whether the scanner is busy.
     pub fn busy(self) -> bool {
         self.0[0] & Self::BUSY != 0
+    }
+
+    /// Whether the scanner flags its own error ([`State::ERROR`]).
+    pub fn error(self) -> bool {
+        self.0[0] & Self::ERROR != 0
+    }
+
+    /// What to tell the user about [`State::error`].
+    pub fn error_text(self) -> String {
+        format!(
+            "the scanner reports an error of its own (1B 03 answered {:02X} {:02X}, its light \
+             flashing red): nothing more was sent to it; switch it off and on",
+            self.0[0], self.0[1]
+        )
     }
 }
 
@@ -404,5 +422,18 @@ pub(crate) mod tests {
         assert!(!State([0x10, 0xFF]).busy());
         assert!(State([0x02, 0x00]).busy());
         assert!(!State([0xEF, 0x00]).firmware_running());
+    }
+
+    #[test]
+    fn the_error_seen_on_13_november_is_an_error_not_busy() {
+        let s = State([0x98, 0x81]);
+        assert!(is_state(&s.0));
+        assert!(s.firmware_running());
+        assert!(!s.busy());
+        assert!(s.error());
+        assert!(s.error_text().contains("98 81"));
+        for ok in [[0x18, 0x81], [0x19, 0x81], [0x58, 0x81], [0x28, 0x00]] {
+            assert!(!State(ok).error(), "{ok:02X?}");
+        }
     }
 }

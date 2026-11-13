@@ -1643,10 +1643,35 @@ that preview) and the lid's colour was taken 1-2.5 mm in; taken 1-10 mm in, the 
 the three photos, in reading order (tried in the app); the two previews of the 3770 kept from
 8 November give the same as before. To check on the 3770 with separate photos.
 
+**Tried with the lid open the same evening** (the Epson 4490, Matteo at the scanner):
+- **In the app, an error of the scanner's own.** A preview with the lid open: the lamp did not
+  light, nothing moved, after a while a click and the front light flashing red; the app said
+  "ready" with `1B 03` answering `98 81`, a state never seen in a capture (`18 81` at rest). The
+  bit `80` was ignored: the scan's wait took `98 81` as ready (`0x43` clear) and so did the
+  status. Opening Epson Scan cleared it (no power cycle), and Epson Scan then scanned with the
+  lid open. **Done**: `State::error` (`0x80`), the scan's every `1B 03` wait stops at it with
+  nothing more sent (a test, the scanner of capture 29 erring at four points), the status is not
+  ready and shows it, `epson4490 probe` prints it. **Not understood**: what set it. Right after,
+  with the lamp warm and Epson Scan closed, `epson4490 scan 200 0 0 215.9 296.9` (the app's
+  preview) with the lid open ran whole and normal (`1E A1` answered `00`, Epson Scan had
+  switched the lamp off: lit by the scan, two minutes, 145 s in all); the earlier try was less
+  than 15 minutes after the three photos' preview, so not the lamp switched off by the
+  scanner. With no log of the app's try, the step where it started is unknown; the next time
+  the scan's error says `98 81` where it stops. To try again in the app, with the lid open,
+  after the lamp has been switched off by the app's lamp choice and by the scanner's 15
+  minutes.
+- **The search with the lid open, on the real scan** (`scansioni/epson_coperchio_aperto_
+  20261113.png`, the empty glass): the room is dark (blocks of 6-32 levels of 255, a smooth
+  lighter band down the middle) and the search found **one** original, the whole glass: its
+  edges passed for the lid against the image's own brightest block. **Done**: the lid must also
+  be above a third of the scale (the Epson's closed lid is 145 at its darkest edge, the 3770's
+  255); now none, the three photos' preview still three, the 3770's two previews still 5 and
+  1, and a test made on the measured scan.
+
 **On real scans** (in software, made on made-up images so far):
 - the originals on the glass in reading order (a row is the objects that overlap its topmost
-  one by half), and the search with the lid open, which now finds nothing (reading order tried
-  on the Epson, above; the lid open not yet);
+  one by half), and the search with the lid open, which now finds nothing (both tried on the
+  Epson, above);
 - the PDF's grey pages below 100 %: a page stays in colour when the mean colour of any square
   of 16 pixels is more than 10 levels from the paper's tint. Both numbers are estimates:
   measure them on real documents (a signature in blue ink, a red stamp, a page with only the

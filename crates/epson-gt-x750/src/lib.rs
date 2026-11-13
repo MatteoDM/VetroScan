@@ -495,6 +495,9 @@ impl scanner_api::Scanner for Gt4490 {
                 },
             ),
         ];
+        if state.error() {
+            details.push(("Error".into(), state.error_text()));
+        }
         if !self.recovered.is_empty() {
             details.push(("Scan left half-way".into(), self.recovered.join("; ")));
         }
@@ -503,7 +506,7 @@ impl scanner_api::Scanner for Gt4490 {
             "glass scans computed from the request".into(),
         ));
         Ok(DeviceStatus {
-            ready: state.firmware_running() && !state.busy(),
+            ready: state.firmware_running() && !state.busy() && !state.error(),
             lamp: None,
             adapter: None,
             details,
