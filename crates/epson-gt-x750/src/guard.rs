@@ -34,7 +34,7 @@
 
 use crate::firmware::{HEADER_LEN, PAYLOAD_LEN};
 use crate::protocol::{
-    checksum, FIRMWARE_BEGIN, FIRMWARE_END, FIRMWARE_RUN, GET_BUTTONS, GET_STATE,
+    checksum, FIRMWARE_BEGIN, FIRMWARE_END, FIRMWARE_RUN, GET_BUTTONS, GET_STATE, TABLE_CHUNK,
 };
 use crate::scan::{CANCEL, READ_83};
 use crate::setup::{self, MoveKind, Plan, Request};
@@ -436,6 +436,10 @@ impl<T: Transport> Guarded<T> {
             }
             Expect::OneOf(_) | Expect::Move(_) => bad("after its command"),
             Expect::Len(n) if data.len() == *n => Ok(None),
+            // A long table in pieces, as Epson Scan wrote one (`protocol::TABLE_CHUNK`).
+            Expect::Len(n) if *n > TABLE_CHUNK && data.len() == TABLE_CHUNK => {
+                Ok(Some(Expect::Len(n - TABLE_CHUNK)))
+            }
             Expect::Len(_) => bad("of the wrong length"),
             Expect::Block41 => {
                 let p = plan.expect("1E 41 needs a plan");
@@ -915,6 +919,34 @@ mod tests {
         assert!(protocol::lamp_off(&mut t).is_err());
         t.bulk_out(&GET_STATE).unwrap();
         assert_eq!(t.inner().writes, [vec![0x1E, 0xA2], GET_STATE.to_vec()]);
+    }
+
+    /// A shading longer than a piece goes out in pieces of `TABLE_CHUNK` and the rest (as
+    /// Epson Scan's capture 42), or whole; no other cut, nothing past its length.
+    #[test]
+    fn a_long_shading_goes_in_pieces() {
+        // 1200 dpi, 150 mm wide: 85,056 bytes of shading.
+        let p = plan(1200, 1417, 1890, 7087, 7087, 16).unwrap();
+        let len = p.column_count() as usize * 6;
+        assert!(len > TABLE_CHUNK);
+        let mut t = guarded(&[]);
+        t.permit_request(&p.request).unwrap();
+        t.permit_plan(&p).unwrap();
+        let header = setup::shading_header(p.column_count());
+        t.bulk_out(&[0x1E, 0x84]).unwrap();
+        t.bulk_out(&header).unwrap();
+        t.bulk_out(&vec![0; TABLE_CHUNK]).unwrap();
+        t.bulk_out(&vec![0; len - TABLE_CHUNK]).unwrap();
+        t.bulk_out(&[0x1E, 0x84]).unwrap();
+        t.bulk_out(&header).unwrap();
+        t.bulk_out(&vec![0; len]).unwrap();
+        t.bulk_out(&[0x1E, 0x84]).unwrap();
+        t.bulk_out(&header).unwrap();
+        assert!(t.bulk_out(&vec![0; 4096]).is_err());
+        t.bulk_out(&[0x1E, 0x84]).unwrap();
+        t.bulk_out(&header).unwrap();
+        t.bulk_out(&vec![0; TABLE_CHUNK]).unwrap();
+        assert!(t.bulk_out(&vec![0; len]).is_err());
     }
 
     #[test]

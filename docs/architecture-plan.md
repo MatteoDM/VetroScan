@@ -1254,6 +1254,25 @@ never run by us (step 12).
    the channels' means agree within 0.6 % (0.994-1.003 of the 100 dpi scan), the image within
    a pixel; none at 65535, 28 samples of 16.7 million at 0 at 1200 dpi. `1E 87` gave -117 at
    that power-on.
+   **Wider at 1200 dpi** (the same evening, measuring step 11c): 150 x 150 mm at 1200 dpi and
+   16 bits hung in the app ("bulk IN: transfer was cancelled", nusb's word for a 30 s timeout)
+   and again from the command line, "(after 1E 84)" right after the shading: the scanner
+   answered nothing more, not even `1B 03`, until switched off and on. Its shading table is
+   85,056 bytes there (28,416 at 50 mm), written whole; in the 24 captures only capture 42's
+   is over 64 KB (122,496 bytes, Epson Scan at 1200 dpi on the whole glass), and Epson Scan
+   wrote it in two pieces (stripped as 65,508 and 56,976, 12 bytes short of the header's
+   length: 65,520, the firmware's piece, taken). The scanner then takes what comes next as
+   more of the table (a guess that fits). **Done**: `1E 84` tables in pieces of
+   `protocol::TABLE_CHUNK` (`0xFFF0`), the guard lets a table through only so cut (a test);
+   tried: the same scan whole, 7135 lines in 83 s, `18 81` after it, the image sound (four
+   photos, none at 0 or 65535), 1.13 GB at most in the command line's memory.
+   **After a power cycle with the carriage away** (twice that evening, both after a hung
+   scan): `1B 03` answered `08 00`, not `28 00`, the front light green, the carriage where it
+   stopped; bit `0x20` is taken to be "the carriage at home" (a guess, twice consistent). The
+   app refuses to send the firmware then (a state never seen); `epson4490 upload
+   --carriage-away` sends it on `08 00` only (a test): both times the firmware moved the
+   carriage home by itself (`5A 81` for 1.5 s about 13 s in, `18 81` at 20-22 s), as after
+   every upload. Whether the app should do the same is to decide.
 9. **1200 dpi after every power-on**: the scanner answers `1E 8B` with `15` until a 600-byte
    table (`1E 84` type 07) is loaded, which Epson's driver computes from a raw line it reads
    with `1E 83`. **Done** (12 November, evening; `table07.rs`, `captures/epson4490/05-catture.md`,

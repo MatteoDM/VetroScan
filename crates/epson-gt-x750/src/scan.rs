@@ -20,7 +20,7 @@
 //! ([`Guarded::permit_request`], [`Guarded::permit_plan`]).
 
 use crate::guard::Guarded;
-use crate::protocol::{is_state, State, ACK, GET_STATE};
+use crate::protocol::{is_state, State, ACK, GET_STATE, TABLE_CHUNK};
 use crate::setup::{self, Plan, Request, XCorrection, TRAILER_LEN};
 use crate::shading::{black_block, Shading};
 use crate::table07;
@@ -144,7 +144,9 @@ fn ask(t: &mut dyn Transport, cmd: [u8; 2], n: usize) -> Result<Vec<u8>> {
 fn table(t: &mut dyn Transport, header: &[u8; 8], values: &[u8]) -> Result<()> {
     command(t, [0x1E, 0x84])?;
     t.bulk_out(header)?;
-    t.bulk_out(values)?;
+    for piece in values.chunks(TABLE_CHUNK) {
+        t.bulk_out(piece)?;
+    }
     ack(t, "a 1E 84 table")
 }
 
@@ -355,9 +357,11 @@ fn cancel(t: &mut dyn Transport, log: &mut dyn FnMut(String)) -> Result<()> {
 /// After a read failed (its `1E 47` sent, its data not all taken): stops it as a cancel does,
 /// so that the scanner is not left sending its image to the next scan. The read's error is
 /// kept; what the stop did goes to `log`.
-fn stop_after(t: &mut dyn Transport, log: &mut dyn FnMut(String), e: Error) -> Error {
+fn stop_after<T: Transport>(g: &mut Guarded<T>, log: &mut dyn FnMut(String), e: Error) -> Error {
+    // Where it failed, before the stop's own commands.
+    let e = after(e, g.last_command());
     log(format!("the read failed ({e}): stopping it with 1E 18"));
-    if let Err(also) = cancel(t, log) {
+    if let Err(also) = cancel(g, log) {
         log(format!("stopping it failed too: {also}"));
     }
     e
@@ -532,8 +536,15 @@ pub fn scan_glass<T: Transport>(
 /// A scan's error with the last command sent before it, to tell where it stopped (the
 /// scanner's own error came once before the lamp was lit, with a dozen commands there).
 fn after(e: Error, last: Option<[u8; 2]>) -> Error {
+    if e.to_string().contains("(after ") {
+        return e;
+    }
     match (e, last) {
         (Error::Other(what), Some(cmd)) => Error::Other(format!("{what} (after {})", name(cmd))),
+        // A transfer that failed or timed out (`nusb` says a timeout as "cancelled").
+        (Error::Disconnected(what), Some(cmd)) => {
+            Error::Disconnected(format!("{what} (after {})", name(cmd)))
+        }
         (e, _) => e,
     }
 }
@@ -1202,7 +1213,9 @@ pub(crate) mod tests {
         fn bulk_in(&mut self, buf: &mut [u8]) -> Result<usize> {
             if self.e47 == self.fail_at {
                 self.fail_at = 0;
-                return Err(Error::Other("bulk IN: timed out".into()));
+                return Err(Error::Disconnected(
+                    "bulk IN: transfer was cancelled".into(),
+                ));
             }
             self.inner.bulk_in(buf)
         }
@@ -1237,7 +1250,12 @@ pub(crate) mod tests {
                 &mut |_| true,
             );
             let e = r.unwrap_err().to_string();
-            assert!(e.contains("timed out"), "{e}");
+            // Where it failed, not the stop's last command (1E A1).
+            assert!(
+                e.starts_with("bulk IN: transfer was cancelled (after 1E "),
+                "{e}"
+            );
+            assert!(!e.contains("(after 1E A1)"), "{e}");
             assert_eq!(
                 g.inner().inner.after,
                 [CANCEL.to_vec(), GET_STATE.to_vec(), vec![0x1E, 0xA1]],

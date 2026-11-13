@@ -44,6 +44,10 @@ GitHub; here they are in English.
   less the last fraction of a millimetre no scan with Epson's driver was seen reaching).
 
 ### Fixed
+- Epson Perfection 4490: a scan at 1200 dpi wider than about 115 mm no longer hangs before
+  reading, leaving the scanner deaf until switched off and on with its carriage away from
+  home: its shading table, over 64 KB there, now goes to the scanner in pieces, as Epson's
+  own driver sends it. Tried on the scanner: 150 x 150 mm at 1200 dpi and 16 bits.
 - HP Scanjet 3770: a scan that fails half-way (calibration, film adapter's lamp, image data)
   is now ended as a cancelled one is: the chip stopped, the carriage brought home and, with
   films, the adapter's lamp switched off and the flatbed lamp on again. Before, the adapter's
