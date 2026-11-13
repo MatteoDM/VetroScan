@@ -101,8 +101,8 @@ impl Handle {
 }
 
 /// The scanners the app looks for: on USB, the RTS8822 driver, then the
-/// Epson Perfection 4490 (phase 12, milestone 1: firmware and state, no
-/// scanning yet; it lists nothing and sends nothing without the scanner).
+/// Epson Perfection 4490 (its glass, scanned with its own driver); neither
+/// lists nor sends anything without its scanner.
 pub fn registry() -> Registry {
     if std::env::var_os("VETROSCAN_FAKE_SCANNER").is_some() {
         // A made-up scanner, to try the interface with no scanner.
@@ -185,6 +185,15 @@ fn error_text(e: scanner_api::Error) -> String {
 /// How often the idle thread reads the buttons.
 const BUTTON_POLL: Duration = Duration::from_millis(150);
 
+/// How soon the idle thread tries again to open a scanner that is not
+/// there: quickly at first (taken for a moment by another program, so that
+/// the buttons keep working), then slowly ([`OPEN_RETRY_SLOW`]) after
+/// [`OPEN_RETRIES_FAST`] tries in a row, so that a scanner unplugged or
+/// busy for long is not asked, nor its devices opened, every 300 ms.
+const OPEN_RETRY_FAST: Duration = Duration::from_millis(300);
+const OPEN_RETRY_SLOW: Duration = Duration::from_secs(3);
+const OPEN_RETRIES_FAST: u32 = 10;
+
 struct Worker {
     registry: Registry,
     output: Box<dyn Output>,
@@ -197,6 +206,8 @@ struct Worker {
     /// When the scanner was last opened for the buttons (to retry slowly
     /// after it went away).
     last_open: Option<Instant>,
+    /// Tries in a row to open it for the buttons that failed.
+    failed_opens: u32,
     /// When the lamp was last needed (none: switched off since); it may be
     /// on when the app starts.
     lamp_used: Option<Instant>,
@@ -214,6 +225,7 @@ impl Worker {
             chosen: None,
             held: 0,
             last_open: None,
+            failed_opens: 0,
             lamp_used: Some(Instant::now()),
             // Until the app says: the default of the preferences.
             lamp_after: Duration::from_secs(120),
@@ -364,21 +376,26 @@ impl Worker {
 
     /// Reads the buttons of a scanner that has some. If the scanner went
     /// away (unplugged, switched off, taken for a moment by another
-    /// program) it is opened again, at most every 300 ms, so the buttons
-    /// never stop working.
+    /// program) it is opened again, every 300 ms at first, then every 3 s
+    /// ([`OPEN_RETRY_FAST`], [`OPEN_RETRY_SLOW`]), so the buttons never stop
+    /// working.
     fn poll_buttons(&mut self) {
         if self.scanner.is_none() {
-            if self
-                .last_open
-                .is_some_and(|t| t.elapsed() < Duration::from_millis(300))
-            {
+            let wait = if self.failed_opens < OPEN_RETRIES_FAST {
+                OPEN_RETRY_FAST
+            } else {
+                OPEN_RETRY_SLOW
+            };
+            if self.last_open.is_some_and(|t| t.elapsed() < wait) {
                 return;
             }
             self.last_open = Some(Instant::now());
             if let Err(e) = self.scanner() {
+                self.failed_opens = self.failed_opens.saturating_add(1);
                 log(&format!("scanner not opened: {e}"));
                 return;
             }
+            self.failed_opens = 0;
             log("scanner opened again");
             let status = self.status();
             self.output.send(Event::Status(status));

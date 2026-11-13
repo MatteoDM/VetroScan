@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! What the application remembers between runs, in a JSON file in the
 //! user's configuration folder, named after the app's package
-//! (`%APPDATA%etroscan\impostazioni.json` on Windows,
+//! (`%APPDATA%\vetroscan\impostazioni.json` on Windows,
 //! `~/.config/vetroscan/impostazioni.json` on Linux; `hp3770` up to v0.2,
 //! see [`config_dir`]).
 //!
 //! The file mirrors the interface's settings with plain fields, so that it
 //! stays readable and a field added later only takes its default.
 
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// The scanner whose buttons the preferences before v0.2.0 meant, and the
 /// ids of its buttons in that order.
@@ -269,6 +269,46 @@ pub fn config_dir() -> Option<PathBuf> {
     }
 }
 
+/// What a file of the settings folder holds, read as JSON: `None` when there
+/// is none. A file that is there but cannot be read so (a save cut short) is
+/// kept aside, as `<name>.illeggibile`, so that the next save does not write
+/// over what is left of it.
+fn read_json<T: DeserializeOwned>(path: &Path) -> Option<T> {
+    let text = std::fs::read(path).ok()?;
+    match serde_json::from_slice(&text) {
+        Ok(value) => Some(value),
+        Err(_) => {
+            let mut aside = path.as_os_str().to_owned();
+            aside.push(".illeggibile");
+            let _ = std::fs::rename(path, aside);
+            None
+        }
+    }
+}
+
+/// Writes `text` as the file `path` of the settings folder: into a file
+/// beside it first, which takes its place only once complete, so that a
+/// save cut short leaves the previous file whole.
+fn write_safely(path: &Path, text: &str) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let mut part = path.as_os_str().to_owned();
+    part.push(".part");
+    let part = PathBuf::from(part);
+    let written = (|| -> std::io::Result<()> {
+        use std::io::Write;
+        let mut file = std::fs::File::create(&part)?;
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+        std::fs::rename(&part, path)
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&part);
+    }
+    written.map_err(|e| e.to_string())
+}
+
 /// Copies the files of the settings folder of older versions (`old`) into
 /// the new one (`new`), only when the new one does not exist yet; says
 /// whether it did. The old folder stays as it is, for an older version.
@@ -293,11 +333,10 @@ impl Prefs {
     }
 
     /// The saved preferences, or the defaults if there are none (or the
-    /// file cannot be read).
+    /// file cannot be read: it is then kept aside, see [`read_json`]).
     pub fn load() -> Self {
         Self::path()
-            .and_then(|p| std::fs::read_to_string(p).ok())
-            .and_then(|text| serde_json::from_str::<Self>(&text).ok())
+            .and_then(|p| read_json::<Self>(&p))
             .unwrap_or_default()
             .migrated()
     }
@@ -327,11 +366,8 @@ impl Prefs {
     pub fn save(&self) -> Result<(), String> {
         let path =
             Self::path().ok_or(crate::i18n::tr("cartella delle impostazioni sconosciuta"))?;
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-        }
         let text = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
-        std::fs::write(&path, text).map_err(|e| e.to_string())
+        write_safely(&path, &text)
     }
 }
 
@@ -350,11 +386,11 @@ pub fn presets_path() -> Option<PathBuf> {
     Some(config_dir()?.join("preset.json"))
 }
 
-/// The saved presets (none if there is no file or it cannot be read).
+/// The saved presets (none if there is no file or it cannot be read: it is
+/// then kept aside, see [`read_json`]).
 pub fn load_presets() -> Vec<Preset> {
     presets_path()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .and_then(|text| serde_json::from_str::<Vec<Preset>>(&text).ok())
+        .and_then(|p| read_json::<Vec<Preset>>(&p))
         .map(|mut v| {
             v.truncate(MAX_PRESETS);
             v
@@ -365,16 +401,38 @@ pub fn load_presets() -> Vec<Preset> {
 /// Writes the presets.
 pub fn save_presets(presets: &[Preset]) -> Result<(), String> {
     let path = presets_path().ok_or(crate::i18n::tr("cartella delle impostazioni sconosciuta"))?;
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
     let text = serde_json::to_string_pretty(presets).map_err(|e| e.to_string())?;
-    std::fs::write(&path, text).map_err(|e| e.to_string())
+    write_safely(&path, &text)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unreadable_file_is_kept_aside_and_a_save_replaces_it_whole() {
+        let dir = crate::testing::dir().join("unreadable");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("impostazioni.json");
+        // Half written: the defaults, and the remains kept, not overwritten.
+        std::fs::write(&path, "{\"theme\": \"scu").unwrap();
+        assert_eq!(read_json::<Prefs>(&path), None);
+        assert!(!path.exists());
+        assert_eq!(
+            std::fs::read_to_string(dir.join("impostazioni.json.illeggibile")).unwrap(),
+            "{\"theme\": \"scu"
+        );
+        // No file at all: nothing kept aside.
+        assert_eq!(read_json::<Prefs>(&dir.join("none.json")), None);
+        // A save goes through a file beside it, renamed over it.
+        let prefs = Prefs {
+            theme: "scuro".into(),
+            ..Prefs::default()
+        };
+        write_safely(&path, &serde_json::to_string(&prefs).unwrap()).unwrap();
+        assert_eq!(read_json::<Prefs>(&path).unwrap().theme, "scuro");
+        assert!(!dir.join("impostazioni.json.part").exists());
+    }
 
     #[test]
     fn the_settings_of_older_versions_move_to_the_new_folder_once() {

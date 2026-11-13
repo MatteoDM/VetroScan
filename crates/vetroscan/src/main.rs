@@ -4188,7 +4188,7 @@ impl App {
                 return Ok(format!("{} · {summary}", path.display()));
             }
             Writer::Tiff => vetroscan_export::save_tiff(path, &pages),
-            Writer::Zip => vetroscan_export::save_zip(path, &name, &pages, ImageFormat::Png),
+            Writer::Zip => vetroscan_export::save_zip(path, &name, &pages, format),
             // One image per page, next to the chosen name.
             Writer::Folder => {
                 vetroscan_export::save_folder(folder, &name, &pages, format).map(|_| ())
@@ -4302,6 +4302,15 @@ impl App {
             return Err(tr("niente da salvare").into());
         }
         let shared = self.settings();
+        // Black and white has no 16 bits: refused before any page is
+        // written, not half-way through the document.
+        if self
+            .pages
+            .iter()
+            .any(|page| page.effective(shared).colour == Colour::Lineart)
+        {
+            return Err(tr("bianco e nero: niente 16 bit").into());
+        }
         let n = self.pages.len();
         let stem = path
             .file_stem()
@@ -4313,7 +4322,7 @@ impl App {
             let target = if n == 1 {
                 path.to_path_buf()
             } else {
-                path.with_file_name(format!("{stem}-{:03}.{ext}", i + 1))
+                path.with_file_name(vetroscan_export::numbered(&stem, i + 1, n, ext))
             };
             let settings = page.effective(shared);
             let (full, raw16) = page.full_samples();
@@ -4384,7 +4393,7 @@ impl App {
             let target = if n == 1 {
                 path.to_path_buf()
             } else {
-                path.with_file_name(format!("{stem}-{:03}.{ext}", i + 1))
+                path.with_file_name(vetroscan_export::numbered(&stem, i + 1, n, ext))
             };
             let (full, raw16) = page.full_samples();
             let raw = match &raw16 {
@@ -4393,7 +4402,8 @@ impl App {
                     full.height,
                     full.dpi,
                     samples,
-                    page.raw.tone.white.map(|w| w * 256.0),
+                    // In 16-bit units as the samples are: 255 is 65535.
+                    page.raw.tone.white.map(|w| w * 257.0),
                 ),
                 None => vetroscan_export::Linear16::from_linear8(&full, page.raw.tone.white)
                     .map_err(|e| e.to_string())?,

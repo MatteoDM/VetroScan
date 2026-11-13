@@ -90,6 +90,18 @@ GitHub; here they are in English.
 - A PDF with an empty page is refused with the number of that page, instead of a broken file;
   a multi-page TIFF with no pages is refused instead of written unreadable.
 - Long PDFs take much less memory to save: they are written page by page.
+- The settings and the presets are saved through a file beside them, so that a save cut short
+  (the power going) no longer loses them; a settings file that cannot be read is kept aside, as
+  `impostazioni.json.illeggibile`, instead of being written over with the defaults.
+- A document saved at 16 bits with a black-and-white page is refused before any file is
+  written, not after the pages before it.
+- A ZIP holds the pictures in the format chosen (JPEG, WebP…), not always PNG.
+- The pages of a document saved one file each are named alike in every format (`doc-01`,
+  `doc-02`…); the 16-bit and RAW files were `doc-001`.
+- A RAW (DNG or 16-bit TIFF) of a 16-bit scan puts the paper white where the same scan's 8-bit
+  RAW does.
+- With no scanner there, VetroScan looks for it every 3 seconds after the first few tries,
+  instead of every 300 ms.
 
 ## [0.7.0] - 2026-11-11
 

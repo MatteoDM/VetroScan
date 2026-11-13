@@ -297,8 +297,16 @@ pub fn save_pdf_pages(path: &Path, pages: &[PdfPage]) -> Result<()> {
 
 /// File name of page `n` (from 1) of `count`: `name-01.png` and so on.
 fn page_name(name: &str, n: usize, count: usize, format: ImageFormat) -> String {
+    numbered(name, n, count, format.extension())
+}
+
+/// File name of page `n` (from 1) of `count` with `extension`: `name-01.tif`
+/// and so on, with as many digits as `count` needs, at least two (the names
+/// sort in page order). Every file a document is written to one per page
+/// is named so.
+pub fn numbered(name: &str, n: usize, count: usize, extension: &str) -> String {
     let digits = count.to_string().len().max(2);
-    format!("{name}-{n:0digits$}.{}", format.extension())
+    format!("{name}-{n:0digits$}.{extension}")
 }
 
 /// Writes each page as an image in `folder` (created if needed), named
