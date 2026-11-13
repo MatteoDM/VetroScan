@@ -51,8 +51,10 @@ const WAIT: Duration = Duration::from_secs(180);
 /// 12 November 2026 (`captures/epson4490/05-catture.md`, "La lampada fredda, misurata"): ten
 /// scans right after switching on; `1B 03` flags the lamp warming for about 20 s only, and the
 /// image was still 6 levels lighter in the shadows; within 1 level after about 1.5 minutes,
-/// 0.5 after 3. Two minutes, chosen by Matteo.
-pub const WARM_UP: Duration = Duration::from_secs(120);
+/// 0.5 after 3. Measured again on 13 November 2026 after the scanner had switched the lamp off
+/// by itself: the light parts 1.6 % darker at 2:12, 0.4 % at 2:38, within 0.1 % from 3:08.
+/// Two and a half minutes, chosen by Matteo (two until 13 November).
+pub const WARM_UP: Duration = Duration::from_secs(150);
 /// After this long without a scan the lamp is taken to be off: the scanner switches it off by
 /// itself after about 15 minutes idle (capture 21), without saying so.
 pub const LAMP_OFF_AFTER: Duration = Duration::from_secs(14 * 60);

@@ -23,7 +23,7 @@ GitHub; here they are in English.
   VetroScan), any area of the glass. Every command is computed from the area asked and kept
   within what the captures of Epson's own drivers showed the scanner doing; the image comes out
   as Epson's driver's. After the scanner has been idle for a quarter of an hour, or just switched
-  on, its lamp is given two minutes to warm up first. No films yet. VetroScan switches its lamp off as for
+  on, its lamp is given two and a half minutes to warm up first. No films yet. VetroScan switches its lamp off as for
   the HP 3770 (the Preferences' lamp choices, up to the 15 minutes after which the scanner does
   it by itself, and on closing).
 

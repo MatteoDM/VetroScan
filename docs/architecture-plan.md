@@ -1148,7 +1148,8 @@ never run by us (step 12).
    The last two agree within 0.02 %. As the cold lamp (within 1 level after 1.5 minutes,
    0.5 after 3): the two minutes leave about a level in the light parts. Also seen: the
    dark's minimum rose over the series (925 to 1156 in red), the white's K stayed within
-   1 %. Whether the wait is to be longer is Matteo's choice.
+   1 %. **Done**: two and a half minutes (Matteo, 13 November; the light parts about
+   0.4 % short at 2:38), `scan::WARM_UP` 150 s.
 2. **The glass's height**: the app's preview of the whole glass at 200 dpi (2,340 lines of
    11.7 in) would end at step 29,603, past the furthest captured (29,587, capture 07): the guard
    refuses it. **Done** (12 November): the `Capabilities` say 11.69 in (296.9 mm,

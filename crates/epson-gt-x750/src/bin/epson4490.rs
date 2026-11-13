@@ -30,7 +30,7 @@
 //! `epson4490 lamp-off` switches the lamp off (`1E A2 00`), as the application's lamp timer.
 //! Without `--move` it only prints the plan and what the guard says of it. A lamp taken to be
 //! cold (switched on, or no scan for 14 minutes; the time of the last scan is kept in the
-//! temporary folder, `epson4490-lamp.txt`) gets two minutes before the calibration.
+//! temporary folder, `epson4490-lamp.txt`) gets two and a half minutes before the calibration.
 //!
 //! `replay` is the one command that moves the carriage, so it asks for `--move`. It sends only
 //! the bytes of its script (made by `captures/epson4490/tools/script.py` from a capture: what
@@ -507,7 +507,7 @@ fn scan(
         },
     );
     // After a scan that went through or was cancelled (the lamp lit either way): a failed one
-    // may not have lit it, and a warm-up too many costs only two minutes.
+    // may not have lit it, and a warm-up too many costs only two and a half minutes.
     if matches!(&s, Ok(_) | Err(Error::Cancelled)) {
         remember_lamp();
     }

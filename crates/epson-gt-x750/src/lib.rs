@@ -235,7 +235,7 @@ pub fn capabilities() -> Capabilities {
             button("copy", "Copy", SuggestedAction::Copy),
         ],
         // The host switches it off (`1E A2 00`) and the scanner does by itself after about
-        // 15 minutes idle (capture 21); a cold one gets two minutes (measured, `scan::WARM_UP`).
+        // 15 minutes idle (capture 21); a cold one gets two and a half minutes (measured, `scan::WARM_UP`).
         lamp: Some(LampInfo {
             warm_up: scan::WARM_UP,
             switches_off_after: Some(Duration::from_secs(15 * 60)),
@@ -514,7 +514,7 @@ impl scanner_api::Scanner for Gt4490 {
     }
 
     /// Scans the glass ([`scan::scan_glass`]): linear samples, 8 bits, and the 16-bit ones
-    /// too when asked. A cold lamp gets its two minutes first (`Progress::WarmingUp`).
+    /// too when asked. A cold lamp gets its warm-up first (`Progress::WarmingUp`).
     fn scan(
         &mut self,
         request: &ScanRequest,
@@ -613,7 +613,7 @@ mod tests {
         assert_eq!(caps.resolutions, vec![100, 200, 300, 400, 600, 1200]);
         assert_eq!(caps.buttons.len(), 4);
         let lamp = caps.lamp.expect("a lamp the host switches off");
-        assert_eq!(lamp.warm_up, Duration::from_secs(120));
+        assert_eq!(lamp.warm_up, Duration::from_secs(150));
         assert_eq!(lamp.switches_off_after, Some(Duration::from_secs(900)));
         assert!(!caps.offers(Source::Negative));
     }
