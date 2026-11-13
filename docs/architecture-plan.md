@@ -1290,6 +1290,33 @@ never run by us (step 12).
     --locked`. The project's memory and the session notes stay on the Windows machine: this
     plan, `CLAUDE.md` and `../captures` (not in git; copy `captures/epson4490` across if the
     capture notes are wanted there) are what a session on Linux has.
+    **Tried on Linux** (Matteo's laptop, Omarchy/Arch, Intel graphics, 13 November 2026,
+    evening, build of `df978bf`): steps 1-4, 6 and 7 work.
+    - The udev rule was already there (`/etc/udev/rules.d/70-vetroscan.rules`, the same line
+      for `04b8:0119`): the device node gets the seat's ACL, no root needed.
+    - `probe` on the scanner just switched on: `28 00`, as expected.
+    - `upload` (the embedded Windows copy) through `nusb`: every step answered `06`, 8.8 s;
+      right after it `19 81` (the lamp warming, by itself), `18 81` 15 s later and still so
+      after 90 s.
+    - `scan 300 40 60 50 50 --tone linear --move`: 135.5 s, of which 120 s the warm-up (the
+      program found the lamp off, a few minutes after the `19 81`); `1E 87` gave -104 (-93
+      computed before), shading K 44091-44924, 603 lines read in about 3 s, every wait ended
+      on `18 81`. 591 x 591 px, no stripes nor shift; levels R 1-194, G 1-196, B 3-185, none
+      at 0 or 255 (`scansioni/linux_20261113/vetro_300.png` on the Linux machine). Not yet set
+      against `blocco_20261112/dopo_recover*.png` (on the Windows machine).
+    - The app: a preview and a scan work; closed half-way through a scan and opened again, the
+      scanner answers and the preview works (Matteo; nothing in `tasti.log` beyond
+      "scanner opened again").
+    - Step 5 (AVASYS' copy) not done: not on that machine (no `/usr/lib/firmware/epson/`,
+      no `/usr/share/iscan/`).
+    - The checks on Linux: `fmt`, `clippy -D warnings` (the app included) and every test pass,
+      but the app's e2e crashed twice (SIGSEGV inside `libvulkan`,
+      `vkEnumerateInstanceExtensionProperties`, while `iced_test` made wgpu renderers in
+      parallel): NVIDIA's Vulkan driver (`nvidia-utils`) was installed on a machine with no
+      NVIDIA card. With `VK_DRIVER_FILES=/usr/share/vulkan/icd.d/intel_icd.json` the e2e
+      passes (127, 4 ignored). Not our code; a Linux machine with a stray Vulkan driver.
+      With `nvidia-utils` removed, `cargo test --workspace --locked` passes as it is.
+    Left of step 12: AVASYS' copy (step 5) and the scan set against Windows' (step 6).
 
 **D. Films** (milestone 5)
 
