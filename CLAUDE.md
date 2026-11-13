@@ -13,7 +13,7 @@ on the hardware are in `docs/architecture-plan.md`; read the phase you work on f
 | `hp3770-core` | the 3770's driver: profile, registers, calibration, motor (`profile.rs`, `rts8822.rs`) |
 | `hp3770-usb`, `hp3770-capture` | USB access; replay of the HP driver's captures as tests |
 | `hp3770-cli` | the `hp3770` command (`tma-scan`, `develop`, `lamp`…) |
-| `epson-gt-x750` | the Epson Perfection 4490 (phase 12, scanner not arrived) |
+| `epson-gt-x750` | the Epson Perfection 4490 (phase 12: the glass in the app; films, Linux and ICE to come) |
 | `vetroscan`, `vetroscan-export` | the iced app; PDF/TIFF/JPEG export |
 
 ## Talking and writing

@@ -371,7 +371,7 @@ In order of return for cost:
 
 Each backend only implements `trait Scanner`: app, imaging and export do not change.
 
-## Phase 10 · slides and negatives with the HP 3770's adapter · negatives done
+## Phase 10 · slides and negatives with the HP 3770's adapter · done (slides through phase 13)
 
 Added on 8 November 2026. Until then the documents said the HP 3770 has no adapter for
 films: it is wrong. The 3770 has one built into the lid (a light panel with a holder for
@@ -463,7 +463,8 @@ It needs no new hardware, only slides and negatives to put in the holder.
   Still open: the last few percent of light along the strip (a correction measured once on the
   empty holder, if it shows); blue's signal on a negative's base is the lowest (HP gives each
   colour its own exposure for that; not understood yet); slides not tried yet (their mode would be the glass's, the gains at their
-  maximum: perhaps the negatives' longer line for them too); the contract and the app (below).
+  maximum: perhaps the negatives' longer line for them too; **done since**, phase 13 step 5.2,
+  with the negatives' longer line); the contract and the app (below).
 - **Driver**: the adapter's lamp (done: bit 5 of `E946` and bit 6 of `E965`, see above), its
   calibration (no white strip under the lid: what the HP driver does instead comes from the
   captures), the area of the holder; `hp3900` (`ST_TA`, `ST_NEG` in `hp3900_rts8822.c`) is the
@@ -534,15 +535,19 @@ It needs no new hardware, only slides and negatives to put in the holder.
      tried by Matteo** the same day, it works;
   2. **blue on a negative's base**, the lowest signal: try HP's exposure per colour again
      (`NEGATIVE_EXPOSURES`, how the chip uses `EXPT`/`MEXPT`) or a longer line for blue only;
+     **still open**, now phase 13 step 4 (an exposure per channel, stalled without HP's
+     captures);
   3. the **light along the strip**: a correction measured once on the empty holder, only if
      the few percent show in the pictures;
-  4. **slides**, when Matteo has some: `Source::Slide` in the 3770's `Adapter::sources`, its
-     mode (the glass's line at the gains' maximum, or the negatives' longer line), `Slide` in
-     `film`, an e2e like the negatives' one, a try on the scanner;
+  4. ~~**slides**~~ · **done on 10 November 2026** through phase 13 step 5.2: `Source::Slide`
+     in the 3770's `Adapter::sources` (`rts8822.rs`), the negatives' longer line for them,
+     `Slide` and `measure_slides` in `film`, e2e with `FakeScanner::with_slides`, tried on the
+     scanner;
   5. lower resolutions for films (300, 200 dpi) only with a motor ramp or HP's longer lines,
      and never without a guard in `session::scan` first;
-  6. a **release** with the Film mode (the `release` skill: tag, CI publishes), when Matteo
-     wants it.
+  6. ~~a **release** with the Film mode~~ · **done**: v0.5.0 with the negatives and v0.6.0 with
+     the slides (both 10 November 2026; `74ac32b` is in v0.5.0, `73b3047` in v0.6.0).
+  Still open of this list: 2, 3 and 5.
 - **Done on 9 November 2026, app only** (no new move of the scanner): without a preview the
   frames are found in the scan itself (`film::frames` on the scan brought to the preview's
   resolution), and **Separa** cuts the originals out of a photo scanned whole (glass or
@@ -881,6 +886,9 @@ Epson's `libesint54` from Rust speaking ESC/I to it, is left out: Linux only.
 
 ### Where it stands (9 November 2026, the scanner not arrived yet)
 
+*History, kept as it was written before the scanner arrived: where the 4490 stands now is in
+"What is left, in order" below.*
+
 **Written without the scanner** (branch `epson-4490-milestone1`, not merged into `main` nor
 pushed): the crate **`crates/epson-gt-x750`**, in the app's `Registry` after the HP 3770's.
 - It finds the scanner by `04b8:0119` (`usbscan.sys` first on Windows, then `nusb`, bulk only);
@@ -930,7 +938,8 @@ pushed): the crate **`crates/epson-gt-x750`**, in the app's `Registry` after the
   `epson4490 upload --firmware`): on Windows Epson's driver sends the firmware first, so this
   needs the scanner without it (Linux, or WinUSB);
 - what `1B 03`'s second byte, the lamp and the adapter look like (the status shows only
-  ready/busy); the buttons · **done on 12 November 2026** (below).
+  ready/busy); the buttons · **done on 12 November 2026** (below); the lamp · **done on 12
+  November 2026** (step 6 below). Our own upload is still open: step 12 below.
 
 ### First captures (11 November 2026)
 
@@ -978,7 +987,8 @@ on `usbscan` by itself.
   `X42B`, `XT` steps): the image came out as Epson's driver's of the same photo, at the same
   moment (means equal, WIA = 0.994 × ours + 0.4 per channel, 2 levels apart on average, the
   noise between two scans). Next: switching the lamp as the driver does, then computing the
-  parameters (`1E 57`, `1E 41`, the motor's) for any area and resolution.
+  parameters (`1E 57`, `1E 41`, the motor's) for any area and resolution (both **done since**:
+  the set-up and the native scan below, the lamp in step 6).
 - **The set-up computed from the request** (12 November 2026, night): every set-up block of a
   glass scan follows from the request by rules read in Epson's interpreter (`esxuin54.dll`,
   addresses and derivation in `captures/epson4490/06-formato-dati.md`, "Il set-up calcolato
@@ -1012,11 +1022,12 @@ on `usbscan` by itself.
   - At 1200 dpi the scanner answers `1E 8B` with `06` once Epson's driver has loaded a table it
     computes (`1E 84` type 07, seen once, capture 05: the scanner answered `15` and the driver
     read 245,824 bytes with `1E 83` first); how it is computed is not known, so with `15` the scan
-    stops before the tone tables and the start move.
+    stops before the tone tables and the start move. **Computed since** (step 9 below,
+    `table07.rs`).
   - `epson4490 scan DPI X Y W H OUT.png [--bits 16] [--raw FILE] --move` (millimetres); without
     `--move` it prints the plan and what the guard says. The application's `scan()` still
     answers "not implemented": its `Capabilities` (150-4800 dpi, grey) are not yet those of the
-    guard.
+    guard. **Done since** (step 4 below: the app scans with it).
   - **Tried on the scanner** (12 November 2026, Matteo present): 300 dpi, 5 × 5 cm at 40/60 mm,
     the area of WIA's capture 30. Geometry identical to WIA's (offset 0/0). The first scan, with
     the scanner idle for hours, came out 6-8 levels lighter (a cold lamp: WIA's own capture 30, made
@@ -1096,6 +1107,9 @@ the backend, the contract and the app. The choices below were left by Matteo to 
 the scanner (on Windows Epson's driver sends it at plug-in). 2 (one scan) done and passed: the
 native scan computes any area at 100, 200, 300, 400, 600, 1200 dpi (`scan.rs`), tried at 300.
 4 half done: the buttons are in the app, the lamp is not. 3, 5, 6, 7 open.
+**Since** (12-13 November 2026): 3's first half done (steps 1-9 below, the app scans the glass);
+4 done (the lamp, step 6); 3's second half (steps 10-11), 5, 6, 7 open, and the upload of 1 still
+never run by us (step 12).
 
 **A. The glass in the application** (milestone 3, first half: what makes the 4490 usable)
 
@@ -1113,7 +1127,9 @@ native scan computes any area at 100, 200, 300, 400, 600, 1200 dpi (`scan.rs`), 
    warming or no scan of ours ended in the last 14 minutes (`scan::WARM_UP`,
    `LAMP_OFF_AFTER`, `lamp_is_cold`); `1B 03` polled every second meanwhile. The command keeps
    the time of its last scan in the temporary folder. Still to come with step 4:
-   `Progress::WarmingUp` and `LampInfo::warm_up` in the app.
+   `Progress::WarmingUp` and `LampInfo::warm_up` in the app · **done with step 4**
+   (`LampInfo::warm_up` is `scan::WARM_UP`; `Progress::WarmingUp` reaches the app every second
+   since 13 November, so that Cancel works during the two minutes).
    Tried the same evening, 17 minutes after the series: `1B 03` showed the lamp warming at the
    opening (`1B 40` lights it again), the scan waited its two minutes and came out as a WIA scan
    made right after (offset 0/0, means within 0.2, WIA = 0.995-0.998 × ours + 0.1-0.3). The
@@ -1129,7 +1145,9 @@ native scan computes any area at 100, 200, 300, 400, 600, 1200 dpi (`scan.rs`), 
    lets WIA's own A4 (3,508 lines at 300) through. Left for the next captures: a WIA scan of the
    whole glass (does the last millimetre read?) and one at 600 dpi of the whole width, which
    needs a line time (4224 µs) captured at 100 and 300 dpi but not at 600: until then the guard
-   refuses wider than 4,992 pixels at 600 dpi (211 mm), with a message.
+   refuses wider than 4,992 pixels at 600 dpi (211 mm), with a message. **Done since** (step 8:
+   Epson Scan's whole glass, captures 38-43, 4224 µs at 600 dpi; the guard's test
+   `the_whole_glass_is_accepted`).
 3. **Linear samples**: the contract wants linear colour (the app applies the `Tone`, and films
    need the shadows), while the scan loads WIA's curves (gamma 1/1.8 in `1E B3`, the tone table
    `1E 84` type 02). Decided: linear tables (the identity in both), measured first.
@@ -1148,7 +1166,8 @@ native scan computes any area at 100, 200, 300, 400, 600, 1200 dpi (`scan.rs`), 
    the guard's (100, 200, 300, 400, 600, 1200 dpi; 8 and 16 bits; colour, grey and line art,
    the last two made by the app; `Tone { white: 255, gamma: 1.8 }`); identity tables (linear
    samples), 8-bit with the 16-bit `samples16` when asked (the top byte, as the 3770); the
-   progress (`Starting`, `WarmingUp` once, `Calibrating`, `Scanning` in bytes, `Finishing`);
+   progress (`Starting`, `WarmingUp` (once at first, every second since 13 November),
+   `Calibrating`, `Scanning` in bytes, `Finishing`);
    the lamp's last use kept by the open scanner; `details` with the x correction, the columns
    and K. A test runs the app's scan against capture 29, write by write. **Tried in the app**
    by Matteo (12 November, evening): the preview of the whole glass, a scan at 300 dpi, the
@@ -1194,7 +1213,9 @@ native scan computes any area at 100, 200, 300, 400, 600, 1200 dpi (`scan.rs`), 
    now takes `00` at the opening as a lamp off, lights it with its usual `1E A2 01`, polls
    `1E A1` until `01` (as Epson's driver did for the lid's lamp, capture 25; here at once) and
    gives it the two minutes. Tried: the scan came out normal. `DeviceStatus::lamp` stays `None`.
-7. The e2e of the made-up 4490 with these `Capabilities`.
+7. The e2e of the made-up 4490 with these `Capabilities` · **done**
+   (`the_epson_4490_shows_what_its_backend_declares` in `e2e.rs`: lamp, buttons, 16 bits, no
+   film).
 
 **B. The glass complete** (milestone 3, second half)
 
@@ -1259,7 +1280,12 @@ native scan computes any area at 100, 200, 300, 400, 600, 1200 dpi (`scan.rs`), 
 **F. Release** (milestone 7)
 
 18. "Firmware missing" as a state of its own and the firmware's path in the Preferences (left
-    on purpose, above); packages, install guide, CHANGELOG.
+    on purpose, above); packages, install guide, CHANGELOG. **Since**: the firmware's path is no
+    longer to be a preference (`fe81d4e`, 10 November 2026: the copy in the settings folder is
+    taken first, the repository's copy is embedded in every build); the udev rule is in the
+    packages and in the install guides (`docs/install.md`, `install-linux.md`). Left: "firmware
+    missing" as a state of its own, the 4490 in the user's guide (`docs/usage.md` does not name
+    it), the release.
 
 **Not planned**: the optional document feeder (Matteo does not have it); Epson Scan's draft
 preview mode (the app's preview at 200 dpi takes about 25 s for the whole glass, as WIA's
@@ -1270,6 +1296,51 @@ interpolated as far as known).
 `Capabilities`, `Progress`, `LampInfo`, cancelling); three new fields, all already planned below:
 the infrared channel, the medium format, "firmware missing". The app follows the `Capabilities`
 by itself (buttons, lamp choices, 16 bits, films); its only new screens are those three.
+
+**How long, roughly** (estimate of 13 November 2026, night, asked by Matteo; an order of
+magnitude from the pace of 12 November, when the native scan, the lamp, 16 bits, 1200 dpi,
+cancelling and the recovery took about a day, and from how much of each step is still unknown;
+not a measure). The hours count the work and Matteo's time at the scanner where a step needs it:
+
+| Step | What | Hours | What can make it longer |
+|---|---|---|---|
+| 12 | Linux: our upload (both copies), `nusb`, a scan, the app, the recovery | 3-6 | USB permissions; how the scanner behaves after our upload on Linux |
+| 10 | Stripes and colour measured on the 4490 | 3-6 | a colour target is needed |
+| 11a | 2400 dpi: a capture, the guard, the reduction in the driver | 3-5 | the rules are there already (capture 13) |
+| 11b | 4800 dpi: another path, its own captures and rules | 6-12 | other columns and line times, all to understand |
+| 11c | A size limit in the app (files of gigabytes) | 3-6 | the app keeps the whole scan in memory today |
+| 13 | The lid's lamp, switched both ways | 2-4 | |
+| 14 | The film path: rules from captures 16-19, the guard | 6-12 | two carriages, another motor: with care |
+| 15 | The adapter in the contract: strips, slides, medium format, e2e | 4-8 (was 6-10) | the contract's `Adapter` and the app's film mode exist already (the 3770's): new are the 4490's declaration and the medium format |
+| 16 | Phase 13's films on the 4490's scans | 3-6 | measures on real negatives |
+| 17 | Digital ICE: the infrared pass, the channel in the contract, the dust removal | 15-30 | the least certain: the protocol, then an algorithm that really works |
+| 18 | Release: "firmware missing", the 4490 in the user's guide, the release | 3-6 (was 4-8) | the firmware's path is no preference since `fe81d4e`, and the packages have the udev rule already |
+| 8 | The native scan at 16 bits run on the scanner at 100, 200, 300, 400 and 1200 dpi (only 600 so far) | 1-2 | missing from the first estimate |
+| 1 | The lamp switched off by the scanner itself and lit again, measured as the cold lamp was (one point only) | 1 | missing from the first estimate |
+| — | Small open things: the STI lock busy two minutes after a recovery (capture 50, not explained), `rustfmt` not installed in WSL (checked 13 November) | 1-3 | |
+
+About 55-110 hours in all as first estimated; checked step by step on 13 November against the
+code, the commits and the capture notes, steps 15 and 18 come out smaller (above) and steps 8
+and 1 had been left out, so about 54-107: the glass complete (12, 10, 11, 8, 1) about 20-38, the
+films (13-16) about 15-30, Digital ICE alone 15-30, the largest and least certain step (put off,
+the total is about 39-77). About half of it, the captures and the measures, needs Matteo at the
+scanner.
+
+Checked as still to do (13 November): 12 (no commit since the Linux note of 12 November), 10
+(the 4490 declares no stripes and no colour), 11 (the guard covers 100-1200 dpi only), 11c (the
+app shows a scan's memory but limits nothing), 13 (`1E 77` only in the guard's list of refused
+movers), 14-15 (`transparency: None`), 17 (no infrared in the contract).
+
+**Not counted here**, open elsewhere in this plan: phase 10's blue on a negative's base, light
+along the strip and lower resolutions for films; phase 13's steps 4 (stalled), 7 and 8; the
+three coloured lines and the calibration that failed after a power cycle (the stripes of the
+glass, above); phases 8 and 9 (postponed).
+
+Added the same night, after the code review ("Open after the code review" below; these hours
+are a new estimate, not part of the first): the 4490's state asked before its STI lock, a
+capture with Epson Scan scanning while VetroScan starts and the change tried, 2-4; the error
+paths never tried on the two scanners, 1-2; the PDF's colour thresholds measured on real
+documents, 1-2. With them, about 58-115 hours.
 
 ### Behind `trait Scanner`
 
@@ -1539,6 +1610,38 @@ what it measures. One gap: the stripes are declared per resolution, not per sour
    dark band by the holder's edge; on `pellicola2` two scans in a row gave highlights 0.91 and
    1.12, with 0.85 0.03 apart, the other four strips unchanged (`captures/tma/misura_luci.py`).
 
+## Open after the code review of 13 November 2026
+
+The review of every crate (13 November 2026, commits `3fa8116`, `22e24fd`, `aed84fc`,
+`af8caa5`, `6b9ae1f`, `2646915`) fixed what it found; these are what it left to try or to
+decide. None changes the commands a scanner gets in the normal cases.
+
+**On the scanners** (each only an error path, never tried):
+- HP 3770: `head_park_home` clears the run bit of `E800` when the chip still runs 15 s after a
+  scan was cancelled (at 200 or 300 dpi, where nobody reads it): never tried on the scanner. The
+  new endings of a scan after an error (stopped, parked, the adapter's lamp off) have no
+  automated test: a try with the scanner, an error forced half-way.
+- Epson 4490: `1E 18` after a calibration read that fails (the white strip, with the carriage
+  moving) was never sent so; nor the refusal when `1E 86` does not give the carriage at home
+  before the calibration (every capture gave 0 there).
+- **Epson 4490, a risk left open**: opening the scanner asks `1B 03` and reads before taking
+  the STI lock, as it must to stop a scan a program left half-way (captures 44-53). If Epson
+  Scan is scanning at that moment (VetroScan starting, or trying again after its open answered
+  busy), that read can take a packet of Epson Scan's image, and the opening then stops its scan
+  with `1E 18`. Only made rarer (VetroScan now tries again every 3 s after ten tries). To decide
+  the order (the lock first, and the stop only when no live program holds it): a capture of
+  Epson Scan scanning while VetroScan starts, then the change, tried.
+- HP 3770 on Windows: the reason a scanner is not found (in use by another program, access
+  denied, through `Backend::why_none`) shown in the app with the 3770 held by another program.
+
+**On real scans** (in software, made on made-up images so far):
+- the originals on the glass in reading order (a row is the objects that overlap its topmost
+  one by half), and the search with the lid open, which now finds nothing;
+- the PDF's grey pages below 100 %: a page stays in colour when the mean colour of any square
+  of 16 pixels is more than 10 levels from the paper's tint. Both numbers are estimates:
+  measure them on real documents (a signature in blue ink, a red stamp, a page with only the
+  coloured fringes of black text), as the `scanner-measuring` skill does.
+
 ## Summary
 
 | Phase | Version | Risk | Without new hardware? |
@@ -1550,7 +1653,7 @@ what it measures. One gap: the stripes are declared per resolution, not per sour
 | 7 · new name + final check (done) | 0.3.0 | medium: updates and preferences | yes |
 | 8 · other HP (postponed) | to be decided | high | no: testers needed |
 | 9 · other brands (postponed) | to be decided | medium | eSCL yes, with a network scanner |
-| 10 · slides and negatives on the 3770 (done: negatives; slides through phase 13 step 5.2) | 0.5.0 (negatives), 0.6.0 (slides) | medium | yes: the 3770's own adapter |
+| 10 · slides and negatives on the 3770 (done: negatives; slides through phase 13 step 5.2; open: blue on the base, light along the strip, lower resolutions) | 0.5.0 (negatives), 0.6.0 (slides) | medium | yes: the 3770's own adapter |
 | 11 · precise moves from the keyboard (done) | 0.4.0 | low | yes |
-| 12 · Epson Perfection 4490 Photo, native, plug and play (milestone 1 written without the scanner; arrived 11 November 2026, the firmware upload confirmed by a capture; buttons; native glass scans at 100-1200 dpi from the command line, 12 November; what is left in "What is left, in order") | 0.5.0 (milestone 1, experimental); the rest to be decided | high: protocol unknown, two carriages | no: the scanner (firmware inside the program) |
+| 12 · Epson Perfection 4490 Photo, native, plug and play (milestone 1 written without the scanner; arrived 11 November 2026, the firmware upload confirmed by a capture; buttons; native glass scans at 100-1200 dpi, 8 and 16 bits, in the app with the lamp, cancelling and a scan left half-way stopped at the opening, 12-13 November; open: steps 10-18 of "What is left, in order", and "Open after the code review") | 0.5.0 (milestone 1, experimental); the glass in the app after v0.7.0, not released yet; the rest to be decided | high: protocol unknown, two carriages | no: the scanner (firmware inside the program) |
 | 13 · films done professionally, for every scanner (done: 1-3, 5.1-5.2, 6 for slides; 5.3 set aside; 4 stalled without HP's captures; open: 7, 8) | 0.6.0 (1-3, 5.1-5.2, 6); 7, 8 to be decided | low (1-3, 5.1-5.2, 6, 7 in software, 8), medium (4, 5.3: the motor) | 1-3, 5.1-5.2, 6, 7 in software, 8 yes; 4 needs the 3770's captures |
