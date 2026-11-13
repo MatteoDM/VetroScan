@@ -251,6 +251,8 @@ pub struct Guarded<T: Transport> {
     start_armed: bool,
     /// The start move's `1E 05` went out: not again in this scan.
     start_done: bool,
+    /// The last command that went out, `1B 03` left aside: where a scan stopped.
+    last_command: Option<[u8; 2]>,
 }
 
 impl<T: Transport> Guarded<T> {
@@ -265,7 +267,14 @@ impl<T: Transport> Guarded<T> {
             upload: None,
             start_armed: false,
             start_done: false,
+            last_command: None,
         }
+    }
+
+    /// The last command that went out (`1B 03`, the state, left aside), to say where a scan
+    /// stopped.
+    pub fn last_command(&self) -> Option<[u8; 2]> {
+        self.last_command
     }
 
     /// The guarded transport.
@@ -517,6 +526,9 @@ impl<T: Transport> Guarded<T> {
         self.start_armed = matches!(self.expect, Some(Expect::Move(_))) && start_block;
         if was_command && data == [0x1E, 0x05] {
             self.start_done = true;
+        }
+        if was_command && data.len() == 2 && matches!(data[0], 0x1B | 0x1E) && data != GET_STATE {
+            self.last_command = Some([data[0], data[1]]);
         }
         if self.stage == Stage::Run && stage == Stage::Idle {
             // 80 went out: the upload is over.

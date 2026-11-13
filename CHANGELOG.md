@@ -81,7 +81,8 @@ GitHub; here they are in English.
 - Epson Perfection 4490: when the scanner flags an error of its own (its front light flashing
   red), VetroScan no longer shows it as ready, says so in the scanner's details, and a scan stops
   at the first sign of it without sending the scanner anything more. Opening Epson Scan cleared
-  it once; switching the scanner off and on starts it afresh.
+  it once; switching the scanner off and on clears it (tried on Linux). The scan's error now
+  also names the last command sent before it, to tell where it came.
 - 16-bit scans no longer have a few tones a whole 8-bit level off, which showed as spikes in
   their histogram.
 - When no scanner is found, the reason the scanner's drivers know now reaches VetroScan: on

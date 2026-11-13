@@ -522,9 +522,18 @@ pub fn scan_glass<T: Transport>(
     events: &mut dyn FnMut(Event) -> bool,
 ) -> Result<Scanned> {
     g.permit_request(&request)?;
-    let result = run(g, request, options, log, events);
+    let result = run(g, request, options, log, events).map_err(|e| after(e, g.last_command()));
     g.end_scan();
     result
+}
+
+/// A scan's error with the last command sent before it, to tell where it stopped (the
+/// scanner's own error came once before the lamp was lit, with a dozen commands there).
+fn after(e: Error, last: Option<[u8; 2]>) -> Error {
+    match (e, last) {
+        (Error::Other(what), Some(cmd)) => Error::Other(format!("{what} (after {})", name(cmd))),
+        (e, _) => e,
+    }
 }
 
 fn run<T: Transport>(
@@ -1163,6 +1172,12 @@ pub(crate) mod tests {
             let e = r.unwrap_err().to_string();
             assert!(e.contains("98 81"), "at {at}: {e}");
             assert_eq!(g.inner().after, Some(Vec::new()), "at {at}");
+            // Where it stopped: nothing sent yet at the first state; 1B 13 before the fourth.
+            match at {
+                1 => assert!(!e.contains("(after"), "{e}"),
+                4 => assert!(e.ends_with("(after 1B 13)"), "{e}"),
+                _ => assert!(e.contains("(after 1E "), "at {at}: {e}"),
+            }
         }
     }
 

@@ -1136,6 +1136,19 @@ never run by us (step 12).
    x origin's correction from `1E 87` was −150 that evening and −93 in every capture and scan
    before: it **changes from one power-on to the next**, and with −150 the geometry matched
    WIA's, so reading it at every scan is what makes it right.
+   **The lamp switched off by the scanner, measured** (13 November 2026, evening, on Linux;
+   `scansioni/epson4490_lampada_20261113`): the lamp left lit after a scan ending at 19:35:54
+   and nothing sent; Matteo saw it off by 19:52:43 at the latest (the moment not seen). At
+   19:54:42 eight identical scans (300 dpi, 16 bits, linear, 50 x 50 mm of a photo): at the
+   opening `1B 03` flagged the lamp warming (`19 81`, as on 12 November), the first scan
+   waited its two minutes, the others none. Against the mean of the last two (green, by
+   band of brightness), the scan read 2:12 after the lamp was lit had its lightest tenth
+   1.6 % darker (1.25 levels of 255 after a 2.2 gamma) and its darkest tenth 1.7 % lighter
+   (0.2 levels); 2:23 after, -0.9 % in the light; 2:38, -0.4 %; from 3:08 within 0.1 %.
+   The last two agree within 0.02 %. As the cold lamp (within 1 level after 1.5 minutes,
+   0.5 after 3): the two minutes leave about a level in the light parts. Also seen: the
+   dark's minimum rose over the series (925 to 1156 in red), the white's K stayed within
+   1 %. Whether the wait is to be longer is Matteo's choice.
 2. **The glass's height**: the app's preview of the whole glass at 200 dpi (2,340 lines of
    11.7 in) would end at step 29,603, past the furthest captured (29,587, capture 07): the guard
    refuses it. **Done** (12 November): the `Capabilities` say 11.69 in (296.9 mm,
@@ -1232,8 +1245,14 @@ never run by us (step 12).
    `Capabilities` say. Learnt on the way: on the long reads at 16 bits the carriage stops,
    goes back a little and starts again (Matteo heard it at 1200 and 600 dpi): **the scanner
    does it by itself**, Epson's driver sends nothing but `1B 03` after the read starts (capture
-   42, 250 s of reading); it only needs reading on. Not yet run by the native scan at 16 bits
-   but at 600 dpi.
+   42, 250 s of reading); it only needs reading on. **Run at every resolution** (13 November
+   2026, evening, on Linux; `scansioni/epson4490_16bit_20261113`): the native scan at 16 bits,
+   `--tone linear`, the same 50 x 50 mm of a photo at 100, 200, 300, 400 and 1200 dpi (600 run
+   before), one after the other: all whole, `18 81` after each, at 1200 dpi `1E 8B` answered
+   `15` and the table was loaded (31 s for 2410 lines, no stop heard of). Brought to 100 dpi,
+   the channels' means agree within 0.6 % (0.994-1.003 of the 100 dpi scan), the image within
+   a pixel; none at 65535, 28 samples of 16.7 million at 0 at 1200 dpi. `1E 87` gave -117 at
+   that power-on.
 9. **1200 dpi after every power-on**: the scanner answers `1E 8B` with `15` until a 600-byte
    table (`1E 84` type 07) is loaded, which Epson's driver computes from a raw line it reads
    with `1E 83`. **Done** (12 November, evening; `table07.rs`, `captures/epson4490/05-catture.md`,
@@ -1724,6 +1743,14 @@ the three photos, in reading order (tried in the app); the two previews of the 3
   the scan's error says `98 81` where it stops. To try again in the app, with the lid open,
   after the lamp has been switched off by the app's lamp choice and by the scanner's 15
   minutes.
+  **Seen again on Linux** (13 November 2026, evening, lid closed, a photo on the glass): the
+  app had been used (a preview, a scan, closed half-way through a scan, opened again, a
+  preview, closed: closing switches the lamp off with `1E A2 00`); then `probe` gave `18 81`
+  and `epson4490 scan 100 40 60 50 50 --bits 16` stopped at `98 81` before the lamp was lit
+  (no "lamp on" in its log: within the opening's `1E 53`, `1B 40`, `1B 13`, `1E A1`, the
+  gamma, `1E 57`). Switched off and on, the firmware sent again, the same scan ran whole.
+  Both times the app had used the scanner just before; not shown to be the cause. Now the
+  scan's error ends with the last command sent ("(after 1E 57)"; a test).
 - **The search with the lid open, on the real scan** (`scansioni/epson_coperchio_aperto_
   20261113.png`, the empty glass): the room is dark (blocks of 6-32 levels of 255, a smooth
   lighter band down the middle) and the search found **one** original, the whole glass: its
