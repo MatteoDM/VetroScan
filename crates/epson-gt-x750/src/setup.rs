@@ -47,6 +47,11 @@ pub struct Request {
     pub bits: u8,
 }
 
+/// The resolutions read along at another resolution, as Epson Scan reads them: 2400 dpi at
+/// 3200 lines an inch (captures 13, 57 and 58, never 2400 along), the image then reduced on the
+/// computer ([`crate::scan::reduce_along`]).
+pub const READ_ALONG: [(u32, u32); 1] = [(2400, 3200)];
+
 impl Request {
     /// A request with the same resolution both ways, as WIA makes them.
     pub fn new(dpi: u32, x: u32, y: u32, width: u32, height: u32, bits: u8) -> Self {
@@ -59,6 +64,39 @@ impl Request {
             height,
             bits,
         }
+    }
+
+    /// The request that reads an image of `width` x `height` pixels at `dpi` both ways, at
+    /// `(x, y)`: [`Request::new`], but read along at [`READ_ALONG`]'s resolution where it has
+    /// one, `y` rounded and `height` rounded up there (so that [`Request::image_height`] gives
+    /// `height` back).
+    pub fn glass(dpi: u32, x: u32, y: u32, width: u32, height: u32, bits: u8) -> Self {
+        let Some(&(_, ydpi)) = READ_ALONG.iter().find(|(d, _)| *d == dpi) else {
+            return Self::new(dpi, x, y, width, height, bits);
+        };
+        let (num, den) = (u64::from(ydpi), u64::from(dpi));
+        let along = |v: u32, up: bool| {
+            let v = u64::from(v) * num;
+            let v = if up {
+                v.div_ceil(den)
+            } else {
+                (2 * v + den) / (2 * den)
+            };
+            u32::try_from(v).unwrap_or(u32::MAX)
+        };
+        Self {
+            ydpi,
+            y: along(y, false),
+            height: along(height, true),
+            ..Self::new(dpi, x, y, width, height, bits)
+        }
+    }
+
+    /// The lines of the image this request gives, at `dpi`: its `height`, or fewer when it is
+    /// read along at another resolution.
+    pub fn image_height(&self) -> u32 {
+        let h = u64::from(self.height) * u64::from(self.dpi) / u64::from(self.ydpi);
+        u32::try_from(h).unwrap_or(u32::MAX)
     }
 }
 
@@ -555,7 +593,17 @@ impl Plan {
         let bytes_per_line = pixels * 3 * u32::from(r.bits) / 8;
         let lines_per_block = (65_527 / bytes_per_line).min(lines);
         if lines_per_block == 0 {
-            return Err(bad(format!("{pixels} pixels: a line longer than a block")));
+            // Only at 2400 dpi and 16 bits inside the glass: a line over a block was never
+            // captured (Epson Scan's widest at 16 bits, 1200 dpi on the whole glass, is 61,200
+            // bytes a line).
+            let most = 65_527 / (3 * u32::from(r.bits) / 8) / 16 * 16;
+            return Err(bad(format!(
+                "{pixels} pixels a line at {} dpi and {} bits, more than a block holds: at most \
+                 {most} pixels ({:.0} mm) across",
+                r.dpi,
+                r.bits,
+                f64::from(most) / f64::from(r.dpi) * 25.4
+            )));
         }
 
         // The speed and the ramp's mode (0x429240), the minimum lead (0x41e760).
@@ -749,7 +797,7 @@ pub(crate) mod tests {
             .collect()
     }
 
-    pub(crate) const CAPTURES: [(&str, &str); 24] = [
+    pub(crate) const CAPTURES: [(&str, &str); 26] = [
         ("03", include_str!("../testdata/03_colore_300dpi_5x5cm.txt")),
         ("04", include_str!("../testdata/04_colore_600dpi_5x5cm.txt")),
         (
@@ -821,6 +869,14 @@ pub(crate) mod tests {
         (
             "43",
             include_str!("../testdata/43_epsonscan_600dpi_48bit_vetro.txt"),
+        ),
+        (
+            "57",
+            include_str!("../testdata/57_epsonscan_2400dpi_48bit_20x30.txt"),
+        ),
+        (
+            "58",
+            include_str!("../testdata/58_epsonscan_2400dpi_24bit.txt"),
         ),
     ];
 
@@ -897,8 +953,9 @@ pub(crate) mod tests {
             let ctx = |what: &str| format!("capture {name}, {what}");
             let mut e57 = p.e57;
             e57[33] = cc;
-            if request.bits == 8 {
-                // Epson Scan's 1E 57 is its own (gamma 04, its lines per block).
+            // WIA's own only: Epson Scan's 1E 57 has gamma 04 (byte 29) and its own lines per
+            // block (byte 28), at 8 bits too (capture 58).
+            if of(&b, 0x57)[0][0][29] == 0x03 {
                 assert_eq!(of(&b, 0x57)[0][0], e57.to_vec(), "{}", ctx("1E 57"));
             }
             for w in of(&b, 0x11) {

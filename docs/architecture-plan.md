@@ -1292,6 +1292,28 @@ never run by us (step 12).
     the 3770 (phase 13's tools).
 11. **2400 dpi**: the rules already rebuild Epson Scan's capture 13 (2400 x 3200, reduced on the
     computer). A second capture at 2400, then the guard and the reduction in the driver.
+    **2400 dpi done** (13-14 November 2026): Epson Scan's captures 57 (2400 dpi, 48 bit, 20 x
+    30 mm at x 178.7, y 262.2 mm) and 58 (24 bit, the same place, shorter), with 59 and 60 at
+    4800 for later; `setup.py --check` gave 3 differences on each, all the columns of `1E 41`:
+    it took the x correction as -93, the scanner gave -102 that power-on. Read from each
+    capture's `1E 87`, the 21 glass captures give 0 differences. The test files of 57, 58 (and
+    42 corrected: its shading is two `=shading` writes, 65,520 and 56,976) are made by
+    `tools/strip.py` (`captures/epson4490/tools`, the first generator was not kept; it rebuilds
+    the files in `testdata` as they were). In the driver: `setup::READ_ALONG` and
+    `Request::glass` (2400 asked as 2400 x 3200, y rounded, the height rounded up),
+    `scan::reduce_along` (each line the weighted mean of the lines it covers: 3/4 + 1/4, 1/2 +
+    1/2, 1/4 + 3/4; how Epson Scan reduces is not known), the guard (2400 at 8 and 16 bits,
+    only x 3200, line time 10,752 µs, the glass counted along at `ydpi`), 2400 in the
+    capabilities. A line longer than a data block (65,527 bytes) was never captured: at 2400
+    dpi and 16 bits at most 10,912 pixels (115 mm) across, refused beyond with that width
+    named; at 8 bits the whole glass. Epson Scan's `1E 57` at 8 bits is its own (gamma `04`, 46
+    lines a block); ours is WIA's form (gamma `03`, our lines a block), never seen at 2400 but
+    taken by the scanner. Tried (14 November 2026, `../scansioni/epson_2400_20261114`): capture
+    57's area at 16 bits, the plan the same as Epson Scan's (start move 26,008 steps, read to
+    step 29,129), 44 MB in 43 s; against Epson Scan's TIFF the same place to the pixel (0
+    lines, 0 columns), the same picture through a monotonic map (Epson's is not linear),
+    Epson's 10 % sharper line to line both ways, no pattern every 3 lines (0.005 % of the
+    level; Epson's 0.02 %). Not tried on the scanner: 8 bits at 2400, a wide area, the app.
     **4800 dpi**: another path (other columns, T `0x9480`): its own captures and rules. Both need
     the size limit of "Risks" (4800 dpi at 16 bits is gigabytes). **The limit, done** (13
     November 2026, step 11c): measured in the app on Linux, a 1200 dpi 16-bit scan of 150 x 150
@@ -1458,7 +1480,7 @@ not a measure). The hours count the work and Matteo's time at the scanner where 
 |---|---|---|---|
 | 12 | Linux: our upload (both copies), `nusb`, a scan, the app, the recovery | 3-6 | USB permissions; how the scanner behaves after our upload on Linux |
 | 10 | Stripes and colour measured on the 4490 | 3-6 | a colour target is needed |
-| 11a | 2400 dpi: a capture, the guard, the reduction in the driver | 3-5 | the rules are there already (capture 13) |
+| 11a | 2400 dpi: a capture, the guard, the reduction in the driver · **done 14 November** | 3-5 | the rules are there already (capture 13) |
 | 11b | 4800 dpi: another path, its own captures and rules | 6-12 | other columns and line times, all to understand |
 | 11c | A size limit in the app (files of gigabytes) · **done 13 November** | 3-6 | the app keeps the whole scan in memory today |
 | 13 | The lid's lamp, switched both ways | 2-4 | |

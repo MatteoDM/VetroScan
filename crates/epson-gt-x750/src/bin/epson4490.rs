@@ -436,7 +436,7 @@ fn scan_request(args: &[String], bits: u8) -> Result<Request, String> {
         return Err("negative millimetres".into());
     }
     let px = |v: f64| (v / 25.4 * f64::from(dpi)).round() as u32;
-    Ok(Request::new(
+    Ok(Request::glass(
         dpi,
         px(mm[0]),
         px(mm[1]),

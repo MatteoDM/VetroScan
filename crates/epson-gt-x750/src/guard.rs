@@ -47,8 +47,9 @@ use scanner_api::{Error, Result};
 pub const GET_POSITIONS: [u8; 2] = [0x1E, 0x86];
 
 /// The resolutions and depths a glass scan may use: the ones captured (WIA at 8 bits; Epson
-/// Scan at 16, captures 15 and 38-43, 12 November 2026).
-pub const COVERED: [(u32, u8); 12] = [
+/// Scan at 16, captures 15 and 38-43, 12 November 2026; Epson Scan at 2400 dpi, 8 and 16 bits,
+/// read along at 3200, captures 13, 57 and 58, 13 November 2026).
+pub const COVERED: [(u32, u8); 14] = [
     (100, 8),
     (200, 8),
     (300, 8),
@@ -61,11 +62,13 @@ pub const COVERED: [(u32, u8); 12] = [
     (400, 16),
     (600, 16),
     (1200, 16),
+    (2400, 8),
+    (2400, 16),
 ];
 
 /// The line times (µs) each resolution was captured with: the motor's speed
 /// follows from them, so no other one goes out.
-pub const LINE_TIMES: [(u32, u32); 8] = [
+pub const LINE_TIMES: [(u32, u32); 9] = [
     (100, 4224),
     (200, 3840),
     (300, 3840),
@@ -74,6 +77,7 @@ pub const LINE_TIMES: [(u32, u32); 8] = [
     (600, 3840),
     (600, 4224),
     (1200, 10_752),
+    (2400, 10_752),
 ];
 
 /// The furthest step from home a captured read reached (capture 42, Epson Scan's whole glass
@@ -110,28 +114,35 @@ const UPLOAD_LENGTH: [u8; 4] = (PAYLOAD_LEN as u32).to_le_bytes();
 /// the captures cover.
 pub fn check_request(r: &Request) -> Result<()> {
     let refuse = |why: String| Err(Error::InvalidRequest(format!("Epson 4490: {why}")));
-    if r.ydpi != r.dpi {
+    // Along: the resolution across, or 2400 at 3200 only (`setup::READ_ALONG`).
+    let along = setup::READ_ALONG
+        .iter()
+        .find(|(d, _)| *d == r.dpi)
+        .map_or(r.dpi, |&(_, y)| y);
+    if r.ydpi != along {
         return refuse(format!(
-            "{} x {} dpi: only the same resolution both ways was captured",
-            r.dpi, r.ydpi
+            "{} x {} dpi was never captured (only {} x {along})",
+            r.dpi, r.ydpi, r.dpi
         ));
     }
     if !COVERED.contains(&(r.dpi, r.bits)) {
         return refuse(format!(
-            "{} dpi at {} bits was never captured on the glass (only 100, 200, 300, 400, 600 and \
-             1200 dpi, at 8 or 16 bits)",
+            "{} dpi at {} bits was never captured on the glass (only 100, 200, 300, 400, 600, \
+             1200 and 2400 dpi, at 8 or 16 bits)",
             r.dpi, r.bits
         ));
     }
-    // The physical glass, counted as the application counts pixels; how far the carriage may
-    // go is `check_plan`'s.
-    let px = |inches: f64| (inches * f64::from(r.dpi)).round() as u64;
-    let (max_w, max_h) = (px(PHYSICAL_GLASS_INCHES.0), px(PHYSICAL_GLASS_INCHES.1));
+    // The physical glass, counted as the application counts pixels (along at `ydpi`); how far
+    // the carriage may go is `check_plan`'s.
+    let px = |inches: f64, dpi: u32| (inches * f64::from(dpi)).round() as u64;
+    let max_w = px(PHYSICAL_GLASS_INCHES.0, r.dpi);
+    let max_h = px(PHYSICAL_GLASS_INCHES.1, r.ydpi);
     let end = |a: u32, b: u32| u64::from(a) + u64::from(b);
     if r.width == 0 || r.height == 0 || end(r.x, r.width) > max_w || end(r.y, r.height) > max_h {
         return refuse(format!(
-            "the area {}x{} at {},{} is not inside the glass ({max_w} x {max_h} pixels at {} dpi)",
-            r.width, r.height, r.x, r.y, r.dpi
+            "the area {}x{} at {},{} is not inside the glass ({max_w} x {max_h} pixels at {} x {} \
+             dpi)",
+            r.width, r.height, r.x, r.y, r.dpi, r.ydpi
         ));
     }
     setup::request_block(r)?;
@@ -743,11 +754,11 @@ mod tests {
     }
 
     fn plan(dpi: u32, x: u32, y: u32, w: u32, h: u32, bits: u8) -> Result<Plan> {
-        Plan::new(Request::new(dpi, x, y, w, h, bits), XCorrection(-93))
+        Plan::new(Request::glass(dpi, x, y, w, h, bits), XCorrection(-93))
     }
 
-    /// Every WIA capture's request and plan is accepted (Epson Scan's 600 dpi
-    /// at 16 bits too), and the limits are the captures' own.
+    /// Every capture's request and plan is accepted (WIA's, Epson Scan's at 16 bits and at
+    /// 2400 x 3200 dpi), and the limits are the captures' own.
     #[test]
     fn the_captured_scans_are_accepted() {
         let mut furthest = 0;
@@ -756,20 +767,20 @@ mod tests {
             let p = Plan::new(r, xc).unwrap();
             furthest = furthest.max(p.read_end);
             let ok = check_plan(&p);
-            match (r.dpi, r.ydpi, r.bits) {
-                (2400, ..) => assert!(ok.is_err(), "{name}"),
-                _ => assert!(ok.is_ok(), "{name}: {ok:?}"),
-            }
+            assert!(ok.is_ok(), "{name}: {ok:?}");
         }
         assert_eq!(furthest, MAX_READ_END);
     }
 
     #[test]
     fn what_was_never_captured_is_refused() {
-        // Resolutions and depths.
+        // Resolutions and depths; 2400 read along at 2400, not 3200.
         for (dpi, bits) in [(800, 8), (2400, 8), (800, 16), (2400, 16), (150, 8)] {
             let r = Request::new(dpi, 0, 0, 400, 400, bits);
             assert!(check_request(&r).is_err(), "{dpi} {bits}");
+        }
+        for bits in [8, 16] {
+            assert!(check_request(&Request::glass(2400, 0, 0, 400, 400, bits)).is_ok());
         }
         assert!(check_request(&Request {
             ydpi: 600,
@@ -835,6 +846,14 @@ mod tests {
         let caps = crate::capabilities();
         for (dpi, bits) in COVERED {
             let (w, h) = caps.glass_pixels(dpi as u16);
+            if (dpi, bits) == (2400, 16) {
+                // A line of the whole width is more than a block: the plan says how wide.
+                let e = plan(dpi, 0, 0, w, h, bits).unwrap_err().to_string();
+                assert!(e.contains("at most 10912 pixels (115 mm)"), "{e}");
+                let ok = check_plan(&plan(dpi, 0, 0, 10_912, h, bits).unwrap());
+                assert!(ok.is_ok(), "{dpi} dpi {bits} bits, 10912 x {h}: {ok:?}");
+                continue;
+            }
             let ok = check_plan(&plan(dpi, 0, 0, w, h, bits).unwrap());
             assert!(ok.is_ok(), "{dpi} dpi {bits} bits, {w} x {h}: {ok:?}");
         }

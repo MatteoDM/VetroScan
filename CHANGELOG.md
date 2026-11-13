@@ -26,6 +26,11 @@ GitHub; here they are in English.
   on, its lamp is given two and a half minutes to warm up first. No films yet. VetroScan switches its lamp off as for
   the HP 3770 (the Preferences' lamp choices, up to the 15 minutes after which the scanner does
   it by itself, and on closing).
+- Epson Perfection 4490: **2400 dpi** on the glass, 8 or 16 bits, read as Epson Scan reads it
+  (3200 lines an inch along, brought to 2400 on the computer). At 16 bits a scan at 2400 dpi
+  can be at most 115 mm wide (a wider line was never seen from the scanner); at 8 bits the
+  whole glass. Tried on the scanner: 20 x 30 mm at 16 bits, the same image as Epson Scan's
+  of the same place.
 
 ### Changed
 - A scan that would need more than half of the computer's memory is refused, with how much it

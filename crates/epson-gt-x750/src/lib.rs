@@ -217,8 +217,9 @@ pub fn capabilities() -> Capabilities {
         }),
         glass_inches: GLASS_INCHES,
         // The resolutions the guard lets out: every one captured on the glass, at 8 bits
-        // (WIA) and 16 (Epson Scan). 800, 900, 2400 and 4800 dpi are not (guard.rs).
-        resolutions: vec![100, 200, 300, 400, 600, 1200],
+        // (WIA, Epson Scan at 2400) and 16 (Epson Scan); 2400 read along at 3200 and reduced,
+        // as Epson Scan does. 800, 900 and 4800 dpi are not (guard.rs).
+        resolutions: vec![100, 200, 300, 400, 600, 1200, 2400],
         // The scanner always sends colour; grey and black and white are made by the
         // application, as for the HP 3770.
         modes: vec![ColourMode::Colour, ColourMode::Grey, ColourMode::Lineart],
@@ -528,7 +529,7 @@ impl scanner_api::Scanner for Gt4490 {
             return Err(Error::Cancelled);
         }
         let a = request.area;
-        let r = setup::Request::new(
+        let r = setup::Request::glass(
             u32::from(request.dpi),
             a.x,
             a.y,
@@ -610,7 +611,7 @@ mod tests {
         // A line less than WIA's A4 at 300 dpi (capture 07).
         assert_eq!(caps.glass_pixels(300).1, 3507);
         assert_eq!(caps.depths, vec![8, 16]);
-        assert_eq!(caps.resolutions, vec![100, 200, 300, 400, 600, 1200]);
+        assert_eq!(caps.resolutions, vec![100, 200, 300, 400, 600, 1200, 2400]);
         assert_eq!(caps.buttons.len(), 4);
         let lamp = caps.lamp.expect("a lamp the host switches off");
         assert_eq!(lamp.warm_up, Duration::from_secs(150));

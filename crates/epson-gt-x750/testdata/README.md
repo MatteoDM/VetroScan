@@ -1,13 +1,14 @@
 # Epson 4490 glass captures, stripped
 
-What Epson's drivers wrote to the Epson Perfection 4490 and what it answered, in 24 USB
-captures of glass scans made on 11-12 November 2026 (`captures/epson4490/*.pcap`, outside the
-repository; WIA but `13`, `15` and `38`-`43`, Epson Scan at 16 bits, `38`-`43` the whole glass
-at 100-1200 dpi, their image data left out). The tests of `setup.rs` rebuild every set-up block
-of each one from its request, and those of `scan.rs` run the whole native scan against eleven
-of the WIA ones, write by write.
+What Epson's drivers wrote to the Epson Perfection 4490 and what it answered, in 26 USB
+captures of glass scans made on 11-13 November 2026 (`captures/epson4490/*.pcap`, outside the
+repository; WIA but `13`, `15`, `38`-`43`, `57` and `58`, Epson Scan: at 16 bits, `38`-`43` the
+whole glass at 100-1200 dpi, `57` and `58` at 2400 dpi, 16 and 8 bits, their image data left
+out). The tests of `setup.rs` rebuild every set-up block of each one from its request, and
+those of `scan.rs` run the whole native scan against eleven of the WIA ones, write by write.
 
-Made from the captures with `tools/stream.py` (`captures/epson4490/tools`), one step per line:
+Made from the captures with `tools/strip.py` (`captures/epson4490/tools`, on `stream.py`;
+`--no-data` for those whose image data is left out), one step per line:
 
 | line | what |
 |---|---|

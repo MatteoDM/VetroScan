@@ -464,6 +464,60 @@ pub fn assemble(raw: &[u8], p: &Plan) -> Image {
     }
 }
 
+/// An image read along at `r.ydpi` brought to `r.dpi` lines an inch ([`Request::image_height`]
+/// lines): each line the average of the lines read that it covers, weighted by how much of each
+/// (at 3200 to 2400: 3/4 + 1/4, 1/2 + 1/2, 1/4 + 3/4 of two lines in turn). Epson Scan reads
+/// 2400 dpi so and reduces on the computer (captures 13, 57, 58); how it reduces is not known,
+/// this is an average with no sharpening. The same image when both are equal.
+pub fn reduce_along(image: Image, r: &Request) -> Image {
+    if r.ydpi == r.dpi {
+        return image;
+    }
+    let s = usize::from(image.bits / 8);
+    let row = image.width as usize * 3 * s;
+    let samples = image.width as usize * 3;
+    let h_in = image.height as usize;
+    let h_out = r.image_height() as usize;
+    // Input line i spans [i * dpi, (i + 1) * dpi), output line j [j * ydpi, (j + 1) * ydpi).
+    let (dpi, ydpi) = (u64::from(r.dpi), u64::from(r.ydpi));
+    let read = |line: &[u8], k: usize| -> u64 {
+        if s == 2 {
+            u64::from(u16::from_le_bytes([line[2 * k], line[2 * k + 1]]))
+        } else {
+            u64::from(line[k])
+        }
+    };
+    let mut data = Vec::with_capacity(h_out * row);
+    let mut sum = vec![0u64; samples];
+    for j in 0..h_out as u64 {
+        let (start, end) = (j * ydpi, (j + 1) * ydpi);
+        sum.fill(0);
+        let mut total = 0;
+        for i in start / dpi..end.div_ceil(dpi) {
+            let w = end.min((i + 1) * dpi) - start.max(i * dpi);
+            let i = (i as usize).min(h_in - 1);
+            let line = &image.data[i * row..(i + 1) * row];
+            for (k, acc) in sum.iter_mut().enumerate() {
+                *acc += w * read(line, k);
+            }
+            total += w;
+        }
+        for v in &sum {
+            let v = (v + total / 2) / total;
+            if s == 2 {
+                data.extend_from_slice(&(v as u16).to_le_bytes());
+            } else {
+                data.push(v as u8);
+            }
+        }
+    }
+    Image {
+        height: h_out as u32,
+        data,
+        ..image
+    }
+}
+
 /// Whether the lamp must be given [`WARM_UP`] before the calibration: the scanner flagged it
 /// warming, or no scan of ours ended in the last [`LAMP_OFF_AFTER`] (`last_used`; none known
 /// counts as long ago, as does a clock gone back).
@@ -800,7 +854,7 @@ fn run<T: Transport>(
     };
     wait_ready(g, log)?;
     lamp_is_the_glass(g)?;
-    let image = assemble(&raw, &p);
+    let image = reduce_along(assemble(&raw, &p), &p.request);
     Ok(Scanned {
         image,
         plan: p,
@@ -1284,6 +1338,54 @@ pub(crate) mod tests {
         let (r, _, _) = scan("29", text);
         let e = r.unwrap_err().to_string();
         assert!(e.contains("160 steps from home"), "{e}");
+    }
+
+    #[test]
+    fn the_2400_dpi_are_read_at_3200_along_and_reduced() {
+        // As Epson Scan asked for capture 57's 1889 x 2834 and 13's 944 x 944.
+        let r = Request::glass(2400, 10, 100, 1889, 2834, 16);
+        assert_eq!((r.dpi, r.ydpi, r.y, r.height), (2400, 3200, 133, 3779));
+        assert_eq!(r.image_height(), 2834);
+        assert_eq!(Request::glass(2400, 0, 0, 944, 944, 16).height, 1259);
+        assert_eq!(
+            Request::glass(600, 0, 9, 10, 10, 8),
+            Request::new(600, 0, 9, 10, 10, 8)
+        );
+        // Eight lines read, line i worth 30 i: six lines out, each the lines it covers
+        // weighted (3/4 + 1/4, 1/2 + 1/2, 1/4 + 3/4), rounded.
+        let r = Request::glass(2400, 0, 0, 1, 6, 8);
+        assert_eq!((r.height, r.image_height()), (8, 6));
+        let read = |bits: u8, unit: u32| Image {
+            width: 1,
+            height: 8,
+            bits,
+            data: (0..8u32)
+                .flat_map(|i| {
+                    let v = 30 * i * unit;
+                    if bits == 16 {
+                        [v as u16; 3].iter().flat_map(|s| s.to_le_bytes()).collect()
+                    } else {
+                        vec![v as u8; 3]
+                    }
+                })
+                .collect(),
+        };
+        let out = reduce_along(read(8, 1), &r);
+        assert_eq!(out.height, 6);
+        let firsts: Vec<u8> = out.data.chunks(3).map(|p| p[0]).collect();
+        assert_eq!(firsts, [8, 45, 83, 128, 165, 203]);
+        let r16 = Request { bits: 16, ..r };
+        let out = reduce_along(read(16, 100), &r16);
+        let firsts: Vec<u16> = out
+            .data
+            .chunks(6)
+            .map(|p| u16::from_le_bytes([p[0], p[1]]))
+            .collect();
+        assert_eq!(firsts, [750, 4500, 8250, 12750, 16500, 20250]);
+        // The same resolution both ways: nothing done.
+        let same = read(8, 1);
+        let r = Request::new(600, 0, 0, 1, 8, 8);
+        assert_eq!(reduce_along(same.clone(), &r).data, same.data);
     }
 
     #[test]

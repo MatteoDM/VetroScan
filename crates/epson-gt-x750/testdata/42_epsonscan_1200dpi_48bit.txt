@@ -240,8 +240,8 @@ R 06
 W 1e84
 R 06
 W 050004010280de01
-W =shading 65508
-W =other 56976
+W =shading 65520
+W =shading 56976
 R 06
 W 1e84
 R 06
