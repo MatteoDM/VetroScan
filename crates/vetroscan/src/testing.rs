@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 thread_local! {
     static EFFECTS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     static SAVE_CANCELLED: RefCell<bool> = const { RefCell::new(false) };
+    static RAM: RefCell<Option<u64>> = const { RefCell::new(None) };
     #[cfg(test)]
     static DIR: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
 }
@@ -61,6 +62,17 @@ pub fn dir() -> PathBuf {
             })
             .clone()
     })
+}
+
+/// The computer's memory a test made up ([`set_ram`]): none, so no scan is refused, unless set.
+pub fn ram() -> Option<u64> {
+    RAM.with(|r| *r.borrow())
+}
+
+/// Makes the app see a computer with `bytes` of memory (tests only).
+#[cfg(test)]
+pub fn set_ram(bytes: Option<u64>) {
+    RAM.with(|r| *r.borrow_mut() = bytes);
 }
 
 /// Removes this test's folder (at the end of a test).

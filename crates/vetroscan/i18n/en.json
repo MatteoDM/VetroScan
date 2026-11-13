@@ -395,6 +395,7 @@
   "Scansione molto grande: circa {gb} GB e alcuni minuti. Seleziona un'area o abbassa la risoluzione se non serve tutta.": "Very large scan: about {gb} GB and a few minutes. Select an area or lower the resolution if you do not need all of it.",
   "Scansione non riuscita": "Scan failed",
   "Scansione pagina {n}": "Scanning page {n}",
+  "Scansione troppo grande per la memoria di questo computer: servirebbero circa {need} GB, il computer ne ha {ram}. Seleziona un'area più piccola o abbassa la risoluzione.": "Scan too large for this computer's memory: it would need about {need} GB, the computer has {ram}. Select a smaller area or lower the resolution.",
   "Scansione {i} di {n}": "Scan {i} of {n}",
   "Scarta": "Discard",
   "Scarta e ricomincia": "Discard and start again",

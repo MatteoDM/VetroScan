@@ -1288,7 +1288,15 @@ never run by us (step 12).
 11. **2400 dpi**: the rules already rebuild Epson Scan's capture 13 (2400 x 3200, reduced on the
     computer). A second capture at 2400, then the guard and the reduction in the driver.
     **4800 dpi**: another path (other columns, T `0x9480`): its own captures and rules. Both need
-    the size limit of "Risks" (4800 dpi at 16 bits is gigabytes).
+    the size limit of "Risks" (4800 dpi at 16 bits is gigabytes). **The limit, done** (13
+    November 2026, step 11c): measured in the app on Linux, a 1200 dpi 16-bit scan of 150 x 150
+    mm estimated at 452 MB (`App::memory`) took the app from 70 MB to 1.04 GB at most while its
+    image was put together, 595 MB once shown (the command line alone: 1.13 GB). A scan whose
+    estimate times 2.5 (`PEAK`) is over half the computer's memory is refused, said in the
+    Scan tab and on Scansiona, nothing sent (an e2e). The memory is the computer's total, read
+    once on a thread at start (`ram.rs`: `/proc/meminfo`, `sysctl -n hw.memsize`, PowerShell's
+    `Win32_ComputerSystem`; no `unsafe`); until known, no limit. Not measured: adjusting and
+    saving such a scan; the Windows and macOS readings run only there.
 
 **C. Linux and macOS** (before the films: it is the promise of the plug and play)
 
@@ -1411,7 +1419,7 @@ not a measure). The hours count the work and Matteo's time at the scanner where 
 | 10 | Stripes and colour measured on the 4490 | 3-6 | a colour target is needed |
 | 11a | 2400 dpi: a capture, the guard, the reduction in the driver | 3-5 | the rules are there already (capture 13) |
 | 11b | 4800 dpi: another path, its own captures and rules | 6-12 | other columns and line times, all to understand |
-| 11c | A size limit in the app (files of gigabytes) | 3-6 | the app keeps the whole scan in memory today |
+| 11c | A size limit in the app (files of gigabytes) · **done 13 November** | 3-6 | the app keeps the whole scan in memory today |
 | 13 | The lid's lamp, switched both ways | 2-4 | |
 | 14 | The film path: rules from captures 16-19, the guard | 6-12 | two carriages, another motor: with care |
 | 15 | The adapter in the contract: strips, slides, medium format, e2e | 4-8 (was 6-10) | the contract's `Adapter` and the app's film mode exist already (the 3770's): new are the 4490's declaration and the medium format |

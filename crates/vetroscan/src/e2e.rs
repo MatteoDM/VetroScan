@@ -8,7 +8,7 @@
 
 use crate::testing;
 use crate::worker::{fake, Event};
-use crate::{App, Kind, Message};
+use crate::{App, Kind, Message, PEAK};
 use iced::futures::StreamExt;
 use iced::{Size, Task};
 use scan_imaging::detect::Found;
@@ -212,6 +212,36 @@ fn pages_add_up_in_a_document() {
         "{}",
         ui.app.note
     );
+}
+
+/// A scan that would need more than half the computer's memory at its height is refused, said
+/// in the pane and on pressing Scansiona, with nothing sent; on a computer with enough memory,
+/// or before its memory is known, the same scan goes.
+#[test]
+fn a_scan_too_large_for_the_computers_memory_is_refused() {
+    let mut ui = Ui::new();
+    ui.send(Message::Kind(Kind::Document));
+    let need = ui.app.memory() * PEAK;
+    // A computer with less than twice what the scan needs at its height.
+    let small = (need * 1.5) as u64;
+    testing::set_ram(Some(small));
+    let said = ui.app.too_large_text(small);
+    assert!(said.contains("troppo grande"), "{said}");
+    assert!(ui.shows(&said));
+    ui.click("Scansiona pagina 1");
+    assert!(ui.app.pages.is_empty());
+    assert_eq!(ui.app.note, said);
+    // Enough memory: the same scan goes.
+    testing::set_ram(Some((need * 2.5) as u64));
+    assert_eq!(ui.app.too_large(), None);
+    ui.click("Scansiona pagina 1");
+    assert_eq!(ui.app.pages.len(), 1);
+    assert!(!ui.shows(&said));
+    // The memory not known: no limit.
+    testing::set_ram(None);
+    assert_eq!(ui.app.too_large(), None);
+    ui.click("Scansiona pagina 2");
+    assert_eq!(ui.app.pages.len(), 2);
 }
 
 // ------------------------------------- questions before losing scans

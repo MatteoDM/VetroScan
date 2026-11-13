@@ -232,6 +232,12 @@ If the scan takes a lot of memory (more than about 400 MB) the **Scan** tab says
 with the GB and the minutes to expect. At **2400 dpi** without a selection it warns that the
 resolution is for small originals: select the area.
 
+A scan that would need more than half of the computer's memory is **refused**: the **Scan**
+tab says so, with how much it would need and how much the computer has, and **Scan** sends
+nothing to the scanner. Select a smaller area or lower the resolution. While putting a scan's
+image together VetroScan holds up to about two and a half times the memory shown under the
+area, so on a computer with 8 GB a scan shown at about 1.5 GB is the largest allowed.
+
 ---
 
 ## Resolution, colour and depth

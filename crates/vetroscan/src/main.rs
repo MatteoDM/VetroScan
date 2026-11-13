@@ -25,6 +25,7 @@ mod histogram;
 mod i18n;
 mod keys;
 mod prefs;
+mod ram;
 mod separa;
 mod sheet;
 mod testing;
@@ -75,10 +76,17 @@ const APP_NAME: &str = "VetroScan"; // not translated: a name
 /// Above this size (bytes in memory) the interface warns before scanning.
 const LARGE_SCAN: f64 = 400e6;
 
+/// How much more than [`App::memory`] the app holds at its height, while a scan's image is
+/// put together: measured on 13 November 2026 (Linux, a 1200 dpi 16-bit scan of 150 x 150 mm
+/// estimated at 452 MB: 1.04 GB at most, 595 MB once shown), rounded up for what was not
+/// measured (adjusting, saving).
+const PEAK: f64 = 2.5;
+
 /// Longest side of the copy of a page on which adjustments are shown live.
 const PROXY: usize = 2400;
 
 fn main() -> iced::Result {
+    ram::start();
     iced::application(App::new, App::update, App::view)
         .title(APP_NAME)
         .subscription(App::subscription)
@@ -3643,6 +3651,29 @@ impl App {
         raw * resolution * depth
     }
 
+    /// The computer's memory, when the next scan would need more than half of it at its
+    /// height ([`PEAK`]): such a scan is refused. Never before the memory is known.
+    fn too_large(&self) -> Option<u64> {
+        let ram = ram::total()?;
+        (self.memory() * PEAK > ram as f64 / 2.0).then_some(ram)
+    }
+
+    /// What is said of a scan too large for the computer's memory.
+    fn too_large_text(&self, ram: u64) -> String {
+        trf(
+            "Scansione troppo grande per la memoria di questo computer: servirebbero circa \
+             {need} GB, il computer ne ha {ram}. Seleziona un'area più piccola o abbassa la \
+             risoluzione.",
+            &[
+                (
+                    "need",
+                    &i18n::decimal(format!("{:.1}", self.memory() * PEAK / 1e9)),
+                ),
+                ("ram", &i18n::decimal(format!("{:.1}", ram as f64 / 1e9))),
+            ],
+        )
+    }
+
     /// Bytes the scan takes in memory.
     fn memory(&self) -> f64 {
         let plan = self.plan();
@@ -3671,6 +3702,15 @@ impl App {
             )
             .into();
             return;
+        }
+        // More than the computer could hold: nothing is sent.
+        if purpose != Purpose::Preview {
+            if let Some(ram) = self.too_large() {
+                self.redo = None;
+                self.redo_auto = false;
+                self.note = self.too_large_text(ram);
+                return;
+            }
         }
         // In Foto a new scan takes the place of the photos there.
         let n = self.pages.len();
@@ -7375,7 +7415,9 @@ impl App {
                     .on_press(Message::Detect),
             );
         }
-        if memory > LARGE_SCAN {
+        if let Some(ram) = self.too_large() {
+            pane = pane.push(text(self.too_large_text(ram)).size(12).style(text::danger));
+        } else if memory > LARGE_SCAN {
             pane = pane.push(
                 text(trf(
                     "Scansione molto grande: circa {gb} GB e alcuni minuti. \

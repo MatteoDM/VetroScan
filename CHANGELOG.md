@@ -28,6 +28,10 @@ GitHub; here they are in English.
   it by itself, and on closing).
 
 ### Changed
+- A scan that would need more than half of the computer's memory is refused, with how much it
+  would need and how much the computer has, instead of starting and perhaps closing VetroScan
+  half-way. VetroScan holds up to about two and a half times the memory it shows for a scan
+  while putting its image together (measured: 1.04 GB for a scan shown as 452 MB).
 - VetroScan sends the Epson Perfection 4490 Photo its firmware when it opens the scanner and
   the firmware is not running (on Linux and macOS, where no Epson driver sends it at
   switch-on): a capture of Epson's driver showed the same bytes. `VETROSCAN_EPSON_UPLOAD` is no longer needed, and
