@@ -1304,8 +1304,16 @@ never run by us (step 12).
     `glass_colour_default`, a test). An e2e with a made-up scanner declaring one and one not.
     Checked on our own 2400 scan of capture 57's place against Epson Scan's TIFF, 16 x 16
     blocks, any tone allowed: blue left over 0.231 without, 0.147 with (red 0.097/0.089,
-    green 0.121/0.117). **The stripes**: not known whether the 4490 has them; a scan of a
-    white sheet at a few resolutions decides, and only then anything is built.
+    green 0.121/0.117). **The stripes: none on the glass** (14 November 2026, a white sheet,
+    our 8-bit linear scans at 300, 600 twice, 1200, 2400 and 4800 dpi,
+    `../scansioni/epson_righe_20261114`): `hp3770 stripes` (the app's threshold, 0.2 % line to
+    line) "none worth removing" on all; line to line 0.13-0.15 % against 0.04-0.09 % of noise,
+    the rest the paper's grain (the two 600 dpi scans alike), and no repeat of 2-16 lines
+    explaining more than 7 % of it (5-7 % at 2400, 1-2 % elsewhere). Nothing built:
+    `Capabilities::stripes` stays empty for the glass; films to be measured with their lamp.
+    **Step 10 done.** Seen meanwhile: the scanner deaf by itself, idle, ten minutes after a
+    good scan (Windows' image service holding it, our writes cancelled, 995; its light steady
+    green): switched off and on, all well; not the `98 81` error, cause not known.
 11. **2400 dpi**: the rules already rebuild Epson Scan's capture 13 (2400 x 3200, reduced on the
     computer). A second capture at 2400, then the guard and the reduction in the driver.
     **2400 dpi done** (13-14 November 2026): Epson Scan's captures 57 (2400 dpi, 48 bit, 20 x
@@ -1526,7 +1534,7 @@ not a measure). The hours count the work and Matteo's time at the scanner where 
 | Step | What | Hours | What can make it longer |
 |---|---|---|---|
 | 12 | Linux: our upload (both copies), `nusb`, a scan, the app, the recovery | 3-6 | USB permissions; how the scanner behaves after our upload on Linux |
-| 10 | Stripes and colour measured on the 4490 | 3-6 | a colour target is needed |
+| 10 | Stripes and colour measured on the 4490 · **done 14 November** | 3-6 | a colour target is needed |
 | 11a | 2400 dpi: a capture, the guard, the reduction in the driver · **done 14 November** | 3-5 | the rules are there already (capture 13) |
 | 11b | 4800 dpi: another path, its own captures and rules · **done 14 November** | 6-12 | other columns and line times, all to understand |
 | 11c | A size limit in the app (files of gigabytes) · **done 13 November** | 3-6 | the app keeps the whole scan in memory today |
