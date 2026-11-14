@@ -663,6 +663,13 @@ fn film_calibration<T: Transport>(
     let (ol, op) = fc::ORIGIN_READ;
     let origin = read_all(g, ol as u32, ol as u32, (op * 3) as u32)?;
     wait_ready(g, log)?;
+    if let Some(levels) = fc::origin_levels(&origin) {
+        let levels: Vec<String> = levels.iter().map(u32::to_string).collect();
+        log(format!(
+            "the lid unit's origin read, each line's level: {}",
+            levels.join(" ")
+        ));
+    }
     let n = fc::origin(&origin)
         .map(|v| v - film::RAMP_512_STEPS)
         .ok_or_else(|| other("the lid unit's origin read found no edge of its light".into()))?;

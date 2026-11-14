@@ -7,7 +7,7 @@
 //! ```text
 //! epson4490 list                       the scanners found, nothing sent
 //! epson4490 firmware [--firmware F]    which esfw54.bin would be sent, no scanner needed
-//! epson4490 probe                      list, firmware, then the state (1B 03) of the first
+//! epson4490 probe                      list, firmware, the state (1B 03) and positions (1E 86)
 //! epson4490 upload [--firmware F]      sends the firmware if it is not running
 //! epson4490 buttons [SECONDS]          reads the buttons (1E 85) for a while, 10 s by default
 //! epson4490 replay SCRIPT OUT --move   replays a script made from a capture of Epson's driver
@@ -291,6 +291,25 @@ fn probe(path: Option<&std::path::Path>, no_lock: bool) -> Result<(), Error> {
         open_first()?
     };
     println!("state (1B 03): {}", describe(protocol::state(&mut t)?));
+    if !no_lock {
+        // Read-only (the guard lets it out always): where the carriage and the lid's unit are.
+        t.bulk_out(&guard::GET_POSITIONS)?;
+        let mut a = [0u8; 4];
+        let mut got = 0;
+        while got < 4 {
+            match t.bulk_in(&mut a[got..])? {
+                0 => break,
+                n => got += n,
+            }
+        }
+        if got == 4 {
+            println!(
+                "positions (1E 86): carriage {}, lid's unit {}",
+                u16::from_le_bytes([a[0], a[1]]),
+                u16::from_le_bytes([a[2], a[3]])
+            );
+        }
+    }
     Ok(())
 }
 

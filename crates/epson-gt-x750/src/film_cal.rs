@@ -294,24 +294,32 @@ pub const ORIGIN_READ: (usize, usize) = (150, 384);
 /// What `1E 8A` carries when the origin read finds no edge (`0x420fe0`): the default move.
 pub const ORIGIN_DEFAULT: u32 = 0x436;
 
+/// Each line's level in the lid unit's origin read ([`origin`]): its second channel's sum x 2/3
+/// >> 8, the mean. `None` for a read too short.
+pub fn origin_levels(read: &[u8]) -> Option<Vec<u32>> {
+    let (lines, pixels) = ORIGIN_READ;
+    if read.len() < lines * pixels * 3 {
+        return None;
+    }
+    Some(
+        read.chunks_exact(pixels * 3)
+            .take(lines)
+            .map(|l| {
+                let sum: u64 = l.iter().skip(1).step_by(3).map(|&v| u64::from(v)).sum();
+                (((sum * 0xAAAA_AAAB) >> 32) >> 8) as u32
+            })
+            .collect(),
+    )
+}
+
 /// The lid unit's origin from its 150-line read (`0x420fe0`; all 14 film captures): each line's
 /// level is its second channel's sum x 2/3 >> 8 (the mean); the threshold 5 x the highest level
 /// / 10; after more than five lines above it, the first line below it is the edge; `1E 8A` is
 /// (150 - edge + 35) x 12 + 256, and the move back that many steps less 1024 (a 512-value ramp's).
 /// `None` when no edge is found (Epson Scan then moves by [`ORIGIN_DEFAULT`]).
 pub fn origin(read: &[u8]) -> Option<u32> {
-    let (lines, pixels) = ORIGIN_READ;
-    if read.len() < lines * pixels * 3 {
-        return None;
-    }
-    let levels: Vec<u32> = read
-        .chunks_exact(pixels * 3)
-        .take(lines)
-        .map(|l| {
-            let sum: u64 = l.iter().skip(1).step_by(3).map(|&v| u64::from(v)).sum();
-            (((sum * 0xAAAA_AAAB) >> 32) >> 8) as u32
-        })
-        .collect();
+    let lines = ORIGIN_READ.0;
+    let levels = origin_levels(read)?;
     let threshold = 5 * levels.iter().map(|v| v / 10).max().unwrap_or(0);
     let mut above = 0;
     let mut edge = 0;

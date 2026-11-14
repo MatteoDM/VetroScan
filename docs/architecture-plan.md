@@ -1715,9 +1715,20 @@ never run by us (step 12).
     [--pixels] [--raw FILE] --move`, the area in millimetres in the film window or in pixels;
     without `--move` it prints the plan and what the guard says, and sends nothing (capture 74's
     request: columns 2379-4683, 898 lines of 576 pixels, start move 267 steps, read move 3720 with a
-    lead of 128, as captured). Left of step 14: the first film scan of ours with Matteo at the
-    scanner (capture 74's frame at 600 dpi, with a capture). The white bytes' rule (2-4 units off)
-    can wait for that scan's result.
+    lead of 128, as captured). **The first film scan of ours** (14 November 2026, night; Matteo at
+    the scanner, captures 87-89, `05-catture.md`): capture 74's frame at 600 dpi. 87 stopped by
+    itself after the lid unit's origin read: the light's edge at line 99 asked a move back of 264
+    steps, never captured, and nothing more moved (the carriages left at 1994 and 2440; `probe` now
+    asks `1E 86`, and the origin read's levels go to the log). The captures' copy of that read is
+    not to be trusted past line 99 (USBPcap, packets cut at 65,508): the program's levels are. 88
+    refused to start from (1994, 2440); the scanner then took the carriages home by itself. **89
+    went through**: the edge at line 100 (252 steps), exposures 13,166 / 8814 / 5786 µs (Epson
+    Scan's in 74: 13,550 / 9070 / 5953), 29.5 s, the carriages home; the image against Epson Scan's
+    TIFF of 74 gives rank correlations of -0.99 a channel (ours linear, a negative), 7 lines (0.3
+    mm) along from it (the strip put back by hand), the colours aligned. The edge moves by a line
+    from one scan to the next (74: 101, 86: 100, 87: 99, 89: 100): whether to let the moves back of
+    216 and 264 steps out (the same move, 12 steps shorter or longer) is Matteo's to decide. The
+    white bytes' rule (2-4 units off) can wait for that scan's result.
     **Left of step 14**, what Epson Scan computes from its calibration reads (each in the
     captures with its reads, to rebuild the same way): N from the 150-line read; the line time T and
     the three exposures of `1E 21` (from reads of the window at T 9600 / 13,056 and exposures
