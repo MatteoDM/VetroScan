@@ -1594,6 +1594,19 @@ never run by us (step 12).
    nothing sent.
 3. The first film moves of ours: an exact replay of capture 74 (`epson4490 replay ... --move`),
    Matteo told before; then our own plan through the guard, opened one combination at a time.
+   **Replay done** (14 November 2026, evening; captures 85, 86; `05-catture.md`, "i nostri primi
+   movimenti per le pellicole"). Learnt the hard way (85): **the film moves are relative to
+   where the carriage and the lid's unit are**, and the scanner moves them itself when it lights
+   the lid's lamp again (after `1B 40` with that lamp chosen and gone off: the carriage to 1994,
+   the unit to 1078, as after `1E A2 02` in capture 72, where Epson Scan then skips its park
+   move). The first replay took `1E 86`'s answers as "any" and ran 1994 / 1078 steps further
+   than Epson Scan (the carriage to 4052 rather than 2058; normal sounds, the carriage home after,
+   the data nearly saturated). The replay script now has the positions exact and stops before
+   the first move if they differ (`tools/script.py`). Then (86) the exact replay: every
+   answer as in 74, 29 s; the calibration reads within 0.2-0.4 % of Epson Scan's (correlation
+   0.94-0.998), the image 2.5 % lighter (the strip put back by hand). So: **the film rules take
+   the positions as input** (the park move = 1994 less where the carriage is; the unit's moves
+   likewise), and the driver's film scan asks `1E 86` before every move, as Epson Scan does.
 4. The adapter in the contract and the app (step 15), then phase 13's films on its scans
    (step 16) and the lid's lamp's warm-up measured; then Digital ICE (step 17).
 
