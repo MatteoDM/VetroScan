@@ -60,5 +60,6 @@ appimage=$(realpath dist/vetroscan-*.AppImage)
 (cd /tmp && rm -rf squashfs-root && "$appimage" --appimage-extract >/dev/null && test -x squashfs-root/usr/bin/vetroscan   && test -x squashfs-root/usr/bin/hp3770 && test -f squashfs-root/vetroscan.desktop && test -f squashfs-root/vetroscan.png)
 echo "SMOKE OK"
 
+mkdir -p "$OUT"
 cp dist/* "$OUT"/
 ls -la "$OUT"
