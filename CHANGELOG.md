@@ -17,65 +17,53 @@ GitHub; here they are in English.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-14
+
 ### Added
-- **VetroScan scans the glass of the Epson Perfection 4490 Photo**, with its own driver: 100,
-  200, 300, 400, 600 and 1200 dpi, 8 or 16 bits, colour (grey and black and white made by
-  VetroScan), any area of the glass. Every command is computed from the area asked and kept
-  within what the captures of Epson's own drivers showed the scanner doing; the image comes out
-  as Epson's driver's. After the scanner has been idle for a quarter of an hour, or just switched
-  on, its lamp is given two and a half minutes to warm up first. No films yet. VetroScan switches its lamp off as for
-  the HP 3770 (the Preferences' lamp choices, up to the 15 minutes after which the scanner does
-  it by itself, and on closing).
-- Epson Perfection 4490: **2400 dpi** on the glass, 8 or 16 bits, read as Epson Scan reads it
-  (3200 lines an inch along, brought to 2400 on the computer). At 16 bits a scan at 2400 dpi
-  can be at most 115 mm wide (a wider line was never seen from the scanner); at 8 bits the
-  whole glass. Tried on the scanner: 20 x 30 mm at 16 bits, the same image as Epson Scan's
-  of the same place.
-- Epson Perfection 4490: **4800 dpi** on the glass, 8 or 16 bits, read as Epson Scan reads it.
-  A scan at 4800 dpi can be at most 58 mm wide at 16 bits and 116 mm at 8 bits (a wider line
-  was never seen from the scanner). Tried on the scanner, at the glass's left edge too: the
-  same image as Epson Scan's of the same place, to the pixel.
-- **Correct the scanner's colours** on the glass too, for a scanner that declares a correction
-  for it, on by default in Document and Photo: the Epson Perfection 4490 declares the one
-  Epson Scan applies (measured on Epson Scan's own scans: its blues and greens livelier than
-  the sensor's). Settings saved by earlier versions take the new default once.
+- **VetroScan scans the glass of the Epson Perfection 4490 Photo**, with its own driver, on
+  Windows, Linux and macOS: 100, 200, 300, 400, 600, 1200, 2400 and 4800 dpi, 8 or 16 bits,
+  colour (grey and black and white made by VetroScan), any area of the glass (216 x 296.9 mm).
+  Every command is computed from the area asked and kept within what the captures of Epson's
+  own drivers showed the scanner doing; the image comes out as Epson's drivers' (checked
+  against Epson Scan's at 2400 and 4800 dpi: the same place to the pixel). At 2400 dpi a
+  16-bit scan can be at most 115 mm wide, at 4800 dpi 58 mm at 16 bits and 116 mm at 8 (a
+  wider line was never seen from the scanner).
+  - Its colours as Epson Scan corrects them (**Correct the scanner's colours**, on by
+    default; see Changed).
+  - Its lamp: given two and a half minutes to warm up after the scanner has been idle for a
+    quarter of an hour or just switched on, Cancel heard meanwhile; switched off as for the
+    HP 3770 (the Preferences' lamp choices, and on closing). After Epson Scan, or with the
+    lid's lamp in use, VetroScan switches to the glass's lamp as Epson's driver does.
+  - Its four buttons (Start, Scan to PDF, Scan to E-mail, Copy). On Windows with Epson's
+    driver VetroScan takes the scanner for itself while it has it open, so Windows stops
+    asking it for its buttons in between: Epson Scan cannot use it meanwhile, and if Epson
+    Scan is scanning, VetroScan says the scanner is busy.
+  - Its firmware sent when VetroScan opens it and it is not running (Linux and macOS, where no
+    Epson driver sends it at switch-on; also after it was switched off with its carriage away
+    from home, which brings the carriage home).
+  - A scan left half-way (VetroScan closed or stopped while reading) is stopped when the
+    scanner is opened again, the carriage brought home; a scan whose image data fails
+    half-way is stopped as a cancelled one is.
+  - When the scanner flags an error of its own (its front light flashing red, which comes
+    now and then while its lamp warms up, with Epson Scan too), the next preview or scan
+    clears it as Epson Scan does and goes on; only if it comes back at once does VetroScan ask
+    for the scanner to be switched off and on.
+  - Its originals found on the preview (its lid darkens towards the edges of the glass).
+- **Correct the scanner's colours** on the glass, for a scanner that declares a correction
+  for it, as it already was for films.
 
 ### Changed
 - A scan that would need more than half of the computer's memory is refused, with how much it
   would need and how much the computer has, instead of starting and perhaps closing VetroScan
   half-way. VetroScan holds up to about two and a half times the memory it shows for a scan
   while putting its image together (measured: 1.04 GB for a scan shown as 452 MB).
-- VetroScan sends the Epson Perfection 4490 Photo its firmware when it opens the scanner and
-  the firmware is not running (on Linux and macOS, where no Epson driver sends it at
-  switch-on): a capture of Epson's driver showed the same bytes. `VETROSCAN_EPSON_UPLOAD` is no longer needed, and
-  no longer read.
-- The Epson Perfection 4490's four buttons (Start, Scan to PDF, Scan to E-mail, Copy) reach
-  VetroScan. On Windows with Epson's driver, VetroScan takes the scanner for itself while it has
-  it open, so Windows stops asking it for its buttons in between: Epson Scan cannot use the
-  scanner meanwhile, and if Epson Scan is scanning, VetroScan says the scanner is busy.
-- An Epson Perfection 4490 left half-way through a scan (VetroScan closed or stopped while
-  reading) no longer needs switching off and on: opening it again stops that scan, the carriage
-  goes home and the scanner is ready. VetroScan sends the scanner its firmware only when it
-  answers as a scanner just switched on, never on an answer it does not know.
-- The Epson Perfection 4490's glass is 216 x 296.9 mm in VetroScan (the user guide's 297.2 mm,
-  less the last fraction of a millimetre no scan with Epson's driver was seen reaching).
+- **Correct the scanner's colours** is on by default in Document and Photo too: settings saved
+  by earlier versions take the new default once.
+- `VETROSCAN_EPSON_UPLOAD` is no longer needed, and no longer read: VetroScan sends the Epson
+  Perfection 4490 its firmware by itself when it is not running (a capture of Epson's driver
+  showed the same bytes).
 
 ### Fixed
-- Epson Perfection 4490 with its light flashing red (an error of the scanner's own, which
-  comes now and then while its lamp warms up, with Epson Scan too): the next preview or scan
-  clears it as Epson Scan does and goes on, with no need to switch it off and on; only if the
-  error comes back at once does VetroScan say so.
-- Epson Perfection 4490 after Epson Scan or after films: a scan of the glass no longer stops
-  because the lid's lamp is the one in use; it switches to the glass's lamp as Epson's driver
-  does.
-- Epson Perfection 4490: a scan at 1200 dpi wider than about 115 mm no longer hangs before
-  reading, leaving the scanner deaf until switched off and on with its carriage away from
-  home: its shading table, over 64 KB there, now goes to the scanner in pieces with a short
-  pause between them, as Epson's own driver sends it. Tried on the scanner on Linux and on
-  Windows: 150 x 150 mm at 1200 dpi and 16 bits.
-- Epson Perfection 4490 switched off and on with its carriage left away from home (after a scan
-  that hung): VetroScan now sends it its firmware, which brings the carriage home by itself,
-  instead of refusing an answer it did not know.
 - HP Scanjet 3770: a scan that fails half-way (calibration, film adapter's lamp, image data)
   is now ended as a cancelled one is: the chip stopped, the carriage brought home and, with
   films, the adapter's lamp switched off and the flatbed lamp on again. Before, the adapter's
@@ -93,28 +81,14 @@ GitHub; here they are in English.
   Scanjet 3770).
 - HP Scanjet 3770: a film scan with the flatbed lamp off no longer waits 10 s for that lamp to
   warm up; the film adapter's own lamp is waited for as before.
-- Epson Perfection 4490: Cancel works during the lamp's two-minute warm-up, not only after it.
-- Epson Perfection 4490: a scan whose image data fails half-way (a timeout, a broken block) is
-  stopped as a cancelled one is, so the scanner does not go on sending it into the next scan;
-  and a scan whose carriage is not at home before the calibration stops there with an error,
-  instead of moving the carriage further.
 - The originals found on the glass, and the slides and frames found in the film holder, come
   in the same reading order every time: row by row from the top, left to right in each row.
-- The originals on the glass of the Epson Perfection 4490 are found on the preview: its lid
-  darkens towards the edges, and the search took that darker grey for the lid and the whole
-  glass for one original (three photos came out as one). The lid's colour is now taken from
-  1 to 10 mm in from the edges.
 - With nothing like the lid along the edges of the glass (the lid left open), the search for
   originals finds none, so that the areas can be drawn by hand, instead of taking the whole
   glass for one original. This holds when the room seen through the open lid is dark and even
   too: the lid is now taken to be light against the whole scale, not only against the
   brightest part of the preview (tried with the Epson Perfection 4490's lid open on an empty
   glass).
-- Epson Perfection 4490: when the scanner flags an error of its own (its front light flashing
-  red), VetroScan no longer shows it as ready, says so in the scanner's details, and a scan stops
-  at the first sign of it without sending the scanner anything more. Opening Epson Scan cleared
-  it once; switching the scanner off and on clears it (tried on Linux). The scan's error now
-  also names the last command sent before it, to tell where it came.
 - 16-bit scans no longer have a few tones a whole 8-bit level off, which showed as spikes in
   their histogram.
 - When no scanner is found, the reason the scanner's drivers know now reaches VetroScan: on
@@ -507,7 +481,8 @@ First version.
 - Texts with a run of spaces in the middle (note on RAW, on 16 bits and on the buttons in
   Windows); the button of the default folder uses the system's separator.
 
-[Unreleased]: https://github.com/MatteoDM/scanner/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/MatteoDM/scanner/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/MatteoDM/scanner/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/MatteoDM/scanner/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/MatteoDM/scanner/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/MatteoDM/scanner/compare/v0.4.0...v0.5.0
