@@ -1315,7 +1315,25 @@ never run by us (step 12).
     Epson's 10 % sharper line to line both ways, no pattern every 3 lines (0.005 % of the
     level; Epson's 0.02 %). Then in the app (Matteo, 14 November 2026): 2400 dpi at 8 bits on
     a small area drawn on the preview, through. Not tried on the scanner: a wide area at 2400.
-    **4800 dpi**: another path (other columns, T `0x9480`): its own captures and rules. Both need
+    **4800 dpi**: another path (other columns, T `0x9480`): its own captures and rules.
+    **4800 dpi done** (14 November 2026; notes in `captures/epson4490/06-formato-dati.md`, last
+    section, and `../scansioni/epson_4800_20261114`): Epson Scan's captures 14, 59, 60 (the
+    night before), 61 (the glass's left edge), 62 (the middle), 64; `setup.py --check` gives 0
+    differences on all 26 glass captures. The same sequence as at 2400; 4800 x 4800 (no other
+    resolution along); the reads at T 0x41C0 (the table's row), `1E 46` and the black pixels'
+    `1E 21` at 0x9480; origin 552, black pixels 70-166, no longer line time for a wide read;
+    `1E 21` of its own (`0x41f0a4`, `0x41f03f`); the start column moved by the interpreter
+    (`0x40fdd0`: 8,400 to the left, less near the left edge, with two words of `1E 21`;
+    `setup::columns_4800`); 200 extra lines (2 x 96 + 8); `1E 8B` and the 07 table as at
+    1200. The image: the colours 96 and 192 lines apart as at any resolution, and **the even
+    sensor columns 8 lines later** (two staggered rows: against Epson Scan's TIFFs of 59 and
+    61, whose reads start on an odd and an even column; `Plan::stagger`, `Plan::late`). The
+    block limit: at most 10,912 pixels (58 mm) at 16 bits, 21,840 (116 mm) at 8 bits. Tried:
+    59's and 61's areas, then a control (65, ours, right after Epson Scan's 64 on 61's area,
+    nothing touched): the raw data the same to 0 lines and 0-2 columns, the image the same as
+    Epson's TIFF to the pixel, no teeth between even and odd columns. The scans of the hour
+    before were 0.2-0.4 mm off, Epson Scan's own too (61 against 64, same area: 35 lines, 44
+    columns): at 4800 dpi the original, or the mechanics, drifts over an hour. Both need
     the size limit of "Risks" (4800 dpi at 16 bits is gigabytes). **The limit, done** (13
     November 2026, step 11c): measured in the app on Linux, a 1200 dpi 16-bit scan of 150 x 150
     mm estimated at 452 MB (`App::memory`) took the app from 70 MB to 1.04 GB at most while its
@@ -1488,7 +1506,7 @@ not a measure). The hours count the work and Matteo's time at the scanner where 
 | 12 | Linux: our upload (both copies), `nusb`, a scan, the app, the recovery | 3-6 | USB permissions; how the scanner behaves after our upload on Linux |
 | 10 | Stripes and colour measured on the 4490 | 3-6 | a colour target is needed |
 | 11a | 2400 dpi: a capture, the guard, the reduction in the driver · **done 14 November** | 3-5 | the rules are there already (capture 13) |
-| 11b | 4800 dpi: another path, its own captures and rules | 6-12 | other columns and line times, all to understand |
+| 11b | 4800 dpi: another path, its own captures and rules · **done 14 November** | 6-12 | other columns and line times, all to understand |
 | 11c | A size limit in the app (files of gigabytes) · **done 13 November** | 3-6 | the app keeps the whole scan in memory today |
 | 13 | The lid's lamp, switched both ways | 2-4 | |
 | 14 | The film path: rules from captures 16-19, the guard | 6-12 | two carriages, another motor: with care |

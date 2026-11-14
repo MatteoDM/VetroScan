@@ -439,19 +439,26 @@ fn stop(t: &mut dyn Transport, log: &mut dyn FnMut(String)) -> Result<()> {
 
 /// Realigns the colours (green `offset` lines below blue, red twice) and crops
 /// to the request: exactly what WIA returns from the same data (captures 03,
-/// 04, 30).
+/// 04, 30). At 4800 dpi the pixels on even sensor columns come [`Plan::stagger`] lines later
+/// as well (captures 59 and 61 against Epson Scan's TIFFs).
 pub fn assemble(raw: &[u8], p: &Plan) -> Image {
     let r = p.request;
     let s = usize::from(r.bits / 8);
     let line = p.bytes_per_line as usize;
     let k = p.colour_offset() as usize;
     let offsets = [2 * k, k, 0];
+    let stagger = p.stagger() as usize;
     let (w, h) = (r.width as usize, r.height as usize);
     let mut data = Vec::with_capacity(w * h * 3 * s);
     for y in 0..h {
         for x in 0..w {
+            let late = if stagger > 0 && p.late(x as u32) {
+                stagger
+            } else {
+                0
+            };
             for (c, off) in offsets.iter().enumerate() {
-                let at = (y + off) * line + (x * 3 + c) * s;
+                let at = (y + off + late) * line + (x * 3 + c) * s;
                 data.extend_from_slice(&raw[at..at + s]);
             }
         }
@@ -713,7 +720,7 @@ fn run<T: Transport>(
         g,
         &p,
         &back,
-        &p.e21_cal,
+        &p.e21_black,
         &p.e41_black,
         &zeros,
         &setup::GAIN_CAL,
@@ -758,7 +765,7 @@ fn run<T: Transport>(
     send(g, [0x1E, 0xA2], &[0x01])?;
     log("calibration read: black pixels, white, dark; lamp on again".into());
 
-    if p.base == 2400 {
+    if p.asks_table07() {
         // 1E 8B: 06, the scanner holds its 1200 dpi table (it keeps it until switched off),
         // read back as Epson's driver does (captures 33, 37); 15, it does not: computed
         // from a raw line of the sensor and loaded (captures 05, 42; `table07`).
@@ -1338,6 +1345,21 @@ pub(crate) mod tests {
         let (r, _, _) = scan("29", text);
         let e = r.unwrap_err().to_string();
         assert!(e.contains("160 steps from home"), "{e}");
+    }
+
+    #[test]
+    fn at_4800_dpi_the_even_sensor_columns_come_later() {
+        // Line i of the read worth i in every sample: a pixel on an even sensor column comes
+        // from 8 lines further down (blue at 0, green 96, red 192 as at any resolution).
+        let p = Plan::new(Request::new(4800, 0, 3747, 400, 4, 8), XCorrection(-160)).unwrap();
+        assert_eq!((p.columns.0 % 2, p.stagger()), (0, 8));
+        let line = p.bytes_per_line as usize;
+        let raw: Vec<u8> = (0..p.lines as usize * line)
+            .map(|i| (i / line) as u8)
+            .collect();
+        let im = assemble(&raw, &p);
+        // Pixel 0 (even sensor column) and 1 (odd) of line 0: red, green, blue.
+        assert_eq!(im.data[..6], [200, 104, 8, 192, 96, 0]);
     }
 
     #[test]

@@ -48,8 +48,9 @@ pub const GET_POSITIONS: [u8; 2] = [0x1E, 0x86];
 
 /// The resolutions and depths a glass scan may use: the ones captured (WIA at 8 bits; Epson
 /// Scan at 16, captures 15 and 38-43, 12 November 2026; Epson Scan at 2400 dpi, 8 and 16 bits,
-/// read along at 3200, captures 13, 57 and 58, 13 November 2026).
-pub const COVERED: [(u32, u8); 14] = [
+/// read along at 3200, captures 13, 57 and 58, 13 November 2026; Epson Scan at 4800 dpi, 8 and
+/// 16 bits, captures 14 and 59-62, 14 November 2026).
+pub const COVERED: [(u32, u8); 16] = [
     (100, 8),
     (200, 8),
     (300, 8),
@@ -64,11 +65,13 @@ pub const COVERED: [(u32, u8); 14] = [
     (1200, 16),
     (2400, 8),
     (2400, 16),
+    (4800, 8),
+    (4800, 16),
 ];
 
 /// The line times (µs) each resolution was captured with: the motor's speed
 /// follows from them, so no other one goes out.
-pub const LINE_TIMES: [(u32, u32); 9] = [
+pub const LINE_TIMES: [(u32, u32); 10] = [
     (100, 4224),
     (200, 3840),
     (300, 3840),
@@ -78,6 +81,7 @@ pub const LINE_TIMES: [(u32, u32); 9] = [
     (600, 4224),
     (1200, 10_752),
     (2400, 10_752),
+    (4800, 0x41C0),
 ];
 
 /// The furthest step from home a captured read reached (capture 42, Epson Scan's whole glass
@@ -128,7 +132,7 @@ pub fn check_request(r: &Request) -> Result<()> {
     if !COVERED.contains(&(r.dpi, r.bits)) {
         return refuse(format!(
             "{} dpi at {} bits was never captured on the glass (only 100, 200, 300, 400, 600, \
-             1200 and 2400 dpi, at 8 or 16 bits)",
+             1200, 2400 and 4800 dpi, at 8 or 16 bits)",
             r.dpi, r.bits
         ));
     }
@@ -406,10 +410,10 @@ impl<T: Transport> Guarded<T> {
             return Err(refusal(data, "the scan's plan is not permitted yet"));
         };
         let next = match data {
-            [0x1E, 0x83] if p.base == 2400 => one(&[READ_83, table07::READ_RAW]),
+            [0x1E, 0x83] if p.asks_table07() => one(&[READ_83, table07::READ_RAW]),
             [0x1E, 0x11] => one(&[&[p.e11]]),
             [0x1E, 0x46] => one(&[&p.e46[0], &p.e46[1]]),
-            [0x1E, 0x21] => one(&[&p.e21_cal, &p.e21_data]),
+            [0x1E, 0x21] => one(&[&p.e21_black, &p.e21_cal, &p.e21_data]),
             [0x1E, 0x41] => Some(Expect::Block41),
             [0x1E, 0x42] => Some(Expect::Len(18)),
             [0x1E, 0x43] => one(&[&setup::GAIN_CAL, &setup::GAIN_DATA]),
@@ -490,7 +494,7 @@ impl<T: Transport> Guarded<T> {
                 if !tables_.is_empty() {
                     return Ok(Some(Expect::OneOf(tables_)));
                 }
-                if p.base == 2400 && table07::HEADER[..] == *data {
+                if p.asks_table07() && table07::HEADER[..] == *data {
                     return Ok(Some(Expect::Len(table07::LEN)));
                 }
                 if tables::TONE_HEADERS.iter().any(|h| h[..] == *data) {
@@ -846,12 +850,23 @@ mod tests {
         let caps = crate::capabilities();
         for (dpi, bits) in COVERED {
             let (w, h) = caps.glass_pixels(dpi as u16);
-            if (dpi, bits) == (2400, 16) {
-                // A line of the whole width is more than a block: the plan says how wide.
+            // A line of the whole width is more than a block: the plan says how wide, and
+            // that width is accepted at both edges.
+            let narrow = [
+                ((2400, 16), 10_912, "115 mm"),
+                ((4800, 16), 10_912, "58 mm"),
+                ((4800, 8), 21_840, "116 mm"),
+            ];
+            if let Some(&(_, most, mm)) = narrow.iter().find(|(k, ..)| *k == (dpi, bits)) {
                 let e = plan(dpi, 0, 0, w, h, bits).unwrap_err().to_string();
-                assert!(e.contains("at most 10912 pixels (115 mm)"), "{e}");
-                let ok = check_plan(&plan(dpi, 0, 0, 10_912, h, bits).unwrap());
-                assert!(ok.is_ok(), "{dpi} dpi {bits} bits, 10912 x {h}: {ok:?}");
+                assert!(e.contains(&format!("at most {most} pixels ({mm})")), "{e}");
+                for x in [0, w - most] {
+                    let ok = check_plan(&plan(dpi, x, 0, most, h, bits).unwrap());
+                    assert!(
+                        ok.is_ok(),
+                        "{dpi} dpi {bits} bits, {most} x {h} at {x}: {ok:?}"
+                    );
+                }
                 continue;
             }
             let ok = check_plan(&plan(dpi, 0, 0, w, h, bits).unwrap());

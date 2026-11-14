@@ -31,6 +31,10 @@ GitHub; here they are in English.
   can be at most 115 mm wide (a wider line was never seen from the scanner); at 8 bits the
   whole glass. Tried on the scanner: 20 x 30 mm at 16 bits, the same image as Epson Scan's
   of the same place.
+- Epson Perfection 4490: **4800 dpi** on the glass, 8 or 16 bits, read as Epson Scan reads it.
+  A scan at 4800 dpi can be at most 58 mm wide at 16 bits and 116 mm at 8 bits (a wider line
+  was never seen from the scanner). Tried on the scanner, at the glass's left edge too: the
+  same image as Epson Scan's of the same place, to the pixel.
 
 ### Changed
 - A scan that would need more than half of the computer's memory is refused, with how much it

@@ -125,6 +125,9 @@ pub fn resolution(dpi: u32) -> Option<Resolution> {
         900 => (1200, 75_000, 5568),
         1200 => (2400, 50_000, 10_752),
         2400 => (2400, 100_000, 10_752),
+        // Its own row (0x40cb10, row 0): base 4800, the reads' line time 0x41C0; `1E 46` and
+        // the black pixels' `1E 21` carry [`T_4800_46`] instead.
+        4800 => (4800, 100_000, 0x41C0),
         _ => return None,
     };
     Some(Resolution { base, ratio, t0 })
@@ -146,6 +149,7 @@ fn base_index(base: u32) -> Option<u8> {
 /// per column.
 fn origin(base: u32) -> Option<(u32, i32)> {
     Some(match base {
+        4800 => (552, 1),
         2400 => (276, 2),
         1200 => (139, 4),
         800 => (93, 6),
@@ -155,11 +159,12 @@ fn origin(base: u32) -> Option<(u32, i32)> {
 }
 
 /// The columns of the sensor's black (shielded) pixels, from the captures:
-/// known at 800 and 2400 only.
+/// known at 800, 2400 and 4800 only.
 fn black_columns(base: u32) -> Option<(u16, u16)> {
     match base {
         800 => Some((12, 28)),
         2400 => Some((35, 83)),
+        4800 => Some((70, 166)),
         _ => None,
     }
 }
@@ -185,8 +190,60 @@ fn floor_21(base: u32) -> Option<u32> {
         600 | 800 => 0x6CC,
         1200 => 0xA33,
         2400 => 0x1466,
+        // Not used: `1E 21` has forms of its own at 4800 (`block21_4800`).
+        4800 => 0,
         _ => return None,
     })
+}
+
+/// The line time `1E 46` carries at base 4800, and the black pixels' `1E 21` (`0x41f0a4`);
+/// the reads run at the table's 0x41C0 (captures 14, 59-62: their ramps).
+pub const T_4800_46: u32 = 0x9480;
+
+/// At base 4800 the interpreter moves the read's columns (`0x40fdd0`, with 6/1 from its table
+/// at `0x40ff1c`): from `c0`, the start column and two words of `1E 21`. Away from the left
+/// edge the start goes 8,400 columns left, the words (0, 418); within 9,600 columns of the
+/// origin less, by 20 x the second word. All five captures at 4800 (14, 59-62), the edge
+/// (61) too.
+fn columns_4800(c0: u32) -> (u32, (u16, u16)) {
+    let edge = 552 + 0x2580;
+    if c0 < edge {
+        let r9 = ((c0.saturating_sub(80) / 6) >> 3) * 2;
+        let r8 = c0 - 24 * r9 - 80;
+        let w1 = (((r8 + 0x7A80) >> 1) + 2 * r9) >> 1;
+        (r8 + 4 * r9 + 80, (w1 as u16, r9 as u16))
+    } else {
+        let r9 = (((edge - 80) / 6) >> 3) * 2;
+        (c0 + 4 * r9 + 80 - edge, (0, r9 as u16))
+    }
+}
+
+/// `1E 21` at base 4800: for the black pixels (`0x41f0a4`), and for the other reads with the
+/// words of [`columns_4800`] (`0x41f03f`), Epson's 2 and 1002 at the end.
+fn block21_4800(black: bool, t: u32, words: (u16, u16)) -> [u8; 26] {
+    let mut b = [0u8; 26];
+    if black {
+        b[..3].copy_from_slice(&T_4800_46.to_le_bytes()[..3]);
+        for i in 0..3 {
+            b[3 + 3 * i..6 + 3 * i].copy_from_slice(&0x52C0u32.to_le_bytes()[..3]);
+        }
+        b[12] = 0x7F;
+        for (i, w) in [0x28CBu16, 0, 0x28CB, 0x4240, 0x532E, 0x56A8]
+            .iter()
+            .enumerate()
+        {
+            b[13 + 2 * i..15 + 2 * i].copy_from_slice(&w.to_le_bytes());
+        }
+        b[25] = 0x0E;
+    } else {
+        b[..3].copy_from_slice(&t.to_le_bytes()[..3]);
+        b[12] = 0x6A;
+        for (i, w) in [words.0, words.1, 0, 0, 2, 1002].iter().enumerate() {
+            b[13 + 2 * i..15 + 2 * i].copy_from_slice(&w.to_le_bytes());
+        }
+        b[25] = 0x0A;
+    }
+    b
 }
 
 /// `1E 43` for the calibration reads: gain 1.0 (`8000`) per channel, then the
@@ -515,6 +572,8 @@ pub struct Plan {
     pub e46: [[u8; 8]; 2],
     /// `1E 21` of the calibration reads.
     pub e21_cal: [u8; 26],
+    /// `1E 21` before the black pixels' read: [`Plan::e21_cal`] but at base 4800.
+    pub e21_black: [u8; 26],
     /// `1E 21` of the image read.
     pub e21_data: [u8; 26],
     /// `1E 41` of the black pixels.
@@ -575,19 +634,26 @@ impl Plan {
         let wc = w * 100_000 / ratio + if (w * 100_000) % ratio != 0 { 4 } else { 0 };
         let shading_columns = wc.min(cols) as u32;
         let c0 = origin + xc as u32;
+        let four800 = res.base == 4800;
+        let (c0, words_4800) = if four800 {
+            columns_4800(c0)
+        } else {
+            (c0, (0, 0))
+        };
         let c1 = c0 + cols as u32;
         let pixels = pixels as u32;
 
-        // The line time (0x4276b4): longer for a wide read.
+        // The line time (0x4276b4): longer for a wide read; not at base 4800 (0x4276a7).
         let mut t = res.t0;
-        while c1 / 2 >= t - 254 {
+        while !four800 && c1 / 2 >= t - 254 {
             t += 384;
         }
 
         // Vertical (0x4291e0, 0x427710).
         let g = gcd(r.ydpi, STEPS_PER_INCH);
         let (den, num) = (r.ydpi / g, STEPS_PER_INCH / g);
-        let extra = 2 * (r.ydpi / 50);
+        // The colours' offset, and at 4800 the even sensor columns' (`Plan::stagger`).
+        let extra = 2 * (r.ydpi / 50) + if four800 { r.ydpi / 600 } else { 0 };
         let lines = (r.height + extra).div_ceil(den) * den;
         let start = Y_ORIGIN + (u64::from(r.y) * u64::from(num) / u64::from(den)) as u32;
         let bytes_per_line = pixels * 3 * u32::from(r.bits) / 8;
@@ -683,12 +749,28 @@ impl Plan {
             read_end: after_calibration + n + mode.ramp() + lead + read,
             e57,
             e11: opt,
-            e46: [
-                [opt, 1, t as u8, (t >> 8) as u8, 0, 0, 0, 0],
-                [opt, 0, t as u8, (t >> 8) as u8, 0, 0, 0, 0],
-            ],
-            e21_cal: block21(t, 0, 0, 0),
-            e21_data: block21(t, w3fe, w400, 4),
+            e46: {
+                let t46 = if four800 { T_4800_46 } else { t };
+                [
+                    [opt, 1, t46 as u8, (t46 >> 8) as u8, 0, 0, 0, 0],
+                    [opt, 0, t46 as u8, (t46 >> 8) as u8, 0, 0, 0, 0],
+                ]
+            },
+            e21_black: if four800 {
+                block21_4800(true, t, words_4800)
+            } else {
+                block21(t, 0, 0, 0)
+            },
+            e21_cal: if four800 {
+                block21_4800(false, t, words_4800)
+            } else {
+                block21(t, 0, 0, 0)
+            },
+            e21_data: if four800 {
+                block21_4800(false, t, words_4800)
+            } else {
+                block21(t, w3fe, w400, 4)
+            },
             e41_black: block41(
                 u32::from(k0),
                 u32::from(k1),
@@ -740,6 +822,30 @@ impl Plan {
     /// red twice as many.
     pub fn colour_offset(&self) -> u32 {
         self.request.ydpi / 50
+    }
+
+    /// At base 4800, the lines the even sensor columns come later than the odd ones (8: the
+    /// sensor's two staggered rows, measured against Epson Scan's TIFFs of captures 59 and 61,
+    /// whose reads start on an odd and an even column); 0 elsewhere.
+    pub fn stagger(&self) -> u32 {
+        if self.base == 4800 {
+            self.request.ydpi / 600
+        } else {
+            0
+        }
+    }
+
+    /// Whether Epson's driver asks `1E 8B` and handles the 07 table ([`crate::table07`])
+    /// before this read: at bases 2400 (1200 and 2400 dpi) and 4800 (captures 14, 59-62: `06`
+    /// and the table read back; 61, the first after switching on: `15`, the same raw line and
+    /// table header as at 1200).
+    pub fn asks_table07(&self) -> bool {
+        matches!(self.base, 2400 | 4800)
+    }
+
+    /// Whether the read's pixel `i` lies on an even sensor column (late by [`Plan::stagger`]).
+    pub fn late(&self, i: u32) -> bool {
+        (self.columns.0 + i) % 2 == 0
     }
 }
 
@@ -797,7 +903,7 @@ pub(crate) mod tests {
             .collect()
     }
 
-    pub(crate) const CAPTURES: [(&str, &str); 26] = [
+    pub(crate) const CAPTURES: [(&str, &str); 31] = [
         ("03", include_str!("../testdata/03_colore_300dpi_5x5cm.txt")),
         ("04", include_str!("../testdata/04_colore_600dpi_5x5cm.txt")),
         (
@@ -877,6 +983,27 @@ pub(crate) mod tests {
         (
             "58",
             include_str!("../testdata/58_epsonscan_2400dpi_24bit.txt"),
+        ),
+        // 4800 dpi (14 at 16 bits despite its name; 61 at the glass's left edge).
+        (
+            "14",
+            include_str!("../testdata/14_epsonscan_4800dpi_24bit.txt"),
+        ),
+        (
+            "59",
+            include_str!("../testdata/59_epsonscan_4800dpi_48bit.txt"),
+        ),
+        (
+            "60",
+            include_str!("../testdata/60_epsonscan_4800dpi_24bit.txt"),
+        ),
+        (
+            "61",
+            include_str!("../testdata/61_epsonscan_4800dpi_48bit_bordo_sx.txt"),
+        ),
+        (
+            "62",
+            include_str!("../testdata/62_epsonscan_4800dpi_48bit_centro.txt"),
         ),
     ];
 
@@ -975,7 +1102,8 @@ pub(crate) mod tests {
                     b
                 })
                 .collect();
-            for w in &e21[..3] {
+            assert_eq!(e21[0], p.e21_black, "{}", ctx("1E 21 black"));
+            for w in &e21[1..3] {
                 assert_eq!(*w, p.e21_cal, "{}", ctx("1E 21 cal"));
             }
             assert_eq!(e21[3], p.e21_data, "{}", ctx("1E 21 data"));
@@ -1086,10 +1214,28 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn the_4800_dpi_columns_move_as_the_interpreter_moves_them() {
+        // Capture 61 (x 0, correction -160): near the left edge; 59 (x 33,775, -102): away.
+        assert_eq!(columns_4800(552 - 160), (152, (7858, 12)));
+        assert_eq!(columns_4800(552 - 102 + 33_775), (25_825, (0, 418)));
+        let p = Plan::new(
+            Request::new(4800, 0, 3747, 1890, 1889, 8),
+            XCorrection(-160),
+        )
+        .unwrap();
+        assert_eq!(
+            (p.columns, p.t, p.lines, p.stagger()),
+            ((152, 2056), 0x41C0, 2090, 8)
+        );
+        assert_eq!(p.e46[0][2..4], [0x80, 0x94]);
+        assert!(p.late(0) && !p.late(1));
+    }
+
+    #[test]
     fn requests_out_of_the_table_are_errors() {
         let x = XCorrection(-93);
         assert!(Plan::new(Request::new(150, 0, 0, 100, 100, 8), x).is_err());
-        assert!(Plan::new(Request::new(4800, 0, 0, 100, 100, 8), x).is_err());
+        assert!(Plan::new(Request::new(3600, 0, 0, 100, 100, 8), x).is_err());
         // 900 dpi: base 1200, black pixels not known.
         assert!(Plan::new(Request::new(900, 0, 0, 100, 100, 8), x).is_err());
         assert!(Plan::new(Request::new(300, 0, 0, 100, 100, 12), x).is_err());
