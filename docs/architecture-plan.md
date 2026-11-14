@@ -1879,6 +1879,32 @@ decide. None changes the commands a scanner gets in the normal cases.
   with `1E 18`. Only made rarer (VetroScan now tries again every 3 s after ten tries). To decide
   the order (the lock first, and the stop only when no live program holds it): a capture of
   Epson Scan scanning while VetroScan starts, then the change, tried.
+  **Captured** (14 November 2026, Matteo at Epson Scan, 1200 dpi, 48 bits, the whole glass, a
+  white sheet; `captures/epson4490/05-catture.md`, 70-71): Epson Scan reads its image with no
+  command between the blocks. With the lock first (`epson4490 probe`, capture 70) Windows did
+  not give the scanner for the whole 20 s (`CreateDevice` or `LockDevice` failing, so
+  `StiLock::take` finding nothing to take) and nothing went out: no write from 19.6 s, when
+  Epson Scan began reading, to its end at 329 s; Epson Scan's scan finished, the image sound.
+  Without the lock (`probe --no-lock`, 71, the opening's first step today without its `1E 18`)
+  our `1B 03` went out between two of Epson Scan's reads: the scanner answered with a 512-byte
+  packet of the image (our read took `96 9D`, the rest lost), sent one more piece of 1,340
+  bytes to Epson Scan and then nothing; Epson Scan waited about 143 s and said it could not
+  talk to the scanner (switch it off and on). `epson4490 recover` then (`1E 18` unlocked):
+  3,699 bytes left out, the carriage home in 3 s, `18 81`, the lock taken again at once; no
+  power cycle. So the risk is real even without the `1E 18`. **Done** (14 November 2026): with
+  a lock other programs take (`Transport::locks`, the STI lock) the opening takes the lock
+  before writing anything, and a lock held is "in use by another program" with nothing
+  written. A scan of ours marks itself in the temporary folder while it lasts (`mark.rs`: a
+  file held open without sharing, which Windows closes when the process ends however it
+  ends), in the app and in `epson4490 scan`; a mark left by a process gone means a scan of
+  ours left half-way, and only then the state is asked before the lock and the scan stopped,
+  as since captures 52-54; the mark is cleared once settled. Left as with Epson's own driver:
+  a scan of another program left half-way (Epson Scan killed while reading), where taking the
+  lock has Epson's driver send `1B 06` (capture 44). Tests: the lock first with nothing
+  written, busy with nothing written, a left mark settled before the lock, a scan marked while
+  it lasts. Not yet tried on the scanner: the app opened while Epson Scan scans (it must say
+  busy and leave Epson Scan's scan whole), and the app killed half-way through a scan, then
+  opened again (it must stop the scan, as capture 54).
 - HP 3770 on Windows: the reason a scanner is not found (in use by another program, access
   denied, through `Backend::why_none`) shown in the app with the 3770 held by another program.
 

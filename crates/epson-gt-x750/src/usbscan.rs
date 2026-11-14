@@ -291,10 +291,12 @@ impl Transport for UsbscanTransport {
                 break lock;
             }
             if std::time::Instant::now() > until {
+                // So too while another program scans with it: Windows did not give it for the
+                // whole 20 s while Epson Scan read (capture 70, 14 November 2026).
                 return Err(Error::Busy(format!(
-                    "Windows' image service did not let go of the Epson 4490 in {} s (switched \
-                     on a moment ago, or not answering): try again in a little while, or switch \
-                     it off and on",
+                    "Windows did not give the Epson 4490 in {} s: another program is using it, \
+                     or it was switched on a moment ago or is not answering. Try again in a \
+                     little while, or switch it off and on",
                     LOCK_WAIT.as_secs()
                 )));
             }
@@ -302,6 +304,11 @@ impl Transport for UsbscanTransport {
         };
         self.lock = Some(lock);
         Ok(())
+    }
+
+    /// Windows' STI lock, which Epson Scan and WIA take too.
+    fn locks(&self) -> bool {
+        true
     }
 
     fn bulk_in(&mut self, buf: &mut [u8]) -> Result<usize> {

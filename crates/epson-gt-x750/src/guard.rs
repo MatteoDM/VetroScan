@@ -603,6 +603,10 @@ impl<T: Transport> Transport for Guarded<T> {
         self.inner.hold()
     }
 
+    fn locks(&self) -> bool {
+        self.inner.locks()
+    }
+
     fn permit_upload(&mut self, image: &[u8]) {
         if crate::firmware::check_image(image).is_ok() {
             self.upload = Some(image[HEADER_LEN..].to_vec());

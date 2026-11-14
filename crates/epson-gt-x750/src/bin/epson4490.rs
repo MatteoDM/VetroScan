@@ -501,6 +501,8 @@ fn scan(
     let start = std::time::Instant::now();
     let mut shown = 0;
     let mut blocks = 0;
+    // Marked as the application's: killed half-way, the application's opening stops it.
+    let _mark = epson_gt_x750::mark::ScanMark::begin(&epson_gt_x750::mark::default_path());
     let s = epson_gt_x750::scan::scan_glass(
         &mut t,
         request,

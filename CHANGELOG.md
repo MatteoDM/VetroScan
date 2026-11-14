@@ -18,6 +18,11 @@ GitHub; here they are in English.
 ## [Unreleased]
 
 ### Fixed
+- Epson Perfection 4490 on Windows: opening VetroScan while Epson Scan is scanning no longer
+  stops Epson Scan's scan (it ended with "cannot communicate with the scanner"): VetroScan now
+  takes the scanner from Windows before sending it anything, and says it is in use by another
+  program. A scan of VetroScan's own left half-way (the app closed or killed while reading) is
+  still stopped when the app opens again.
 - Epson Perfection 4490: a scan within 14 minutes of the last one, after the scanner was
   switched off and on, gets the lamp's two and a half minutes of warm-up again (before, it
   went without once the scanner had stopped saying its lamp was warming, about 20 s after

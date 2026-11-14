@@ -27,6 +27,7 @@
 
 pub mod firmware;
 pub mod guard;
+pub mod mark;
 mod nusb_backend;
 pub mod protocol;
 pub mod scan;
@@ -89,6 +90,12 @@ pub trait Transport: Send + fmt::Debug {
     fn hold(&mut self) -> Result<()> {
         Ok(())
     }
+    /// Whether [`Transport::hold`] takes a lock other programs take too (Windows' STI lock):
+    /// opening then takes it before writing anything, as a program holding it may be scanning
+    /// ([`Gt4490::start`]). Elsewhere a program scanning keeps the device to itself.
+    fn locks(&self) -> bool {
+        false
+    }
     /// Lets the upload of this firmware `image` (the whole checked `esfw54.bin`) out: only the
     /// [`guard`] keeps it, to let through that payload and nothing else after `1B 06`.
     fn permit_upload(&mut self, _image: &[u8]) {}
@@ -126,6 +133,10 @@ impl<T: Transport + ?Sized> Transport for Box<T> {
 
     fn hold(&mut self) -> Result<()> {
         (**self).hold()
+    }
+
+    fn locks(&self) -> bool {
+        (**self).locks()
     }
 
     fn permit_upload(&mut self, image: &[u8]) {
@@ -420,8 +431,9 @@ impl scanner_api::Backend for EpsonBackend {
     /// Opens the scanner and sends its firmware if it is not running (and
     /// that is allowed: [`UPLOAD_CONFIRMED`]).
     fn open(&self, device: &scanner_api::DeviceInfo) -> Result<Box<dyn scanner_api::Scanner>> {
-        // Unlocked: a scanner left half-way through a scan is settled before Epson's driver
-        // (given the lock) asks it anything ([`Gt4490::start`]).
+        // Unlocked: a scanner left half-way through a scan of ours is settled before Epson's
+        // driver (given the lock) asks it anything; otherwise the lock is taken first
+        // ([`Gt4490::start`]).
         let transport = open_unlocked(&device.id)?;
         let load = firmware_loader(self.upload, self.firmware_path.clone());
         Ok(Box::new(Gt4490::start(transport, load)?))
@@ -440,24 +452,52 @@ pub struct Gt4490 {
     lamp_used: Option<scan::LampUse>,
     /// What opening found and did about a scan left half-way, if there was one.
     recovered: Vec<String>,
+    /// Where a scan in progress is marked ([`mark`]).
+    mark: PathBuf,
 }
 
 impl Gt4490 {
     /// Takes the scanner on `transport`, sending it the firmware `load`
     /// gives if it is not running.
     ///
-    /// First, before [`Transport::hold`], it asks the state: a scanner a program left
-    /// half-way through a scan (closed or killed while reading) answers with its image, not a
-    /// state, and is stopped with `1E 18` ([`scan::recover`]; captures 44-51, 12 November
-    /// 2026). On Windows this comes before the STI lock, as given the lock Epson's driver asks
-    /// the state itself, takes the image for "no firmware" and tries to send it.
+    /// It asks the state with room for a packet of image: a scanner a program left half-way
+    /// through a scan (closed or killed while reading) answers with its image, not a state, and
+    /// is stopped with `1E 18` ([`scan::recover`]; captures 44-51, 12 November 2026).
+    ///
+    /// With a lock other programs take ([`Transport::locks`], Windows' STI lock) the lock comes
+    /// first, before anything is written: a program holding it may be scanning, and a state
+    /// asked then takes a packet of its image and stops its scan (capture 71, 14 November 2026:
+    /// Epson Scan stuck, then its error; with the lock first nothing went out, capture 70). Only
+    /// a scan of ours left by a process gone ([`mark`]) gets the state asked before the lock, as
+    /// given the lock Epson's driver asks it itself, takes the image for "no firmware" and tries
+    /// to send it (capture 44); a scan of another program left half-way then stays to Epson's
+    /// driver, as with Epson Scan.
     pub fn start(
         transport: Box<dyn Transport>,
         load: impl FnOnce() -> Result<firmware::Firmware>,
     ) -> Result<Self> {
+        Self::start_marked(transport, load, mark::default_path())
+    }
+
+    /// [`Gt4490::start`] with scans marked at `mark`.
+    fn start_marked(
+        transport: Box<dyn Transport>,
+        load: impl FnOnce() -> Result<firmware::Firmware>,
+        mark: PathBuf,
+    ) -> Result<Self> {
         let mut transport = guard::Guarded::new(transport);
-        let recovered = settle(&mut transport)?;
-        hold(&mut transport, !recovered.is_empty())?;
+        let recovered = if transport.locks() && !mark::left_by_a_process_gone(&mark) {
+            transport.hold()?;
+            settle(&mut transport)?
+        } else {
+            let recovered = settle(&mut transport)?;
+            hold(&mut transport, !recovered.is_empty())?;
+            recovered
+        };
+        // Settled: whatever the mark said is over.
+        if transport.locks() {
+            mark::clear(&mark);
+        }
         let firmware = protocol::ensure_firmware(&mut transport, load)?;
         Ok(Self {
             transport,
@@ -465,6 +505,7 @@ impl Gt4490 {
             firmware,
             lamp_used: None,
             recovered,
+            mark,
         })
     }
 
@@ -585,6 +626,8 @@ impl scanner_api::Scanner for Gt4490 {
             a.height,
             request.depth,
         );
+        // Marked until it ends: a process gone half-way through it leaves the mark behind.
+        let _mark = mark::ScanMark::begin(&self.mark);
         let options = scan::Options {
             last_used: self.lamp_used,
             curves: tables::Curves::Linear,
@@ -905,6 +948,125 @@ mod tests {
         assert!(e.to_string().contains("no answer left"), "{e}");
         // The guard is back to the commands that move nothing.
         assert!(s.transport.bulk_out(&scan::CANCEL).is_err());
+    }
+
+    /// What a [`Locking`] transport saw: the writes, and how many had gone out when the lock
+    /// was taken.
+    #[derive(Debug, Default)]
+    struct Seen {
+        writes: Vec<Vec<u8>>,
+        held_after: Option<usize>,
+    }
+
+    /// A transport with a lock other programs take, as Windows' STI lock; `busy` when another
+    /// program holds it.
+    #[derive(Debug)]
+    struct Locking {
+        mock: Mock,
+        busy: bool,
+        seen: std::sync::Arc<std::sync::Mutex<Seen>>,
+    }
+
+    impl Locking {
+        fn new(answers: &[&[u8]], busy: bool) -> (Self, std::sync::Arc<std::sync::Mutex<Seen>>) {
+            let seen = std::sync::Arc::default();
+            let t = Self {
+                mock: Mock::answering(answers),
+                busy,
+                seen: std::sync::Arc::clone(&seen),
+            };
+            (t, seen)
+        }
+    }
+
+    impl Transport for Locking {
+        fn bulk_out(&mut self, data: &[u8]) -> Result<()> {
+            self.seen.lock().unwrap().writes.push(data.to_vec());
+            self.mock.bulk_out(data)
+        }
+
+        fn bulk_in(&mut self, buf: &mut [u8]) -> Result<usize> {
+            self.mock.bulk_in(buf)
+        }
+
+        fn hold(&mut self) -> Result<()> {
+            if self.busy {
+                return Err(Error::Busy("another program scans".into()));
+            }
+            let mut seen = self.seen.lock().unwrap();
+            let n = seen.writes.len();
+            seen.held_after.get_or_insert(n);
+            Ok(())
+        }
+
+        fn locks(&self) -> bool {
+            true
+        }
+    }
+
+    fn mark_path(name: &str) -> PathBuf {
+        let p = std::env::temp_dir().join(format!(
+            "epson4490-start-test-{name}-{}",
+            std::process::id()
+        ));
+        mark::clear(&p);
+        p
+    }
+
+    /// With a lock other programs take, the lock comes before anything is written (capture
+    /// 70: Epson Scan scanning, nothing went out), and a lock held is an error with nothing
+    /// written (capture 71: a state asked then stopped Epson Scan's scan).
+    #[test]
+    fn with_a_shared_lock_the_lock_comes_first() {
+        let p = mark_path("first");
+        let (t, seen) = Locking::new(&[&IDLE, &IDLE], false);
+        let s =
+            Gt4490::start_marked(Box::new(t), || panic!("no firmware needed"), p.clone()).unwrap();
+        assert_eq!(seen.lock().unwrap().held_after, Some(0));
+        assert!(s.recovered.is_empty());
+        // Another program scanning: busy, nothing written.
+        let (t, seen) = Locking::new(&[], true);
+        let e = Gt4490::start_marked(Box::new(t), || panic!("no firmware needed"), p).unwrap_err();
+        assert!(matches!(e, Error::Busy(_)), "{e}");
+        assert!(seen.lock().unwrap().writes.is_empty());
+    }
+
+    /// A scan of ours left by a process gone (its mark left behind): the state is asked before
+    /// the lock and the scan stopped, as on the scanner (captures 52-54); the mark then goes.
+    #[test]
+    fn a_scan_of_ours_left_half_way_is_stopped_before_the_lock() {
+        let p = mark_path("left");
+        std::fs::write(&p, b"").unwrap();
+        let packet = [0x0Cu8; 512];
+        let (t, seen) = Locking::new(
+            &[&packet, &[], &[protocol::ACK], &[0x58, 0x81], &IDLE, &IDLE],
+            false,
+        );
+        let s =
+            Gt4490::start_marked(Box::new(t), || panic!("no firmware needed"), p.clone()).unwrap();
+        let seen = seen.lock().unwrap();
+        // 1B 03, 1E 18, 1B 03 until at rest, all before the lock.
+        assert!(seen.held_after.unwrap() >= 3, "{:02x?}", seen.writes);
+        assert_eq!(seen.writes[0], protocol::GET_STATE);
+        assert_eq!(seen.writes[1], scan::CANCEL);
+        assert!(!s.recovered.is_empty());
+        assert!(!p.exists());
+    }
+
+    /// A scan marks itself while it lasts, and the mark goes when it ends.
+    #[test]
+    fn a_scan_is_marked_while_it_lasts() {
+        let p = mark_path("scan");
+        let mut s = follow_29();
+        s.mark = p.clone();
+        let mut seen = false;
+        s.scan(&request_29(), &mut |_| {
+            seen |= p.exists();
+            true
+        })
+        .unwrap();
+        assert!(seen);
+        assert!(!p.exists());
     }
 
     #[test]
