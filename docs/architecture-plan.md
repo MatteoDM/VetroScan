@@ -1600,6 +1600,16 @@ never run by us (step 12).
     the light comes later (80 against 74), but no threshold crossing tried gives it on all 14
     captures (at 250, within a line on 9): the rule is to read in the interpreter. It moves the
     lid's unit by 12 steps (1/200 in) either way.
+    **The exposure, in the interpreter** (same night; `esxuin54.dll`, `llvm-objdump`): the film
+    calibration is `0x426af0`: it sets `1E 21` byte 12 to `3f`, the first exposure to 3840 µs
+    each channel (`0x42d28c`), a margin M (`0x42d278`, from `0x42d480`, computed from the read's
+    columns in `0x422dd0`) and per channel a ratio from a table at `0x40c820`; then the offsets'
+    search (`0x4245e0`, the rule above) and one of three: `0x424c00` (negatives, it seems: the
+    gains), `0x4254d0` (byte `0x35` = 1: slides?) or `0x426210`. `0x422ff0` turns exposures into
+    `1E 21`: X' = (X - 110) x k / 10 + 110 per channel, T = M + the longest X', rounded up to a
+    multiple of 384 µs (every T in the captures is one), each channel's value T - X'. From the
+    captures M is 5650-5760 at base 2400 and 8900-9016 at base 4800. Left: the three functions
+    (what level they aim at, how many rounds), and M exactly.
     **Left of step 14**, what Epson Scan computes from its calibration reads (each in the
     captures with its reads, to rebuild the same way): N from the 150-line read; the line time T and
     the three exposures of `1E 21` (from reads of the window at T 9600 / 13,056 and exposures
