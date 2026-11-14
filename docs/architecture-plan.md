@@ -1594,7 +1594,12 @@ never run by us (step 12).
     each channel integrates T less its own value (bytes 3-5, 6-8, 9-11), and the 8-bit levels of
     the window's reads follow it (74: 61 at 3840, 207 at 13,182); for negatives the gains then
     (`1E 31` bytes 8-10, from `22 1b 1b`, at most 5 down a read, about 2.5 % a unit) bring each
-    channel's mean to about 204-211. Their exact rules: not read yet.
+    channel's mean to about 204-211. Their exact rules: not read yet. **N, seen**: the 150-line
+    read (8 bits, 12 steps a line) sees the lid's light come in by steps between lines 22 and
+    31 and go out about line 95-105; N is 12 x a line count (228, 240, 252) and goes down when
+    the light comes later (80 against 74), but no threshold crossing tried gives it on all 14
+    captures (at 250, within a line on 9): the rule is to read in the interpreter. It moves the
+    lid's unit by 12 steps (1/200 in) either way.
     **Left of step 14**, what Epson Scan computes from its calibration reads (each in the
     captures with its reads, to rebuild the same way): N from the 150-line read; the line time T and
     the three exposures of `1E 21` (from reads of the window at T 9600 / 13,056 and exposures
