@@ -401,6 +401,18 @@ pub fn fixed_ramp(n: usize) -> Vec<u16> {
     out
 }
 
+/// The film path's fixed ramp of 512 values (`0x401460`, the gentler one the interpreter picks
+/// with the transparency unit, `04-carriage.md`): the same acceleration as [`fixed_ramp`], to
+/// 10⁶/222 steps/s, with k 1023.065 in place of 1021 (fitted: every value as the interpreter's
+/// table and as every film capture's start and park moves; 1023.06-1023.07 all give it), the
+/// first period 2500 µs, the last 222. Computed, not copied.
+pub fn film_ramp() -> Vec<u16> {
+    let mut out = accelerate(222, 512, 1023.065, 1.0);
+    out[0] = 2500;
+    out[511] = 222;
+    out
+}
+
 /// A move of `steps` without reading.
 pub fn start_move(steps: u32) -> Move {
     let (kind, ramp, block) = if steps < 0x202 {
@@ -446,7 +458,7 @@ pub fn shading_header(columns: u32) -> [u8; 8] {
 
 /// A `1E 41` block (`0x41f730`, 22 bytes).
 #[allow(clippy::too_many_arguments)]
-fn block41(
+pub(crate) fn block41(
     c0: u32,
     c1: u32,
     lines: u32,

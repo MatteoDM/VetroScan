@@ -1651,6 +1651,16 @@ never run by us (step 12).
     glass's computation, but at base 4800 the minimum dark of the even and the odd columns apart
     (`1E 42` carries both: 687 and 1650 in 77): then the dark bytes as Epson's but a few; the white
     bytes 2-4 units off (the glass's about 1; Epson's rule for dusty lines unknown).
+    **The film plan** (same night; `film::FilmPlan`, a test: every read's `1E 41` of 74, 76, 77
+    and 80 as captured): the origin read (2800-3184, 150 lines, 1/12, `1E 11` 03, T 6144), the
+    black pixels' reads (35-83 or 70-166, the image's ratio), the window's (2276-8756 or
+    2320-15280, 8 bits), the white (the image's columns, 16 lines, 1/2, byte 11 `40`), the dark (64
+    lines, the image's ratio), the image; the black reads' words and margin (60, 0 and 3596 at
+    base 2400; 81, 0 and 3634 at 4800, from the captures' T and words). **The film path's
+    512-value ramp** (`0x401460`, the park and start moves) computed with the glass's formula,
+    period 222 µs and k 1023.065 (`setup::film_ramp`: every value as the interpreter's). **To ask
+    Matteo**: `film_cal::GAIN_TABLE` is the interpreter's 64 values copied (no formula found),
+    where the ramps are computed.
     **Decided, not read**: the gamma and tone tables linear (the identity), as on the glass, where
     the app turns the samples into its tone (Epson Scan sends a negative's inverted curve). Left
     of step 14: the white bytes' rule, then the film scan's sequence in `scan.rs` with all this,

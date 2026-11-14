@@ -228,6 +228,105 @@ pub fn geometry(r: &FilmRequest, corr: XCorrection) -> Result<Geometry> {
     })
 }
 
+/// The `1E 43` of the film's reads after the lid unit's origin (gains 1.0 and the film's own
+/// constants, `0040` each: every film capture), and of its image (`0040` throughout).
+pub const E43_READS: [u8; 12] = [
+    0x00, 0x80, 0x00, 0x80, 0x00, 0x80, 0x00, 0x40, 0x00, 0x40, 0x00, 0x40,
+];
+/// The image read's `1E 43`.
+pub const E43_IMAGE: [u8; 12] = [
+    0x00, 0x40, 0x00, 0x40, 0x00, 0x40, 0x00, 0x40, 0x00, 0x40, 0x00, 0x40,
+];
+
+/// The lid unit's origin read (every film capture): `1E 11` 03, `1E 21` T 6144 and nothing else
+/// but byte 12 `2a`, `1E 41` columns 2800-3184, 150 lines, 8 bits, ratio 1/12, `1E 31` offsets
+/// `80` and gains `1e`; its move 8 steps (one-value ramp 156) before, 1920 with a lead of 120
+/// during.
+pub const ORIGIN_E11: u8 = 0x03;
+/// The origin read's `1E 31`.
+pub const ORIGIN_E31: [u8; 12] = [0x80, 0, 0x80, 0, 0x80, 0, 0, 0, 0x1E, 0x1E, 0x1E, 0];
+
+/// What a film scan sends that follows from its request and `1E 87`'s correction: the
+/// [`Geometry`], and every `1E 41` and fixed move of its reads (captures 17, 74-81; the
+/// calibration's values, from the reads, are `crate::film_cal`'s).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FilmPlan {
+    /// What was asked.
+    pub request: FilmRequest,
+    /// Its geometry.
+    pub geometry: Geometry,
+    /// `1E 21` of the origin read.
+    pub e21_origin: [u8; 26],
+    /// `1E 41` of the origin read.
+    pub e41_origin: [u8; 22],
+    /// `1E 41` of the black pixels' reads (4 lines, 16 bits).
+    pub e41_black: [u8; 22],
+    /// `1E 41` of the window's exposure reads (4 lines, 8 bits).
+    pub e41_window: [u8; 22],
+    /// `1E 41` of the white read (16 lines over the image's columns, ratio 1/2).
+    pub e41_white: [u8; 22],
+    /// `1E 41` of the dark read (64 lines over the image's columns).
+    pub e41_dark: [u8; 22],
+    /// `1E 41` of the image read, byte 15 (the shading's scales) still zero.
+    pub e41_image: [u8; 22],
+    /// The black pixels' reads' `1E 21` words (bytes 13-16) and margin (the line time is it +
+    /// the longest exposure, rounded up to 384, in the offsets' search).
+    pub black: ((u16, u16), u32),
+    /// The image columns' margin (`crate::film_cal::image_margin`).
+    pub image_margin: u32,
+}
+
+impl FilmPlan {
+    /// The plan of `request` with `1E 87`'s x correction `corr`.
+    pub fn new(request: FilmRequest, corr: XCorrection) -> Result<Self> {
+        use crate::setup::block41;
+        let g = geometry(&request, corr)?;
+        let (den, num) = g.ratio;
+        let (c0, c1) = g.columns;
+        let lines = g.lines;
+        let base4800 = g.base == 4800;
+        let (b0, b1) = if base4800 { (70, 166) } else { (35, 83) };
+        let (w0, w1) = if base4800 {
+            (2320, 15_280)
+        } else {
+            (2276, 8756)
+        };
+        let mut e21_origin = [0u8; 26];
+        e21_origin[..3].copy_from_slice(&6144u32.to_le_bytes()[..3]);
+        e21_origin[12] = 0x2A;
+        let r8 = c0 - 4 * u32::from(g.words.1) - 80;
+        Ok(Self {
+            request,
+            e21_origin,
+            e41_origin: block41(2800, 3184, 150, 0x01, 1, 12, 0, 0, 0x80, 0x80, 150),
+            e41_black: block41(b0, b1, 4, 0x00, den, num, 0, 0, 0x80, 0, 4),
+            e41_window: block41(w0, w1, 4, 0x01, den, num, 0, 0, 0x80, 0, 4),
+            e41_white: block41(c0, c1, 16, 0x00, 1, 2, 0x40, 0, 0x80, 0x80, 16),
+            e41_dark: block41(c0, c1, 64, 0x00, den, num, 0, 0, 0x80, 0, 64),
+            e41_image: block41(
+                c0,
+                c1,
+                lines,
+                g.b8,
+                den,
+                num,
+                0x80,
+                0x80,
+                0x00,
+                0xA0,
+                g.lines_per_block,
+            ),
+            black: if base4800 {
+                ((81, 0), 3634)
+            } else {
+                ((60, 0), 3596)
+            },
+            image_margin: crate::film_cal::image_margin(g.base, r8, c1 - c0),
+            geometry: g,
+        })
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -530,5 +629,91 @@ pub(crate) mod tests {
                 w
             );
         }
+    }
+    fn hexb(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    /// Every `1E 41` of captures 74 (600 dpi), 77 (2400), 76 (4800 x 5400) and 80 (a slide).
+    #[test]
+    fn a_film_plans_reads_are_as_captured() {
+        let cases: [(usize, i16, [&str; 6]); 4] = [
+            (
+                2,
+                -122,
+                [
+                    "f00a700c9600000001010c0000000000808096000000",
+                    "23005300040000000001040000000000800004000000",
+                    "e4083422040000000101040000000000800004000000",
+                    "4b094b12100000000001024000000000808010000000",
+                    "4b094b12400000000001040000000000800040000000",
+                    "4b094b1282030000200104808000000000a012000000",
+                ],
+            ),
+            (
+                6,
+                -122,
+                [
+                    "f00a700c9600000001010c0000000000808096000000",
+                    "4600a600040000000001010000000000800004000000",
+                    "1009b03b040000000101010000000000800004000000",
+                    "6a097a1b100000000001024000000000808010000000",
+                    "6a097a1b400000000001010000000000800040000000",
+                    "6a097a1b0e0e0000000101808000000000a002000000",
+                ],
+            ),
+            (
+                4,
+                -122,
+                [
+                    "f00a700c9600000001010c0000000000808096000000",
+                    "4600a600040000000009040000000000800004000000",
+                    "1009b03b040000000109040000000000800004000000",
+                    "7709871b100000000001024000000000808010000000",
+                    "7709871b400000000009040000000000800040000000",
+                    "7709871ba41f0000000904808000000000a002000000",
+                ],
+            ),
+            (
+                9,
+                -122,
+                [
+                    "f00a700c9600000001010c0000000000808096000000",
+                    "4600a600040000000001010000000000800004000000",
+                    "1009b03b040000000101010000000000800004000000",
+                    "e40a8425100000000001024000000000808010000000",
+                    "e40a8425400000000001010000000000800040000000",
+                    "e40a84253f090000000101808000000000a001000000",
+                ],
+            ),
+        ];
+        let requests = crate::film::tests::CAPTURED;
+        for (i, corr, want) in cases {
+            let p = FilmPlan::new(requests[i].1, XCorrection(corr)).unwrap();
+            let got = [
+                p.e41_origin,
+                p.e41_black,
+                p.e41_window,
+                p.e41_white,
+                p.e41_dark,
+                p.e41_image,
+            ];
+            for (k, (g, w)) in got.iter().zip(want).enumerate() {
+                assert_eq!(g.to_vec(), hexb(w), "{:?}, read {k}", requests[i].1);
+            }
+        }
+    }
+
+    #[test]
+    fn the_film_ramp_is_the_interpreters() {
+        let r = crate::setup::film_ramp();
+        assert_eq!(r.len(), 512);
+        assert_eq!(&r[..6], &[2500, 2239, 2045, 1895, 1774, 1673]);
+        assert_eq!(r[511], 222);
+        // Every value, summed, as in the captures' tables.
+        assert_eq!(r.iter().map(|&v| u32::from(v)).sum::<u32>(), 209_590);
     }
 }
