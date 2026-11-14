@@ -5,8 +5,11 @@
 //! outside the repository): the strips' and the slides' holders share one window,
 //! [`ADAPTER_INCHES`] (Epson Scan's preview of either asks 810 x 2799 pixels at 300 dpi from
 //! `(0, 0)`); a film's `1E 57` is Epson Scan's form ([`request_block`]), rebuilt byte for byte
-//! by the tests from every film capture. What may be sent is [`crate::guard`]'s.
+//! by the tests from every film capture; what the set-up takes from the request is
+//! [`geometry`], checked on the eight film scans captured. What may be sent is
+//! [`crate::guard`]'s.
 
+use crate::setup::XCorrection;
 use scanner_api::{Error, Result};
 
 /// The transparency unit's window, inches across and along: Epson Scan's preview of the strips
@@ -81,6 +84,148 @@ pub fn request_block(r: &FilmRequest) -> Result<[u8; 42]> {
     e57[29] = 0x04;
     e57[37] = u8::from(r.film == Film::Negative);
     Ok(e57)
+}
+
+/// Where Epson Scan parks the carriage for films, from home (`04-carriage.md`'s `0x420f60`): the
+/// first move of every film scan (`1E 25 00`), by 1994 less where the carriage is (captures
+/// 74-81: from 0; capture 72: already there, no move).
+pub const PARK: u32 = 1994;
+
+/// The steps a move with the 512-value ramp spends on its ramps, up and down: such a `1E 01`
+/// carries the steps beyond them.
+pub const RAMP_512_STEPS: u32 = 1024;
+
+/// The film window's first column, in 4800ths of an inch at base 4800, less `1E 87`'s x
+/// correction (captures 17 with -93 and 74-81 with -122: the same window).
+pub const FILM_ORIGIN: i32 = 13_320;
+
+/// The start move's constant: the image's first line is `y * 2400 / ydpi + START_K - lead`
+/// steps ahead of the carriage after the white read (at 2058 in every capture).
+const START_K: u32 = 583;
+
+/// The most bytes of image a block carries (as on the glass): the lines per block are this over
+/// the bytes of a line.
+const BLOCK_MAX: u32 = 65_527;
+
+/// What a film scan's set-up takes from its request, as Epson Scan computes it (read from
+/// captures 17 and 74-81 and Epson's interpreter, `captures/epson4490/tools/filmsetup.py`, 0
+/// differences on all eight): the columns, the lines, the motor's ratios and moves. What comes
+/// from the calibration reads (the lid unit's origin, the offsets and gains of `1E 31`, the
+/// line time T and the exposures of `1E 21`, the shading) is not here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Geometry {
+    /// The sensor's base: 2400 up to 1200 dpi, 4800 at 2400 and 4800 dpi.
+    pub base: u32,
+    /// The resolution read across: 4800 for a 2400 dpi film (two columns a pixel, halved on
+    /// the computer), the request's otherwise.
+    pub read_dpi: u32,
+    /// Pixels a line across, as read: a multiple of 16.
+    pub pixels: u32,
+    /// The read's first column and the one after its last, at `base`.
+    pub columns: (u32, u32),
+    /// `1E 21`'s words at bytes 13-14 and 15-16 for the reads of the image's columns.
+    pub words: (u16, u16),
+    /// Lines read: the image's, the colours' offsets (2 x ydpi / 50) and, read at 4800 across,
+    /// the staggered columns' (4 lines at 2400 along, 12 at 5400).
+    pub lines: u32,
+    /// `1E 41`'s byte 8: the ratio of `read_dpi` to `base`, `| 1` at 8 bits.
+    pub b8: u8,
+    /// The motor's ratio, ydpi / 2400 reduced: `1E 41`'s bytes 9 and 10.
+    pub ratio: (u8, u8),
+    /// Lines a data block carries.
+    pub lines_per_block: u16,
+    /// The image read's lead (steps before the first line).
+    pub lead: u32,
+    /// The image read's `1E 01` steps: its lines along at 2400 steps an inch, and the lead.
+    pub read_steps: u32,
+    /// The start move's `1E 01` steps (with the 512-value ramp, both carriages): from the
+    /// carriage after the white read to the image's first line.
+    pub start_steps: u32,
+    /// `1E 11` for the film's reads: 8 + 1 at base 2400.
+    pub e11: u8,
+}
+
+impl Geometry {
+    /// The image read's one-value ramp for a line time `t` (µs): (den x T / num) >> 4, as the
+    /// glass's (captures: 210 at 600 dpi with T 13,440, 1890 at 4800 x 5400).
+    pub fn read_ramp(&self, t: u32) -> u16 {
+        let (den, num) = self.ratio;
+        ((u32::from(den) * t / u32::from(num)) >> 4) as u16
+    }
+
+    /// The columns read, at `base`.
+    pub fn column_count(&self) -> u32 {
+        self.columns.1 - self.columns.0
+    }
+}
+
+fn gcd(a: u32, b: u32) -> u32 {
+    if b == 0 {
+        a
+    } else {
+        gcd(b, a % b)
+    }
+}
+
+/// The geometry of a film request with `1E 87`'s x correction `corr`. The start column is the
+/// glass's left-edge form (`0x40fdd0`: divisor 6 at base 4800, 3 at base 2400) from the logical
+/// start (`FILM_ORIGIN` + `corr`) x base / 4800 + x; at base 2400 only an even correction was
+/// captured (-122), so how an odd one rounds is not known.
+pub fn geometry(r: &FilmRequest, corr: XCorrection) -> Result<Geometry> {
+    let bad = |why: &str| Err(Error::InvalidRequest(format!("Epson 4490: {why}")));
+    if !matches!(r.dpi, 600 | 1200 | 2400 | 4800) || r.width == 0 || r.height == 0 {
+        return bad("a film request outside the resolutions modelled");
+    }
+    let (base, read_dpi) = if r.dpi >= 2400 {
+        (4800, 4800)
+    } else {
+        (2400, r.dpi)
+    };
+    let pixels = (r.width * read_dpi / r.dpi).div_ceil(16) * 16;
+    let count = pixels * base / read_dpi;
+    let d = 6 * base / 4800;
+    let logical =
+        (FILM_ORIGIN + i32::from(corr.0)) * base as i32 / 4800 + (r.x * base / r.dpi) as i32;
+    let Ok(logical) = u32::try_from(logical) else {
+        return bad("a film's start column before the scanner's first");
+    };
+    let r9 = ((logical.saturating_sub(80) / d) >> 3) * 2;
+    let r8 = logical - 4 * d * r9 - 80;
+    let c0 = r8 + 4 * r9 + 80;
+    let w1 = (((r8 + count + 160) >> 1) + 2 * r9) >> 1;
+    let g = gcd(r.ydpi, 2400);
+    let (den, num) = (r.ydpi / g, 2400 / g);
+    let stagger = match r.ydpi {
+        2400 => 4,
+        5400 => 12,
+        _ => 0,
+    };
+    let lines = r.height + 2 * (r.ydpi / 50) + stagger;
+    let line_bytes = pixels * 3 * u32::from(r.bits) / 8;
+    let ratio_code = match base / read_dpi {
+        1 => 0x00,
+        2 => 0x10,
+        4 => 0x20,
+        8 => 0x50,
+        _ => return bad("a film's read resolution with no ratio code"),
+    };
+    let lead = if r.dpi == 600 { 128 } else { 32 };
+    let y_steps = r.y * 2400 / r.ydpi;
+    Ok(Geometry {
+        base,
+        read_dpi,
+        pixels,
+        columns: (c0, c0 + count),
+        words: (w1 as u16, r9 as u16),
+        lines,
+        b8: ratio_code | u8::from(r.bits == 8),
+        ratio: (den as u8, num as u8),
+        lines_per_block: (BLOCK_MAX / line_bytes) as u16,
+        lead,
+        read_steps: lines * 2400 / r.ydpi + lead,
+        start_steps: (y_steps + START_K - lead).saturating_sub(RAMP_512_STEPS),
+        e11: 8 + u8::from(base == 2400),
+    })
 }
 
 #[cfg(test)]
@@ -192,5 +337,198 @@ pub(crate) mod tests {
             (preview.width, preview.height),
             (px(ADAPTER_INCHES.0), px(ADAPTER_INCHES.1))
         );
+    }
+
+    /// The geometry of every film scan captured (17 and 74-81), as Epson Scan sent it: request,
+    /// `1E 87`'s correction, then columns, words, lines, b8, ratio, lines per block, read steps
+    /// and lead, start steps, `1E 11`, the line time and its read ramp.
+    #[allow(clippy::type_complexity)]
+    const SCANS: [(
+        FilmRequest,
+        i16,
+        (u32, u32),
+        (u16, u16),
+        u32,
+        u8,
+        (u8, u8),
+        u16,
+        (u32, u32),
+        u32,
+        u8,
+        u32,
+        u16,
+    ); 8] = {
+        const fn r(
+            dpi: u32,
+            ydpi: u32,
+            x: u32,
+            y: u32,
+            width: u32,
+            height: u32,
+            bits: u8,
+        ) -> FilmRequest {
+            FilmRequest {
+                dpi,
+                ydpi,
+                x,
+                y,
+                width,
+                height,
+                bits,
+                film: Film::Negative,
+            }
+        }
+        [
+            (
+                r(2400, 2400, 423, 952, 2080, 3319, 16),
+                -93,
+                (2433, 6593),
+                (1668, 582),
+                3419,
+                0x00,
+                (1, 1),
+                2,
+                (3451, 32),
+                479,
+                8,
+                13_056,
+                816,
+            ),
+            (
+                r(600, 600, 93, 209, 576, 874, 16),
+                -122,
+                (2379, 4683),
+                (1190, 574),
+                898,
+                0x20,
+                (1, 4),
+                18,
+                (3720, 128),
+                267,
+                9,
+                13_440,
+                210,
+            ),
+            (
+                r(1200, 1200, 186, 419, 1153, 1749, 16),
+                -122,
+                (2379, 4715),
+                (1198, 574),
+                1797,
+                0x10,
+                (1, 2),
+                9,
+                (3626, 32),
+                365,
+                9,
+                13_440,
+                420,
+            ),
+            (
+                r(4800, 5400, 745, 1889, 4615, 7872, 16),
+                -122,
+                (2423, 7047),
+                (1781, 576),
+                8100,
+                0x00,
+                (9, 4),
+                2,
+                (3632, 32),
+                366,
+                8,
+                13_440,
+                1890,
+            ),
+            (
+                r(2400, 2400, 326, 18706, 2307, 3498, 16),
+                -122,
+                (2410, 7034),
+                (1778, 572),
+                3598,
+                0x00,
+                (1, 1),
+                2,
+                (3630, 32),
+                18_233,
+                8,
+                13_824,
+                864,
+            ),
+            (
+                r(2400, 2400, 326, 18706, 2308, 3498, 8),
+                -122,
+                (2410, 7034),
+                (1778, 572),
+                3598,
+                0x01,
+                (1, 1),
+                4,
+                (3630, 32),
+                18_233,
+                8,
+                13_824,
+                864,
+            ),
+            (
+                r(2400, 2400, 1515, 3008, 3401, 2267, 16),
+                -122,
+                (2788, 9604),
+                (2421, 672),
+                2367,
+                0x00,
+                (1, 1),
+                1,
+                (2399, 32),
+                2535,
+                8,
+                24_576,
+                1536,
+            ),
+            (
+                r(2400, 2400, 1561, 18496, 3401, 2267, 16),
+                -122,
+                (2800, 9616),
+                (2424, 676),
+                2367,
+                0x00,
+                (1, 1),
+                1,
+                (2399, 32),
+                18_023,
+                8,
+                16_512,
+                1032,
+            ),
+        ]
+    };
+
+    #[test]
+    fn every_captured_film_scan_has_its_geometry() {
+        for (r, corr, columns, words, lines, b8, ratio, lpb, read, start, e11, t, ramp) in SCANS {
+            let g = geometry(&r, XCorrection(corr)).unwrap();
+            assert_eq!(g.columns, columns, "{r:?}");
+            assert_eq!(g.words, words, "{r:?}");
+            assert_eq!(g.lines, lines, "{r:?}");
+            assert_eq!(g.b8, b8, "{r:?}");
+            assert_eq!(g.ratio, ratio, "{r:?}");
+            assert_eq!(g.lines_per_block, lpb, "{r:?}");
+            assert_eq!((g.read_steps, g.lead), read, "{r:?}");
+            assert_eq!(g.start_steps, start, "{r:?}");
+            assert_eq!(g.e11, e11, "{r:?}");
+            assert_eq!(g.read_ramp(t), ramp, "{r:?}");
+        }
+    }
+
+    #[test]
+    fn the_shading_tables_are_as_wide_as_captured() {
+        let widths = [
+            24_960, 13_824, 14_016, 27_744, 27_744, 27_744, 40_896, 40_896,
+        ];
+        for ((r, corr, ..), w) in SCANS.iter().zip(widths) {
+            assert_eq!(
+                geometry(r, XCorrection(*corr)).unwrap().column_count() * 6,
+                w
+            );
+        }
     }
 }

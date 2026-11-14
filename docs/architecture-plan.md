@@ -1565,7 +1565,34 @@ never run by us (step 12).
       and the lid's lamp (`1E A2 02`, not `01`, not `00`), and nothing that moves (`1E 25`, `01`,
       `05`, `47`, `84`, `8A`, `11`, `41` refused for a film: "a film moves nothing yet"); a
       glass scan cannot light the lid's lamp. Tests.
-    **Left of step 14**: the film path as rules (`setup.rs`' work for films): the park, the
+    **The geometry done** (14 November 2026, night; `film::geometry`, a test on all eight film
+    scans; the model `captures/epson4490/tools/filmsetup.py --check`, 0 differences): what the
+    set-up takes from the request. `1E 25` selects what moves (`00` the carriage, `02` the lid's
+    unit, `03` both) and moves are relative. The park: 1994 less the carriage's position (512
+    ramp). The unit's origin: 8 steps, the 150-line read over 1920 + 512 steps, back N + 1024,
+    `1E 8A` = 1024 + N, the unit then at 1416 - N. The base: 2400 up to 1200 dpi, 4800 at 2400
+    and 4800 (a 2400 dpi film is read at 4800 across, two columns a pixel); the pixels read a
+    multiple of 16; `1E 11` 8 + 1 at base 2400. **The start column**: the glass's left-edge form
+    (`0x40fdd0`, divisor 6 at base 4800, 3 at 2400) from (13,320 + `1E 87`'s correction) x base /
+    4800 + x, its words in `1E 21` bytes 13-16 (w1 from the columns + 160); two power-ons (-93,
+    -122) at base 4800, one (-122) at base 2400. The lines: h + 2 x ydpi / 50, + 4 at 2400 along,
+    + 12 at 5400. `1E 41` byte 8 the ratio code (| 1 at 8 bits), its ratio ydpi / 2400, the lines
+    per block 65,527 // a line's bytes. The read's ramp (den x T / num) >> 4, its steps lines x
+    2400 / ydpi + the lead (128 at 600 dpi, 32 otherwise), the start move y x 2400 / ydpi + 583 -
+    lead - 1024 from the carriage at 2058. The black pixels' columns 35-83 (base 2400) or 70-166,
+    the window's for the exposure reads 2276-8756 or 2320-15280. Epson's interpreter places the
+    film with values it reads from the scanner (`0x421470`, the holder's marks it seems, with
+    defaults): in every capture they gave the same window, so the constant; not known when they
+    would differ.
+    **Left of step 14**, what Epson Scan computes from its calibration reads (each in the
+    captures with its reads, to rebuild the same way): N from the 150-line read; the offsets
+    (`1E 31` bytes 0-5: a search bit by bit from `80`, on the black pixels); the line time T and
+    the three exposures of `1E 21` (from reads of the window at T 9600 / 13,056 and exposures
+    5760 / 9216: two or three rounds; slides differently from negatives); the gains (`1E 31`
+    bytes 8-10, negatives only, steps of 5); the white read's and the dark read's `1E 21`; the
+    `1E 42` blocks and the shading (as the glass's?); the gamma tables (`1E B3`: an inverted
+    curve for negatives, the preview's levels for slides). Then the sequence in `scan.rs`. Old
+    list, kept: the park, the
     unit's origin from the 150-line read, the `1E 31` search (what it aims at, from the reads),
     the dark read, the columns and moves at each resolution, the 4800 reduction along; each
     rebuilt from captures 74-81 by a test before anything moves. The first film scan of ours is
