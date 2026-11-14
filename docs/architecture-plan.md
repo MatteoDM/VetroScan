@@ -1676,12 +1676,30 @@ never run by us (step 12).
     of 228, 240 or 252 steps and their `1E 8A`, the white's 64), the plan's start and read moves
     once permitted; `1E 05` only after a move; `1E 21` with a line time a multiple of 384 within
     6144-25,344 µs; one-value ramps no faster than 156; the plan's `1E 41`; the ramps computed
-    (the film's 512 and the origin read's); linear tone tables; the plan's shading. Left of step
-    14: the image read (`1E 8B`/`1E 83`, the tone tables, the start move, the image's set-up with
-    the shading, the read), the image put together (the colours' offsets, the staggered columns
-    at 4800 across, 2400 halved across, 5400 reduced along), a command to try it; then the first
-    film scan of ours with Matteo at the scanner (capture 74's frame at 600 dpi). The white bytes'
-    rule (2-4 units off) can wait for that scan's result.
+    (the film's 512 and the origin read's); linear tone tables; the plan's shading.
+    **The image read in the driver** (14 November 2026, night; `scan::scan_film`, tests: captures
+    74, 77 and 80 written write by write to their last line, the carriages home): after the dark
+    read `1E 8B` (`06` in every film capture: the 07 table read back with `1E 83`; `15` is handled
+    as on the glass, the raw line read and the table computed and loaded, **never captured before a
+    film**); `1E 86` must answer where the white read leaves the carriages (the carriage at 2058,
+    the lid's unit at 1416 less the move back + 64), or nothing more moves; the image's `1E 21` (the
+    dark read's block, sent again); the tone tables, linear; the start move (`Geometry::start_steps`
+    with the film's 512-value ramp, `1E 05`); `1E 31` (the offsets and the image's gains), `1E 11`,
+    `1E 21`, `1E 41` with the shading's scales in byte 15, `1E 42` and the shading table
+    (`Shading::compute_by_parity` at base 4800, `compute` at 2400), `1E 43` (`0040` throughout for a
+    negative, `8000` for a slide); the read's one-value ramp ((den x T / num) >> 4 of the image's T)
+    and move (lines along + the lead, flag `08`); `1E 47`, the read; `1B 03` until at rest (the
+    carriages go home by themselves: about 5 s in 74). The guard now lets the image's start move out
+    once, then its read move once, in that order, and the 07 table for a film plan. A frame whose
+    start move would be shorter than the ramps (the top 6 mm of the window at 600 dpi, 5 mm
+    otherwise) is refused: never captured (the least start move seen is 267 steps beyond them,
+    capture 74). Stopping during the image read is not sent as `1E 18` (no film capture was
+    stopped): the read goes on to its end, then ends as cancelled; a read that fails is still
+    stopped with `1E 18`, as on the glass, so that the scanner is not left sending. Left of step 14:
+    the image put together (the colours' offsets, the staggered columns at 4800 across, 2400 halved
+    across, 5400 reduced along), a command to try it; then the first film scan of ours with Matteo
+    at the scanner (capture 74's frame at 600 dpi). The white bytes' rule (2-4 units off) can wait
+    for that scan's result.
     **Left of step 14**, what Epson Scan computes from its calibration reads (each in the
     captures with its reads, to rebuild the same way): N from the 150-line read; the line time T and
     the three exposures of `1E 21` (from reads of the window at T 9600 / 13,056 and exposures

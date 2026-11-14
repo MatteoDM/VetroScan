@@ -19,8 +19,9 @@
 //! commands out only for a request and a plan inside what the captures cover
 //! ([`Guarded::permit_request`], [`Guarded::permit_plan`]).
 //!
-//! For films, so far only the lid's lamp ([`light_lid_lamp`]): the beginning of Epson Scan's
-//! film scan, as far as the lamp is lit; the film path itself is not here yet.
+//! Films ([`scan_film`]): the lid's lamp ([`light_lid_lamp`]), the film's calibration
+//! ([`calibrate_film`]) and its image read, as Epson Scan's captures 74-81, through the guard's
+//! film path ([`Guarded::permit_film_path`], [`Guarded::permit_film_plan`]).
 
 use crate::film::{FilmPlan, FilmRequest};
 use crate::guard::Guarded;
@@ -536,6 +537,14 @@ pub struct FilmCalibration {
     pub dark: Vec<u8>,
     /// The power-on the scan was made in (`1E 87`).
     pub power_on: PowerOn,
+    /// The lid unit's move back after its origin read (`1E 8A` less 1024): where it is after.
+    pub back: u32,
+}
+
+/// Where the white read leaves the carriages (`1E 86`, captures 74, 77, 80): both 64 steps on
+/// from the park and the lid unit's origin, the carriage at 2058.
+fn after_white(back: u32) -> (u32, u32) {
+    (crate::film::PARK + 64, 1416 - back + 64)
 }
 
 /// The `1E 31` block: offsets and gains.
@@ -899,6 +908,194 @@ fn film_calibration<T: Transport>(
         white,
         dark,
         power_on,
+        back: n,
+    })
+}
+
+/// A film scanned ([`scan_film`]).
+#[derive(Debug, Clone)]
+pub struct FilmScanned {
+    /// What the calibration found and set.
+    pub calibration: FilmCalibration,
+    /// The shading computed from its white and dark reads.
+    pub shading: Shading,
+    /// The image data as the scanner sent it, trailers removed: [`crate::film::Geometry::lines`]
+    /// lines of [`crate::film::Geometry::line_bytes`].
+    pub raw: Vec<u8>,
+}
+
+/// Scans a film as Epson Scan does (captures 74-81): its calibration ([`calibrate_film`]), then
+/// the image: `1E 8B` and the 07 table, the carriages' positions, the image's `1E 21`, the tone
+/// tables (linear), the start move with the film path's ramp, the image's set-up with the
+/// shading, the read's one-value ramp and move, the read, and the carriages home.
+///
+/// Stopping (`events` answering `false`) is honoured up to the calibration; once the image is
+/// being read it goes on to its end, as no film scan was ever captured stopped with `1E 18`
+/// (the read then ends with [`Error::Cancelled`]). A read that fails is stopped with `1E 18`,
+/// as on the glass, so that the scanner is not left sending (never captured on films either).
+pub fn scan_film<T: Transport>(
+    g: &mut Guarded<T>,
+    request: &FilmRequest,
+    slide_factor: u32,
+    log: &mut dyn FnMut(String),
+    events: &mut dyn FnMut(Event) -> bool,
+) -> Result<FilmScanned> {
+    g.permit_film(request)?;
+    let result = film_calibration(g, request, slide_factor, log, events)
+        .and_then(|c| film_image(g, c, log, events))
+        .map_err(|e| after(e, g.last_command()));
+    g.end_scan();
+    result
+}
+
+/// `1E 8B` and the 07 table, as Epson's drivers handle it before a read at base 2400 or 4800
+/// on the glass and before every film's image: `06`, the scanner holds it (it keeps it until
+/// switched off), read back (captures 33, 37, 74-81); `15`, it does not: computed from a raw
+/// line of the sensor and loaded (captures 05, 42, 61 on the glass; `table07`; never captured
+/// before a film).
+fn table07_step(t: &mut dyn Transport, log: &mut dyn FnMut(String)) -> Result<()> {
+    let a = ask(t, [0x1E, 0x8B], 1)?;
+    wait_ready(t, log)?;
+    match a[0] {
+        ACK => {
+            command(t, [0x1E, 0x83])?;
+            t.bulk_out(&READ_83)?;
+            read_exact(t, 600, "1E 83")?;
+        }
+        0x15 => {
+            command(t, [0x1E, 0x83])?;
+            t.bulk_out(&table07::READ_RAW)?;
+            let raw = read_exact(t, table07::RAW_LEN, "1E 83 (the raw line)")?;
+            command(t, [0x1E, 0x87])?;
+            t.bulk_out(&[0x00])?;
+            let xc = XCorrection::from_1e87(&read_exact(t, 10, "1E 87")?)?;
+            table(t, &table07::HEADER, &table07::compute(&raw, xc))?;
+            log("1E 8B answered 15: the 07 table computed and loaded".into());
+        }
+        other_ => {
+            return Err(other(format!(
+                "1E 8B answered {other_:02X}, neither 06 nor 15"
+            )))
+        }
+    }
+    Ok(())
+}
+
+/// The shading of a film's white and dark reads: by column parity at base 4800 (Epson Scan's
+/// two minimum darks, captures 76-81), the glass's at base 2400.
+pub fn film_shading(c: &FilmCalibration) -> Shading {
+    let cols = c.plan.geometry.column_count() as usize;
+    if c.plan.geometry.base == 4800 {
+        Shading::compute_by_parity(&c.white, &c.dark, cols, cols, cols * 3)
+    } else {
+        Shading::compute(&c.white, &c.dark, cols, cols, cols * 3)
+    }
+}
+
+fn film_image<T: Transport>(
+    g: &mut Guarded<T>,
+    c: FilmCalibration,
+    log: &mut dyn FnMut(String),
+    events: &mut dyn FnMut(Event) -> bool,
+) -> Result<FilmScanned> {
+    let plan = &c.plan;
+    let request = plan.request;
+    let geo = plan.geometry;
+    table07_step(g, log)?;
+    let at = ask(g, [0x1E, 0x86], 4)?;
+    let at = (
+        u32::from(u16::from_le_bytes([at[0], at[1]])),
+        u32::from(u16::from_le_bytes([at[2], at[3]])),
+    );
+    if at != after_white(c.back) {
+        return Err(other(format!(
+            "after the film's calibration the carriages are at {at:?}, not {:?}",
+            after_white(c.back)
+        )));
+    }
+    send(g, [0x1E, 0x21], &c.image_e21)?;
+    let tone = Curves::Linear.tone();
+    for header in &tables::TONE_HEADERS {
+        table(g, header, &tone)?;
+    }
+    // The start move: the carriage to the image's first line.
+    table(
+        g,
+        &setup::ramp_header(512),
+        &ramp_bytes(&setup::film_ramp()),
+    )?;
+    send(
+        g,
+        [0x1E, 0x01],
+        &setup::move_block(geo.start_steps, 0, 0x1FF, 0x10),
+    )?;
+    command(g, [0x1E, 0x05])?;
+    wait_ready(g, log)?;
+    // The image.
+    let shading = film_shading(&c);
+    log(format!(
+        "shading: K {:?}, minimum dark {:?} / {:?}, scales 2^{} and 2^{}",
+        shading.k, shading.dark_min, shading.dark_min_odd, shading.white_shift, shading.dark_shift
+    ));
+    let mut e41 = plan.e41_image;
+    e41[15] = (shading.white_shift << 4) | shading.dark_shift;
+    send(g, [0x1E, 0x31], &e31(c.offsets, c.image_gains))?;
+    send(g, [0x1E, 0x11], &[geo.e11])?;
+    send(g, [0x1E, 0x21], &c.image_e21)?;
+    send(g, [0x1E, 0x41], &e41)?;
+    send(g, [0x1E, 0x42], &shading.block42())?;
+    send(g, [0x1E, 0x43], &crate::film::e43(request.film, true))?;
+    table(
+        g,
+        &setup::shading_header(geo.column_count()),
+        &shading.table_bytes(),
+    )?;
+    let t = u32::from_le_bytes([c.image_e21[0], c.image_e21[1], c.image_e21[2], 0]);
+    table(g, &setup::ramp_header(1), &geo.read_ramp(t).to_le_bytes())?;
+    send(
+        g,
+        [0x1E, 0x01],
+        &setup::move_block(geo.read_steps, geo.lead as u16, 0, 0x08),
+    )?;
+    wait_ready(g, log)?;
+    let line = geo.line_bytes(request.bits);
+    log(format!(
+        "reading {} lines of {} pixels (T {t} µs, start move {} steps)",
+        geo.lines, geo.pixels, geo.start_steps
+    ));
+    let mut stopped = false;
+    let raw = read_lines(
+        g,
+        geo.lines,
+        u32::from(geo.lines_per_block),
+        line,
+        &mut |done, total| {
+            if !stopped && !events(Event::Reading { done, total }) {
+                stopped = true;
+                log("stopping asked: a film's read goes on to its end (1E 18 never captured on films)".into());
+            }
+            true
+        },
+    )
+    .map_err(|e| {
+        let e = after(e, g.last_command());
+        log(format!("the film's read failed ({e}): stopping it with 1E 18"));
+        std::thread::sleep(Duration::from_millis(500));
+        if let Err(also) = stop(g, log).and_then(|()| wait_ready(g, log).map(drop)) {
+            log(format!("stopping it failed too: {also}"));
+        }
+        e
+    })?
+    .expect("never stopped");
+    // The carriages go home by themselves (captures 74-81: 1B 03 moving, then at rest).
+    wait_ready(g, log)?;
+    if stopped {
+        return Err(Error::Cancelled);
+    }
+    Ok(FilmScanned {
+        calibration: c,
+        shading,
+        raw,
     })
 }
 
@@ -1438,33 +1635,7 @@ fn run<T: Transport>(
     log("calibration read: black pixels, white, dark; lamp on again".into());
 
     if p.asks_table07() {
-        // 1E 8B: 06, the scanner holds its 1200 dpi table (it keeps it until switched off),
-        // read back as Epson's driver does (captures 33, 37); 15, it does not: computed
-        // from a raw line of the sensor and loaded (captures 05, 42; `table07`).
-        let a = ask(g, [0x1E, 0x8B], 1)?;
-        wait_ready(g, log)?;
-        match a[0] {
-            ACK => {
-                command(g, [0x1E, 0x83])?;
-                g.bulk_out(&READ_83)?;
-                read_exact(g, 600, "1E 83")?;
-            }
-            0x15 => {
-                command(g, [0x1E, 0x83])?;
-                g.bulk_out(&table07::READ_RAW)?;
-                let raw = read_exact(g, table07::RAW_LEN, "1E 83 (the raw line)")?;
-                command(g, [0x1E, 0x87])?;
-                g.bulk_out(&[0x00])?;
-                let xc = XCorrection::from_1e87(&read_exact(g, 10, "1E 87")?)?;
-                table(g, &table07::HEADER, &table07::compute(&raw, xc))?;
-                log("1E 8B answered 15: the 1200 dpi table computed and loaded".into());
-            }
-            other_ => {
-                return Err(other(format!(
-                    "1E 8B answered {other_:02X}, neither 06 nor 15"
-                )))
-            }
-        }
+        table07_step(g, log)?;
     }
     let at = ask(g, [0x1E, 0x86], 4)?;
     let at = u16::from_le_bytes([at[0], at[1]]);
@@ -1688,6 +1859,10 @@ pub(crate) mod tests {
                     ["gamma"] => data == self.curves.gamma(),
                     ["tone"] => data == self.curves.tone(),
                     ["shading", n] => data.len() == n.parse::<usize>().unwrap(),
+                    // A film's tone tables: Epson Scan's own curve, ours linear.
+                    ["other", "8192"] if self.film.is_some() && self.last_cmd == [0x1E, 0x84] => {
+                        data == Curves::Linear.tone()
+                    }
                     ["42", _] => data.len() == 18,
                     _ => false,
                 },
@@ -2054,23 +2229,50 @@ pub(crate) mod tests {
         assert!(e.contains("(after 1E A2)"), "{e}");
     }
 
-    /// A film's calibration writes what Epson Scan wrote in capture 74, write by write, from
-    /// its lamp to the dark read (the gamma tables linear, the computed `1E 42` any), its reads
-    /// made up from what the rules take from the real ones.
+    /// A film scanned on a scanner answering as in a capture, to its end: the scan, and the
+    /// capture's lines left (none, when it wrote all of it).
+    fn film_scan(
+        name: &'static str,
+        text: &str,
+        reads: &str,
+        request: &FilmRequest,
+        factor: u32,
+    ) -> (FilmScanned, usize) {
+        let mut g = Guarded::new(Follow::film(name, text, reads));
+        let s = scan_film(&mut g, request, factor, &mut |_| {}, &mut |_| true)
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        let f = g.inner();
+        let left = f.lines.len() - f.at;
+        // Over: the guard lets out no film's command any more.
+        assert!(g.bulk_out(&[0x1E, 0x25]).is_err());
+        (s, left)
+    }
+
+    /// A film's scan writes what Epson Scan wrote in capture 74, write by write, from its lamp
+    /// to the image read and the carriages home (the gamma and tone tables linear, the computed
+    /// `1E 42` and shading any), its calibration reads made up from what the rules take from
+    /// the real ones. The calibration alone stops before `1E 8B`, the image's.
     #[test]
-    fn a_films_calibration_writes_what_epson_scan_wrote() {
+    fn a_films_scan_writes_what_epson_scan_wrote() {
         let text = include_str!("../testdata/74_film.txt");
         let reads = include_str!("../testdata/74_film_reads.txt");
         let request = crate::film::tests::CAPTURED[2].1;
-        let mut g = Guarded::new(Follow::film("74", text, reads));
-        let c = calibrate_film(&mut g, &request, 10, &mut |_| {}, &mut |_| true)
-            .unwrap_or_else(|e| panic!("{e}"));
+        let (s, left) = film_scan("74", text, reads, &request, 10);
+        assert_eq!(left, 0, "lines of the capture left");
+        let c = &s.calibration;
         assert_eq!(c.offsets, [0x8C, 0x8C, 0x90]);
         assert_eq!(c.exposures, [13_550, 9070, 5953]);
         assert_eq!(c.gains, [0x21, 0x09, 0x16]);
         assert_eq!(c.image_gains, [0x21, 0x14, 0x1F]);
+        assert_eq!(c.back, 240);
+        let geo = c.plan.geometry;
+        assert_eq!(s.raw.len() as u32, geo.lines * geo.line_bytes(16));
+        assert_eq!(s.shading.table.len() as u32, geo.column_count() * 3);
+
+        let mut g = Guarded::new(Follow::film("74", text, reads));
+        calibrate_film(&mut g, &request, 10, &mut |_| {}, &mut |_| true)
+            .unwrap_or_else(|e| panic!("{e}"));
         let f = g.inner();
-        // Next in the capture: 1E 8B, the image's.
         assert!(
             matches!(&f.lines[f.at], Line::W(w, None) if w == &[0x1E, 0x8B]),
             "{:?}",
@@ -2082,7 +2284,7 @@ pub(crate) mod tests {
     /// Scan's image factor 15).
     #[test]
     #[allow(clippy::type_complexity)]
-    fn films_calibrations_at_4800_and_of_a_slide_are_epson_scans() {
+    fn films_scans_at_4800_and_of_a_slide_are_epson_scans() {
         let cases: [(
             &str,
             &str,
@@ -2119,21 +2321,46 @@ pub(crate) mod tests {
         ];
         for (name, text, reads, i, factor, offsets, exposures, gains, image_gains) in cases {
             let request = crate::film::tests::CAPTURED[i].1;
-            let mut g = Guarded::new(Follow::film(name, text, reads));
-            let c = calibrate_film(&mut g, &request, factor, &mut |_| {}, &mut |_| true)
-                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            let (s, left) = film_scan(name, text, reads, &request, factor);
+            assert_eq!(left, 0, "{name}: lines of the capture left");
+            let c = &s.calibration;
             assert_eq!(
                 (c.offsets, c.exposures, c.gains, c.image_gains),
                 (offsets, exposures, gains, image_gains),
                 "{name}"
             );
-            let f = g.inner();
-            assert!(
-                matches!(&f.lines[f.at], Line::W(w, None) if w == &[0x1E, 0x8B]),
-                "{name}: {:?}",
-                f.lines.get(f.at)
-            );
+            let geo = c.plan.geometry;
+            assert_eq!(s.raw.len() as u32, geo.lines * geo.line_bytes(16), "{name}");
         }
+    }
+
+    /// A film's image read stopped by the user goes on to its end (no `1E 18`, never captured
+    /// on films), then ends as cancelled with the capture written whole.
+    #[test]
+    fn a_films_read_is_not_cut_short() {
+        let text = include_str!("../testdata/74_film.txt");
+        let reads = include_str!("../testdata/74_film_reads.txt");
+        let request = crate::film::tests::CAPTURED[2].1;
+        let mut g = Guarded::new(Follow::film("74", text, reads));
+        let r = scan_film(&mut g, &request, 10, &mut |_| {}, &mut |e| {
+            !matches!(e, Event::Reading { .. })
+        });
+        assert!(matches!(r, Err(Error::Cancelled)), "{r:?}");
+        let f = g.inner();
+        assert_eq!(f.at, f.lines.len());
+    }
+
+    /// The carriages found elsewhere than the white read leaves them: nothing more moves.
+    #[test]
+    fn a_film_image_starts_only_from_where_the_white_read_left_the_carriages() {
+        let text = include_str!("../testdata/74_film.txt").replace("A 0a08d804", "A 0b08d804");
+        let reads = include_str!("../testdata/74_film_reads.txt");
+        let request = crate::film::tests::CAPTURED[2].1;
+        let mut g = Guarded::new(Follow::film("74", &text, reads));
+        let e = scan_film(&mut g, &request, 10, &mut |_| {}, &mut |_| true)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("(2059, 1240)"), "{e}");
     }
 
     /// The lid's lamp is lit writing what Epson Scan wrote in capture 72, write by write, as far

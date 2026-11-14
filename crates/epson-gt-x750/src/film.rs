@@ -157,6 +157,11 @@ impl Geometry {
     pub fn column_count(&self) -> u32 {
         self.columns.1 - self.columns.0
     }
+
+    /// The bytes of an image line as read: [`Geometry::pixels`] x 3 samples of `bits`.
+    pub fn line_bytes(&self, bits: u8) -> u32 {
+        self.pixels * 3 * u32::from(bits) / 8
+    }
 }
 
 fn gcd(a: u32, b: u32) -> u32 {
@@ -211,6 +216,11 @@ pub fn geometry(r: &FilmRequest, corr: XCorrection) -> Result<Geometry> {
     };
     let lead = if r.dpi == 600 { 128 } else { 32 };
     let y_steps = r.y * 2400 / r.ydpi;
+    if y_steps + START_K - lead <= RAMP_512_STEPS {
+        // The start move would be shorter than its ramps: never captured (the least start
+        // move seen is 267 steps beyond them, capture 74).
+        return bad("a film area this near the window's top was never captured");
+    }
     Ok(Geometry {
         base,
         read_dpi,
@@ -223,7 +233,7 @@ pub fn geometry(r: &FilmRequest, corr: XCorrection) -> Result<Geometry> {
         lines_per_block: (BLOCK_MAX / line_bytes) as u16,
         lead,
         read_steps: lines * 2400 / r.ydpi + lead,
-        start_steps: (y_steps + START_K - lead).saturating_sub(RAMP_512_STEPS),
+        start_steps: y_steps + START_K - lead - RAMP_512_STEPS,
         e11: 8 + u8::from(base == 2400),
     })
 }
@@ -635,6 +645,20 @@ pub(crate) mod tests {
             assert_eq!(g.e11, e11, "{r:?}");
             assert_eq!(g.read_ramp(t), ramp, "{r:?}");
         }
+    }
+
+    /// A frame whose start move would be shorter than its ramps (never captured) is refused;
+    /// the least start move captured (267 steps, capture 74) is not.
+    #[test]
+    fn a_frame_too_near_the_windows_top_is_refused() {
+        let mut r = CAPTURED[2].1;
+        let c = XCorrection(-122);
+        assert_eq!(geometry(&r, c).unwrap().start_steps, 267);
+        // 600 dpi, lead 128: y x 4 + 583 - 128 must pass 1024.
+        r.y = 142;
+        assert!(geometry(&r, c).is_err());
+        r.y = 143;
+        assert_eq!(geometry(&r, c).unwrap().start_steps, 3);
     }
 
     #[test]

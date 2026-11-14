@@ -25,7 +25,13 @@
 //! * during a film's opening, once [`Guarded::permit_film`] has accepted a film request
 //!   ([`check_film_request`]): the same opening and read-only commands, that request's `1E 57`
 //!   (Epson Scan's form, [`crate::film::request_block`]) and the lid's lamp (`1E A2 02`); nothing
-//!   that moves, as the film path's moves are not in the driver yet.
+//!   that moves;
+//! * once [`Guarded::permit_film_path`] has opened the film's path (after its lamp): the moves
+//!   of every film capture (the park, the lid unit's origin and its moves back, the white
+//!   read's), the calibration's set-ups in the forms captured; once [`Guarded::permit_film_plan`]
+//!   has accepted the plan: its reads' `1E 41`, the tone tables (linear), its shading table,
+//!   the 07 table and its raw line, and the image's start move then its read move, each once
+//!   and in that order.
 //!
 //! What a scan may ask ([`check_request`], [`check_plan`]): the glass, colour,
 //! 100, 200, 300, 400, 600 and 1200 dpi, at 8 bits (WIA) or 16 (Epson Scan,
@@ -337,6 +343,33 @@ struct Permit {
     film_path: bool,
     /// A film's plan, once `1E 87` has given the correction.
     film_plan: Option<FilmPlan>,
+    /// The film plan's start move went out: not again, and its read move may follow.
+    film_started: bool,
+    /// The film plan's read move went out: not again.
+    film_read: bool,
+}
+
+impl Permit {
+    fn new(asked: Asked, e57: [u8; 42]) -> Self {
+        Self {
+            asked,
+            e57,
+            plan: None,
+            film_path: false,
+            film_plan: None,
+            film_started: false,
+            film_read: false,
+        }
+    }
+}
+
+/// A film plan's start move (with the 512-value ramp, the carriage) and its read move.
+fn film_image_moves(p: &FilmPlan) -> ([u8; 12], [u8; 12]) {
+    let g = &p.geometry;
+    (
+        setup::move_block(g.start_steps, 0, 0x1FF, 0x10),
+        setup::move_block(g.read_steps, g.lead as u16, 0, 0x08),
+    )
 }
 
 /// Where the firmware upload is.
@@ -408,13 +441,10 @@ impl<T: Transport> Guarded<T> {
     /// known), if [`check_request`] accepts it.
     pub fn permit_request(&mut self, request: &Request) -> Result<()> {
         check_request(request)?;
-        self.permit = Some(Permit {
-            asked: Asked::Glass(*request),
-            e57: setup::request_block(request)?,
-            plan: None,
-            film_path: false,
-            film_plan: None,
-        });
+        self.permit = Some(Permit::new(
+            Asked::Glass(*request),
+            setup::request_block(request)?,
+        ));
         self.expect = None;
         self.start_armed = false;
         self.start_done = false;
@@ -422,17 +452,14 @@ impl<T: Transport> Guarded<T> {
     }
 
     /// Lets out a film's opening for `request`, if [`check_film_request`] accepts it: the
-    /// commands of the glass's opening, the film's `1E 57` and the lid's lamp (`1E A2 02`). No
-    /// plan follows: nothing that moves goes out for a film yet.
+    /// commands of the glass's opening, the film's `1E 57` and the lid's lamp (`1E A2 02`).
+    /// Nothing moves until [`Guarded::permit_film_path`].
     pub fn permit_film(&mut self, request: &FilmRequest) -> Result<()> {
         check_film_request(request)?;
-        self.permit = Some(Permit {
-            asked: Asked::Film(*request),
-            e57: film::request_block(request)?,
-            plan: None,
-            film_path: false,
-            film_plan: None,
-        });
+        self.permit = Some(Permit::new(
+            Asked::Film(*request),
+            film::request_block(request)?,
+        ));
         self.expect = None;
         self.start_armed = false;
         self.start_done = false;
@@ -636,10 +663,14 @@ impl<T: Transport> Guarded<T> {
                     film_origin_read_move().to_vec(),
                     setup::move_block(64, 32, 0, 0x18).to_vec(),
                 ];
+                // The image's start move once, then its read move once.
                 if let Some(p) = p {
-                    let g = &p.geometry;
-                    moves.push(setup::move_block(g.start_steps, 0, 0x1FF, 0x10).to_vec());
-                    reads.push(setup::move_block(g.read_steps, g.lead as u16, 0, 0x08).to_vec());
+                    let (start, read) = film_image_moves(p);
+                    if !permit.film_started {
+                        moves.push(start.to_vec());
+                    } else if !permit.film_read {
+                        reads.push(read.to_vec());
+                    }
                 }
                 Some(Expect::FilmMove(moves, reads))
             }
@@ -662,7 +693,9 @@ impl<T: Transport> Guarded<T> {
                 film::E43_SLIDE,
             ]),
             [0x1E, 0x47] => None,
-            [0x1E, 0x83] if p.is_some() => one(&[READ_83]),
+            // The 07 table read back, or (`1E 8B` answering 15) its raw line read: as on the
+            // glass at 1200 dpi (the latter never captured for films).
+            [0x1E, 0x83] if p.is_some() => one(&[READ_83, table07::READ_RAW]),
             [0x1E, 0x83] => return plan_only("1E 83"),
             [0x1E, 0x18] => None,
             _ => return Err(refusal(data, "not in a film's path")),
@@ -777,6 +810,9 @@ impl<T: Transport> Guarded<T> {
                     if setup::shading_header(fp.geometry.column_count())[..] == *data {
                         return Ok(Some(Expect::Len(fp.geometry.column_count() as usize * 6)));
                     }
+                    if table07::HEADER[..] == *data {
+                        return Ok(Some(Expect::Len(table07::LEN)));
+                    }
                 }
                 bad("a film's 1E 84 header")
             }
@@ -851,6 +887,14 @@ impl<T: Transport> Guarded<T> {
             .is_some_and(|p| matches!(p.asked, Asked::Film(_)));
         if was_command && data == [0x1E, 0x05] && !film {
             self.start_done = true;
+        }
+        if matches!(self.expect, Some(Expect::FilmMove(..))) {
+            if let Some(p) = self.permit.as_mut() {
+                if let Some((start, read)) = p.film_plan.as_ref().map(film_image_moves) {
+                    p.film_started |= start[..] == *data;
+                    p.film_read |= p.film_started && read[..] == *data;
+                }
+            }
         }
         if was_command && data.len() == 2 && matches!(data[0], 0x1B | 0x1E) && data != GET_STATE {
             self.last_command = Some([data[0], data[1]]);
@@ -1460,8 +1504,27 @@ mod tests {
         t.bulk_out(&[0x1E, 0x01]).unwrap();
         assert!(t.bulk_out(&start).is_err());
         t.permit_film_plan(&p).unwrap();
+        let read = setup::move_block(p.geometry.read_steps, p.geometry.lead as u16, 0, 0x08);
+        // The read move not before the start move.
+        t.bulk_out(&[0x1E, 0x01]).unwrap();
+        assert!(t.bulk_out(&read).is_err());
         t.bulk_out(&[0x1E, 0x01]).unwrap();
         t.bulk_out(&start).unwrap();
+        t.bulk_out(&[0x1E, 0x05]).unwrap();
+        // The start move once, the read move once.
+        t.bulk_out(&[0x1E, 0x01]).unwrap();
+        assert!(t.bulk_out(&start).is_err());
+        t.bulk_out(&[0x1E, 0x01]).unwrap();
+        t.bulk_out(&read).unwrap();
+        assert!(t.bulk_out(&[0x1E, 0x05]).is_err());
+        t.bulk_out(&[0x1E, 0x01]).unwrap();
+        assert!(t.bulk_out(&read).is_err());
+        // The 07 table and its raw line, as on the glass.
+        t.bulk_out(&[0x1E, 0x83]).unwrap();
+        t.bulk_out(&table07::READ_RAW).unwrap();
+        t.bulk_out(&[0x1E, 0x84]).unwrap();
+        t.bulk_out(&table07::HEADER).unwrap();
+        t.bulk_out(&[0u8; table07::LEN]).unwrap();
         // A one-value ramp faster than any captured.
         t.bulk_out(&[0x1E, 0x84]).unwrap();
         t.bulk_out(&setup::ramp_header(1)).unwrap();
