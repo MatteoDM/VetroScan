@@ -293,9 +293,12 @@ enum Expect {
 /// reads' 25,344 (captures 17, 72-81); every one a multiple of 384.
 pub const FILM_LINE_TIMES: std::ops::RangeInclusive<u32> = 6144..=25_344;
 
-/// The moves back the lid unit was seen to make after its origin read (`1E 8A` less 1024):
-/// a computed origin outside them is refused.
-pub const FILM_BACK_MOVES: [u32; 3] = [228, 240, 252];
+/// The moves back the lid unit may make after its origin read (`1E 8A` less 1024): those Epson
+/// Scan was seen to make (228, 240, 252) and one line of the read (12 steps) either side, 216
+/// and 264 (Matteo's decision, 14 November 2026: the light's edge moved by a line between our
+/// scans, 87 asked 264; the unit then stops at 1200 or 1152, inside the travel it has just
+/// made from 0 to 2440). A computed origin outside them is refused.
+pub const FILM_BACK_MOVES: [u32; 5] = [216, 228, 240, 252, 264];
 
 /// The film path's moves before its plan (every film capture): the park from home (1994 less
 /// the 512 ramp's 1024), the lid unit back from where the scanner put it when it lit its lamp
@@ -1476,13 +1479,20 @@ mod tests {
         t.bulk_out(&[0x1E, 0x01]).unwrap();
         assert!(t.bulk_out(&setup::move_block(971, 0, 0x1FF, 0x10)).is_err());
         assert!(t.bulk_out(&[0x1E, 0x05]).is_err());
-        // A move back never seen, and its 1E 8A.
-        t.bulk_out(&[0x1E, 0x01]).unwrap();
-        assert!(t.bulk_out(&setup::move_block(300, 0, 0x1FF, 0x30)).is_err());
-        t.bulk_out(&[0x1E, 0x8A]).unwrap();
-        assert!(t.bulk_out(&film_origin_block(300)).is_err());
-        t.bulk_out(&[0x1E, 0x8A]).unwrap();
-        t.bulk_out(&film_origin_block(240)).unwrap();
+        // Moves back more than a line from any captured, and their 1E 8A: refused; a line
+        // either side of the captured ones (216, 264) let out.
+        for n in [204, 276, 300] {
+            t.bulk_out(&[0x1E, 0x01]).unwrap();
+            assert!(t.bulk_out(&setup::move_block(n, 0, 0x1FF, 0x30)).is_err());
+            t.bulk_out(&[0x1E, 0x8A]).unwrap();
+            assert!(t.bulk_out(&film_origin_block(n)).is_err());
+        }
+        for n in [216, 240, 264] {
+            t.bulk_out(&[0x1E, 0x01]).unwrap();
+            t.bulk_out(&setup::move_block(n, 0, 0x1FF, 0x30)).unwrap();
+            t.bulk_out(&[0x1E, 0x8A]).unwrap();
+            t.bulk_out(&film_origin_block(n)).unwrap();
+        }
         // Line times: multiples of 384 within the captured range only.
         let block = |t: u32| {
             let mut b = [0u8; 26];

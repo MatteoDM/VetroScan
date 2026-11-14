@@ -1726,9 +1726,10 @@ never run by us (step 12).
     Scan's in 74: 13,550 / 9070 / 5953), 29.5 s, the carriages home; the image against Epson Scan's
     TIFF of 74 gives rank correlations of -0.99 a channel (ours linear, a negative), 7 lines (0.3
     mm) along from it (the strip put back by hand), the colours aligned. The edge moves by a line
-    from one scan to the next (74: 101, 86: 100, 87: 99, 89: 100): whether to let the moves back of
-    216 and 264 steps out (the same move, 12 steps shorter or longer) is Matteo's to decide. The
-    white bytes' rule (2-4 units off) can wait for that scan's result.
+    from one scan to the next (74: 101, 86: 100, 87: 99, 89: 100): the moves back of 216 and 264
+    steps (the same move, 12 steps shorter or longer, the unit stopping inside the travel it has
+    just made) are let out too, Matteo's decision (`guard::FILM_BACK_MOVES`); further ones are still
+    refused. The white bytes' rule (2-4 units off) can wait for that scan's result.
     **Left of step 14**, what Epson Scan computes from its calibration reads (each in the
     captures with its reads, to rebuild the same way): N from the 150-line read; the line time T and
     the three exposures of `1E 21` (from reads of the window at T 9600 / 13,056 and exposures

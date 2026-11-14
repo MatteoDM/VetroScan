@@ -675,8 +675,8 @@ fn film_calibration<T: Transport>(
         .ok_or_else(|| other("the lid unit's origin read found no edge of its light".into()))?;
     if !FILM_BACK_MOVES.contains(&n) {
         return Err(other(format!(
-            "the lid unit's origin read asks a move back of {n} steps, never captured \
-             ({FILM_BACK_MOVES:?})"
+            "the lid unit's origin read asks a move back of {n} steps, more than a line from \
+             any captured ({FILM_BACK_MOVES:?})"
         )));
     }
     log(format!(
