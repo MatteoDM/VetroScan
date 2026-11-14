@@ -1608,8 +1608,18 @@ never run by us (step 12).
     gains), `0x4254d0` (byte `0x35` = 1: slides?) or `0x426210`. `0x422ff0` turns exposures into
     `1E 21`: X' = (X - 110) x k / 10 + 110 per channel, T = M + the longest X', rounded up to a
     multiple of 384 µs (every T in the captures is one), each channel's value T - X'. From the
-    captures M is 5650-5760 at base 2400 and 8900-9016 at base 4800. Left: the three functions
-    (what level they aim at, how many rounds), and M exactly.
+    captures M is 5650-5760 at base 2400 and 8900-9016 at base 4800. **The exposure loop read**
+    (`0x426210`, the films', and `0x424c00`; `filmsetup.py --check-exposure`, 0 differences on
+    the 14 steps captured): after each 4-line read of the window (8 bits) L = (the sum of the
+    4 lines' maxima) // 4 per channel; below 222 or above 236 the channel's X becomes
+    X x 230 // L, within its limits (at least 3840); 222-236 is done; until every channel is
+    done or held. Slides: all three channels (80, 81: three reads). Negatives: the second and
+    third held at 3840 (their limit, from the table at `0x40c820`) while the first is found
+    (two or three reads); then final exposures that do not come from these reads (the same
+    13,550 / 9070 / 5953 for frame 1 at 600, 1200 and 4800 dpi, whatever the loop's last read
+    gave: from the preview, it seems), the second and third always 0.6694 and 0.4393 of the
+    first; then the gains. Left: that last step (`0x424320`, `0x422600`), the gains' search, M
+    exactly, the image's and the white and dark reads' `1E 21`.
     **Left of step 14**, what Epson Scan computes from its calibration reads (each in the
     captures with its reads, to rebuild the same way): N from the 150-line read; the line time T and
     the three exposures of `1E 21` (from reads of the window at T 9600 / 13,056 and exposures
