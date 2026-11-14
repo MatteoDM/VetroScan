@@ -28,6 +28,9 @@
 //! With `--no-lock` it opens the scanner without Windows' STI lock (taking it has Epson's
 //! driver ask the scanner its state, capture 44) and writes nothing at all: it only reads.
 //! `epson4490 lamp-off` switches the lamp off (`1E A2 00`), as the application's lamp timer.
+//! `epson4490 lid-lamp [--positive]` lights the lid's lamp as Epson Scan does before a film's
+//! preview (capture 72: its `1E 57` for a negative's, or a slide's, `1E A2 02`, then `1B 03` and
+//! `1E A1` every second until warm); nothing moves. A glass scan after it switches back.
 //! Without `--move` it only prints the plan and what the guard says of it. A lamp taken to be
 //! cold (switched on, or no scan for 14 minutes, or switched off and on since: `1E 87`; the
 //! time and `1E 87` of the last scan are kept in the
@@ -56,7 +59,7 @@ use std::process::ExitCode;
 
 const USAGE: &str = "usage: epson4490 list | firmware [--firmware FILE] | probe | \
                      upload [--firmware FILE] | buttons [SECONDS] | replay SCRIPT OUT --move | \
-                     scan DPI X Y W H OUT.png [--bits 16] [--tone wia|linear] [--raw FILE] [--cancel-after BLOCKS] --move   (X Y W H in mm) | probe/drain [--no-lock] | recover | lamp-off";
+                     scan DPI X Y W H OUT.png [--bits 16] [--tone wia|linear] [--raw FILE] [--cancel-after BLOCKS] --move   (X Y W H in mm) | probe/drain [--no-lock] | recover | lamp-off | lid-lamp [--positive]";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -70,6 +73,7 @@ fn main() -> ExitCode {
     let mut raw_path = None;
     let mut curves = Curves::Wia;
     let mut cancel_after = None;
+    let mut positive = false;
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
@@ -79,6 +83,7 @@ fn main() -> ExitCode {
             },
             "--move" => moves = true,
             "--no-lock" => no_lock = true,
+            "--positive" => positive = true,
             "--bits" => match rest.next().map(|b| b.parse()) {
                 Some(Ok(b)) => bits = b,
                 _ => return usage(),
@@ -127,6 +132,7 @@ fn main() -> ExitCode {
         Some("buttons") => buttons(seconds.unwrap_or(10)),
         Some("drain") => drain(no_lock),
         Some("lamp-off") => lamp_off(),
+        Some("lid-lamp") => lid_lamp(positive),
         Some("recover") => recover(),
         Some("replay") if operands.len() == 2 && moves => replay(&operands[0], &operands[1]),
         Some("replay") if operands.len() == 2 => {
@@ -303,6 +309,49 @@ fn lamp_off() -> Result<(), Error> {
     protocol::lamp_off(&mut t)?;
     println!("lamp off (1E A2 00): answered 06");
     println!("state (1B 03): {}", describe(protocol::state(&mut t)?));
+    Ok(())
+}
+
+/// Lights the lid's lamp as Epson Scan does before a film's preview (`scan::light_lid_lamp`,
+/// the preview's request of captures 72 and 79): nothing moves.
+fn lid_lamp(positive: bool) -> Result<(), Error> {
+    use epson_gt_x750::film::{Film, FilmRequest};
+    let film = if positive {
+        Film::Positive
+    } else {
+        Film::Negative
+    };
+    // Epson Scan's preview of the whole window.
+    let preview = FilmRequest {
+        dpi: 300,
+        ydpi: 300,
+        x: 0,
+        y: 0,
+        width: 810,
+        height: 2799,
+        bits: 8,
+        film,
+    };
+    let mut t = open_first()?;
+    let state = protocol::state(&mut t)?;
+    println!("state (1B 03): {}", describe(state));
+    if !state.firmware_running() {
+        return Err(Error::Other(
+            "the firmware is not running: run `epson4490 upload` first".into(),
+        ));
+    }
+    let start = std::time::Instant::now();
+    let waited = epson_gt_x750::scan::light_lid_lamp(
+        &mut t,
+        &preview,
+        &mut |line| println!("  {:5.1} s  {line}", start.elapsed().as_secs_f64()),
+        &mut |_| true,
+    )?;
+    println!(
+        "the lid's lamp lit, {:.1} s after 1E A2 02; state (1B 03): {}",
+        waited.as_secs_f64(),
+        describe(protocol::state(&mut t)?)
+    );
     Ok(())
 }
 

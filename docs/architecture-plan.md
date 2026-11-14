@@ -1514,7 +1514,20 @@ never run by us (step 12).
     warmed as one that was off (a test: capture 25 written write by write as far as `1E A2 01`;
     the guard lets `1E 77` out at the opening, no block). Tried on the scanner after an Epson
     Scan session: `02`, `1E 77`, `01` at once, the scan whole. The other way (to the lid's, for
-    films) with step 14.
+    films) with step 14. **To the lid's done** (14 November 2026, evening; captures 72, 73, 16):
+    Epson Scan lights it with `1E A2 02` after the film's `1E 57`; the scanner answers `06` only
+    once it has switched lamps (2.52 s every time), then flags warming (`19 81`) and `1E A1`
+    answers `02`; Epson Scan asks `1B 03` and `1E A1` every second until `18 81` (18.8, 20.8,
+    21.7 s) and calibrates at once. `scan::light_lid_lamp` does the same (a test: capture 72
+    write by write; the guard lets `1E A2 02` out only for a film request), the command
+    `epson4490 lid-lamp [--positive]`. **Tried on the scanner** (captures 83, 84): after Epson
+    Scan the lid's lamp was still the one chosen, and our `1B 40` lit it again by itself (20.6 s
+    of `19 81`, as Epson Scan's own in 79); after a glass scan of ours (back to the glass's lamp
+    with `1E 77`, as in the morning), `1E A2 02` answered in 2.4 s and the lamp was warm 20.2 s
+    later; nothing moved. Not measured: whether the lid's lamp gives steady light by then (the
+    glass's needed 150 s more than its flag); to be measured on our first film scans, as for
+    the glass. Not tried: `1E A2 00` (the app's lamp timer) with the lid's lamp chosen, never
+    captured.
 14. **The film path's rules** from captures 16-19 (negatives, a slide, previews; Epson Scan at
     2400 dpi 48 bits): motor base 600 steps per inch, ramps of 64 and 128 values, origins 647 and
     36, 4800 dpi across halved on the computer; then the guard for films, as `NEGATIVE_RESOLUTIONS`

@@ -25,3 +25,7 @@ Made from the captures with `tools/strip.py` (`captures/epson4490/tools`, on `st
 | `W =other N`, `R =other N` | a long table left out (Epson Scan's tables, capture 05's `1E 83`) |
 
 Windows' button polls (`1E 85`) are left out.
+
+`72_lid_lamp.txt` is a cut of capture 72 (Epson Scan, 14 November 2026): the lines where it
+lights the lid's lamp before a negative's preview, which `scan::light_lid_lamp` writes again
+line by line in a test.

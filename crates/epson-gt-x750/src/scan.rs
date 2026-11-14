@@ -18,7 +18,11 @@
 //! Everything goes through the [`Guarded`] transport, which lets the scan's
 //! commands out only for a request and a plan inside what the captures cover
 //! ([`Guarded::permit_request`], [`Guarded::permit_plan`]).
+//!
+//! For films, so far only the lid's lamp ([`light_lid_lamp`]): the beginning of Epson Scan's
+//! film scan, as far as the lamp is lit; the film path itself is not here yet.
 
+use crate::film::FilmRequest;
 use crate::guard::Guarded;
 use crate::protocol::{is_state, State, ACK, GET_STATE, TABLE_CHUNK, TABLE_PAUSE};
 use crate::setup::{self, Plan, Request, XCorrection, TRAILER_LEN};
@@ -389,6 +393,115 @@ fn wait_lamp_lit(t: &mut dyn Transport, log: &mut dyn FnMut(String)) -> Result<(
             return Err(lamp_error(a));
         }
         std::thread::sleep(Duration::from_millis(500));
+    }
+}
+
+/// The longest the lid's lamp is waited for after `1E A2 02`: Epson Scan waited for the
+/// scanner's warming flag, 18.8, 20.8 and 21.7 s after the lamp's `06` (captures 72, 73 and
+/// 16: the glass's lamp warm, the scanner just switched on, the first films), polling `1B 03`
+/// and `1E A1` every second; the `06` came 2.52 s after `1E A2 02` each time.
+pub const LID_LAMP_WAIT: Duration = Duration::from_secs(60);
+
+/// How often the lid's lamp is asked while it warms: Epson Scan's second.
+const LID_LAMP_POLL: Duration = if cfg!(test) {
+    Duration::ZERO
+} else {
+    Duration::from_secs(1)
+};
+
+/// Lights the lid's lamp for `request` as Epson Scan does at the start of a film scan (capture
+/// 72, glass to film with the glass's lamp warm; 73, right after a power-on, the same): the
+/// scanner's own error cleared first, `1B 40`, the state, `1E A1`, the gamma tables (the
+/// identity, as Epson Scan's), `1E A1`, the film's `1E 57`, `1E A1`, then `1E A2 02` (the
+/// scanner answers `06` only once it has switched lamps, 2.5 s in 72) and `1B 03` and `1E A1`
+/// every second until the scanner no longer flags its lamp warming (`19 81` to `18 81`) and the
+/// lid's lamp is in use (`02`). Nothing moves. Answers how long the lamp took from `1E A2 02`.
+/// `events` hears `Event::WarmingUp` every second; `false` stops the wait (the lamp stays lit).
+///
+/// Whether the lid's lamp needs more time than the scanner's flag before a film's calibration,
+/// as the glass's does ([`WARM_UP`]), is not measured: Epson Scan calibrates at once.
+pub fn light_lid_lamp<T: Transport>(
+    g: &mut Guarded<T>,
+    request: &FilmRequest,
+    log: &mut dyn FnMut(String),
+    events: &mut dyn FnMut(Event) -> bool,
+) -> Result<Duration> {
+    g.permit_film(request)?;
+    let result = lid_lamp(g, request, log, events).map_err(|e| after(e, g.last_command()));
+    g.end_scan();
+    result
+}
+
+fn lid_lamp<T: Transport>(
+    g: &mut Guarded<T>,
+    request: &FilmRequest,
+    log: &mut dyn FnMut(String),
+    events: &mut dyn FnMut(Event) -> bool,
+) -> Result<Duration> {
+    let e57 = crate::film::request_block(request)?;
+    if let Waited::Error(s) = wait_state(g, log)? {
+        clear_error(g, s, log, events)?;
+        wait_ready(g, log)?;
+    }
+    command(g, [0x1B, 0x40])?;
+    ask(g, [0x1E, 0x53], 42)?;
+    wait_ready(g, log)?;
+    let before = lamp_at_opening(g)?;
+    wait_ready(g, log)?;
+    let gamma = Curves::Linear.gamma();
+    for channel in 0..3u8 {
+        command(g, [0x1E, 0xB3])?;
+        g.bulk_out(&[channel])?;
+        g.bulk_out(&gamma)?;
+    }
+    wait_ready(g, log)?;
+    lamp_at_opening(g)?;
+    ask(g, [0x1E, 0x53], 42)?;
+    send(g, [0x1E, 0x57], &e57)?;
+    wait_ready(g, log)?;
+    lamp_at_opening(g)?;
+    let asked = Instant::now();
+    send(g, [0x1E, 0xA2], &[0x02])?;
+    log(format!(
+        "the lid's lamp (1E A2 02; 1E A1 answered {before:02X} before): 06 after {:.1} s",
+        asked.elapsed().as_secs_f64()
+    ));
+    let lit = Instant::now();
+    loop {
+        let waited = lit.elapsed();
+        let s = State(read_two(ask(g, GET_STATE, 2)?));
+        if !is_state(&s.0) {
+            return Err(other(format!(
+                "1B 03 answered {:02X} {:02X} while the lid's lamp warmed, not a state",
+                s.0[0], s.0[1]
+            )));
+        }
+        if s.error() {
+            return Err(other(s.error_text()));
+        }
+        let lamp = lamp_in_use(g)?;
+        if s.firmware_running() && s.0[0] & 0x43 == 0 && lamp == 0x02 {
+            log(format!(
+                "the lid's lamp lit: 1B 03 {:02X} {:02X}, 1E A1 02 after {:.1} s",
+                s.0[0],
+                s.0[1],
+                waited.as_secs_f64()
+            ));
+            return Ok(waited);
+        }
+        if waited > LID_LAMP_WAIT {
+            return Err(other(format!(
+                "the lid's lamp: still 1B 03 {:02X} {:02X} and 1E A1 {lamp:02X} after {} s",
+                s.0[0],
+                s.0[1],
+                LID_LAMP_WAIT.as_secs()
+            )));
+        }
+        let left = LID_LAMP_WAIT.saturating_sub(waited).as_secs();
+        if !events(Event::WarmingUp { left }) {
+            return Err(Error::Cancelled);
+        }
+        std::thread::sleep(LID_LAMP_POLL);
     }
 }
 
@@ -1448,6 +1561,54 @@ pub(crate) mod tests {
         let e = r.unwrap_err().to_string();
         assert!(at >= 59, "stopped at line {at}: {e}");
         assert!(e.contains("(after 1E A2)"), "{e}");
+    }
+
+    /// The lid's lamp is lit writing what Epson Scan wrote in capture 72, write by write, as far
+    /// as the scanner flagged it warm.
+    #[test]
+    fn the_lids_lamp_is_lit_as_epson_scan_lights_it() {
+        let text = include_str!("../testdata/72_lid_lamp.txt");
+        let preview = crate::film::tests::CAPTURED[0].1;
+        let mut g = Guarded::new(Follow::new("72", text));
+        let mut warming = 0;
+        let waited = light_lid_lamp(&mut g, &preview, &mut |_| {}, &mut |e| {
+            warming += usize::from(matches!(e, Event::WarmingUp { .. }));
+            true
+        })
+        .unwrap_or_else(|e| panic!("{e}"));
+        let f = g.inner();
+        assert_eq!(f.at, f.lines.len(), "lines of the capture left");
+        // One for each 19 81 the capture answered.
+        assert_eq!(warming, 20);
+        assert!(waited < LID_LAMP_WAIT);
+        // Over: the guard lets out no film's command any more.
+        assert!(g.bulk_out(&[0x1E, 0x57]).is_err());
+    }
+
+    /// Stopped while the lid's lamp warms: nothing more is sent.
+    #[test]
+    fn the_lids_lamp_wait_can_be_stopped() {
+        let text = include_str!("../testdata/72_lid_lamp.txt");
+        let preview = crate::film::tests::CAPTURED[0].1;
+        let mut g = Guarded::new(Follow::new("72", text));
+        let r = light_lid_lamp(&mut g, &preview, &mut |_| {}, &mut |_| false);
+        assert!(matches!(r, Err(Error::Cancelled)), "{r:?}");
+        // The first 1B 03 and 1E A1 after 1E A2 02 (19 81, 02), then nothing.
+        let f = g.inner();
+        let lines = parse(text);
+        assert!(matches!(&lines[f.at - 1], Line::R(r) if r == &[0x02]));
+        assert!(matches!(&lines[f.at - 3], Line::P(_, s) if s == &[0x19, 0x81]));
+    }
+
+    /// A film request never captured lights nothing.
+    #[test]
+    fn the_lids_lamp_only_for_a_film_request_captured() {
+        use crate::protocol::tests::Mock;
+        let mut preview = crate::film::tests::CAPTURED[0].1;
+        preview.bits = 16;
+        let mut g = Guarded::new(Mock::answering(&[]));
+        assert!(light_lid_lamp(&mut g, &preview, &mut |_| {}, &mut |_| true).is_err());
+        assert!(g.inner().writes.is_empty());
     }
 
     /// The scanner's own error, found at the opening, is cleared with `1B 40` as Epson Scan
