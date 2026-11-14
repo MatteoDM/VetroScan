@@ -20,8 +20,8 @@ use scan_imaging::adjust::Adjustments;
 use scan_imaging::Mode;
 use scanner_api::{
     Adapter, ButtonInfo, Capabilities, ColourCorrection, ColourMatrix, ColourMode, DeviceStatus,
-    Error, LampInfo, LampState, Progress, ScanRequest, ScanResult, Scanner, Source, Stripes,
-    SuggestedAction, UsbId,
+    Error, LampInfo, LampState, Progress, ScanMemory, ScanRequest, ScanResult, Scanner, Source,
+    Stripes, SuggestedAction, UsbId,
 };
 
 /// Name of this backend in the [`scanner_api::Registry`].
@@ -90,6 +90,16 @@ pub fn capabilities(profile: &Profile) -> Capabilities {
                 source: Source::Slide,
                 matrix: slide_colour(m),
             })
+            .collect(),
+        // Above the sensor's 1200 dpi (2400) the chip sends 1200 pixels an inch across, even
+        // and odd apart (`arrange.rs`), kept besides the image doubled across from them: twice
+        // the memory (the estimate the application made for every scanner above 1200 dpi until
+        // v0.8.0).
+        scan_memory: d
+            .resolutions
+            .iter()
+            .filter(|&&dpi| dpi > 1200)
+            .map(|&dpi| ScanMemory { dpi, times: 2.0 })
             .collect(),
     }
 }
@@ -389,6 +399,9 @@ mod tests {
         assert_eq!(c.glass_inches, geometry::GLASS_INCHES);
         assert_eq!(c.resolutions, geometry::RESOLUTIONS);
         assert_eq!(c.max_dpi(), 2400);
+        // Twice the memory at 2400 dpi only (the chip's half-width data).
+        assert_eq!(c.scan_memory_at(2400), 2.0);
+        assert_eq!(c.scan_memory_at(1200), 1.0);
         let labels: Vec<_> = c.buttons.iter().map(|b| b.label.as_str()).collect();
         assert_eq!(labels, ["Scan", "Copy", "Instant Share"]);
         assert_eq!(c.tone, HP3770.tone());

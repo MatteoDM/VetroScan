@@ -17,6 +17,13 @@ GitHub; here they are in English.
 
 ## [Unreleased]
 
+### Changed
+- The memory a scan needs (said in the Scan tab, and above half the computer's memory the scan
+  is refused) counts what each scanner's driver holds at that resolution: for the Epson 4490
+  about 1.8 times the image at 2400 dpi (read at 3200 and reduced) and the image alone at 4800
+  dpi, where before every scanner above 1200 dpi counted twice, as the HP Scanjet 3770 at 2400
+  dpi (unchanged). A doubled scan counts at the resolution sent to the scanner.
+
 ## [0.8.0] - 2026-11-14
 
 ### Added

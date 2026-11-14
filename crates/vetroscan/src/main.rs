@@ -3535,7 +3535,7 @@ impl App {
     }
 
     fn job_memory(&self, job: &Job) -> f64 {
-        Self::bytes(&self.job_request(job), self.dpi()) * self.doubling_factor()
+        self.bytes(&self.job_request(job)) * self.doubling_factor()
     }
 
     /// Lines after which the stripes of a scan from `source` at `dpi`
@@ -3642,14 +3642,18 @@ impl App {
         }
     }
 
-    fn bytes(request: &ScanRequest, dpi: u16) -> f64 {
+    /// Bytes of the scan `request`: its image, the 16-bit samples kept besides it, and what
+    /// the scanner's driver declares it holds more at the resolution sent to it
+    /// (`Capabilities::scan_memory`; twice the one chosen when the scan is doubled).
+    fn bytes(&self, request: &ScanRequest) -> f64 {
         let a = request.area;
         let raw = 3.0 * f64::from(a.width) * f64::from(a.height);
-        // 2400 dpi: the chip's half-width data and the doubled image; 16
-        // bits: the samples kept besides the 8-bit image.
-        let resolution = if dpi > 1200 { 2.0 } else { 1.0 };
         let depth = if request.depth == 16 { 3.0 } else { 1.0 };
-        raw * resolution * depth
+        let sent = match self.double_dpi() {
+            Some(double) if self.doubles() => double,
+            _ => request.dpi,
+        };
+        raw * depth * self.caps.scan_memory_at(sent)
     }
 
     /// The computer's memory, when the next scan would need more than half of it at its
@@ -3681,7 +3685,7 @@ impl App {
         if !plan.is_empty() {
             return plan.iter().map(|j| self.job_memory(j)).fold(0.0, f64::max);
         }
-        Self::bytes(&self.request(), self.dpi()) * self.doubling_factor()
+        self.bytes(&self.request()) * self.doubling_factor()
     }
 
     fn start(&mut self, purpose: Purpose) {

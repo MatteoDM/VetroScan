@@ -1472,7 +1472,12 @@ never run by us (step 12).
        "servirebbero circa 25,1 GB, il computer ne ha 34,3", in red, and nothing is sent: the
        memory read with PowerShell on Windows. Left: `App::bytes` doubles the estimate above
        1200 dpi for the HP 3770's reasons (its chip's half-width data), a scanner's number in
-       the app; for the Epson the estimate is cautious (1.7 GB of image there).
+       the app; for the Epson the estimate is cautious (1.7 GB of image there). **Done** (14
+       November 2026): `Capabilities::scan_memory` (a multiple per resolution, none by
+       default); the HP 3770 declares 2 at 2400 dpi, the Epson 4490 11/6 at 2400 (the data
+       read at 3200 and the image realigned from it, 4/3 each, beside the reduced one; computed
+       from the code, not measured) and nothing at 4800; the app looks it up at the resolution
+       sent (doubled scans too); an e2e with the made-up flatbed with and without it.
     4. Capture 42's `.pcap`: the first piece of its shading, 65,508 or 65,520 bytes (the
        stripped text says 65,508, the header's length says 65,520). **Done** (13 November
        2026, read from the `.pcap`): USBPcap's `dataLength` is 65,520 (`0xFFF0`, the 65,508

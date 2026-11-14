@@ -15,8 +15,8 @@
 
 use crate::{
     check, Adapter, Backend, ButtonInfo, Capabilities, ColourCorrection, ColourMatrix, ColourMode,
-    DeviceInfo, DeviceStatus, Error, LampInfo, LampState, Progress, Result, ScanRequest,
-    ScanResult, Scanner, Source, Stripes, SuggestedAction, Tone,
+    DeviceInfo, DeviceStatus, Error, LampInfo, LampState, Progress, Result, ScanMemory,
+    ScanRequest, ScanResult, Scanner, Source, Stripes, SuggestedAction, Tone,
 };
 use scan_imaging::{Format, Image};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -285,6 +285,11 @@ impl FakeScanner {
                 })
                 .to_vec(),
             colour: Vec::new(),
+            // As the HP 3770's at 2400 dpi.
+            scan_memory: vec![ScanMemory {
+                dpi: 2400,
+                times: 2.0,
+            }],
         })
     }
 
@@ -312,6 +317,7 @@ impl FakeScanner {
             },
             stripes: Vec::new(),
             colour: Vec::new(),
+            scan_memory: Vec::new(),
         })
     }
 

@@ -214,6 +214,38 @@ fn pages_add_up_in_a_document() {
     );
 }
 
+/// The memory a scan takes counts what the scanner's driver declares it holds more at a
+/// resolution (`Capabilities::scan_memory`): the made-up flatbed, as the HP 3770, twice at 2400
+/// dpi; the same scanner declaring nothing, the image alone. At 1200 dpi both the same.
+#[test]
+fn a_scans_memory_counts_what_its_driver_declares() {
+    use scanner_api::Scanner as _;
+    let memory = |scanner: FakeScanner, dpi: u16| {
+        let mut ui = Ui::with_scanners(vec![scanner]);
+        ui.send(Message::Kind(Kind::Document));
+        ui.send(Message::Dpi(dpi));
+        assert_eq!(ui.app.dpi(), dpi);
+        let m = ui.app.memory();
+        std::mem::forget(ui);
+        testing::clean_up();
+        m
+    };
+    let declaring = FakeScanner::flatbed();
+    assert_eq!(declaring.capabilities().scan_memory_at(2400), 2.0);
+    let plain = || {
+        FakeScanner::with(scanner_api::Capabilities {
+            model: "Senza memoria dichiarata".into(),
+            scan_memory: Vec::new(),
+            ..FakeScanner::flatbed().capabilities().clone()
+        })
+    };
+    let (with, without) = (memory(declaring, 2400), memory(plain(), 2400));
+    assert!(without > 0.0);
+    assert!((with / without - 2.0).abs() < 1e-9, "{with} {without}");
+    let (with, without) = (memory(FakeScanner::flatbed(), 1200), memory(plain(), 1200));
+    assert_eq!(with, without);
+}
+
 /// A scan that would need more than half the computer's memory at its height is refused, said
 /// in the pane and on pressing Scansiona, with nothing sent; on a computer with enough memory,
 /// or before its memory is known, the same scan goes.

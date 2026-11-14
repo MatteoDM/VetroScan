@@ -46,7 +46,8 @@ pub use usbscan::UsbscanTransport;
 use protocol::FirmwareOutcome;
 use scanner_api::{
     ButtonInfo, Capabilities, ColourCorrection, ColourMatrix, ColourMode, DeviceStatus, Error,
-    LampInfo, Progress, Result, ScanRequest, ScanResult, Source, SuggestedAction, Tone, UsbId,
+    LampInfo, Progress, Result, ScanMemory, ScanRequest, ScanResult, Source, SuggestedAction, Tone,
+    UsbId,
 };
 use std::fmt;
 use std::path::PathBuf;
@@ -254,7 +255,27 @@ pub fn capabilities() -> Capabilities {
             source: Source::Glass,
             matrix: GLASS_COLOUR,
         }],
+        scan_memory: scan_memory(),
     }
+}
+
+/// What a scan read along at another resolution ([`setup::READ_ALONG`], 2400 dpi at 3200)
+/// holds while it is put together, against one read at its own: the data read and the image
+/// realigned from it are `along / dpi` times the image each, and the image reduced from them is
+/// held beside both (`scan::scan_glass`: `reduce_along(assemble(&raw))` while `raw` lives),
+/// where a scan at its own resolution holds the data and one image. Computed from the code, not
+/// measured.
+fn scan_memory() -> Vec<ScanMemory> {
+    setup::READ_ALONG
+        .iter()
+        .map(|&(dpi, along)| {
+            let r = f64::from(along) / f64::from(dpi);
+            ScanMemory {
+                dpi: dpi as u16,
+                times: (2.0 * r + 1.0) / 2.0,
+            }
+        })
+        .collect()
 }
 
 /// Epson Scan's correction of the glass's colours: it sends the scanner no colour correction
@@ -625,6 +646,19 @@ mod tests {
         send::<Gt4490>();
         send::<EpsonBackend>();
         send::<NusbTransport>();
+    }
+
+    /// 2400 dpi is read along at 3200 and reduced: the data and the image realigned from it
+    /// are 4/3 of the image each, beside the image reduced; every other resolution holds the
+    /// data and one image, as the application's estimate counts.
+    #[test]
+    fn the_memory_declared_is_the_reduction_s() {
+        let c = capabilities();
+        assert_eq!(c.scan_memory.len(), 1);
+        assert!((c.scan_memory_at(2400) - 11.0 / 6.0).abs() < 1e-12);
+        for dpi in [100, 200, 300, 400, 600, 1200, 4800] {
+            assert_eq!(c.scan_memory_at(dpi), 1.0, "{dpi}");
+        }
     }
 
     #[test]

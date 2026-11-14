@@ -105,6 +105,22 @@ pub struct Capabilities {
     /// to the picture, where the user leaves it on
     /// (`scan_imaging::colour`).
     pub colour: Vec<ColourCorrection>,
+    /// The resolutions at which its driver holds more than the scan's own image while putting
+    /// it together (data read at another resolution, or in pieces, kept besides the image), and
+    /// how much more: the host counts it when it estimates a scan's memory. A resolution not
+    /// listed takes the image's size.
+    pub scan_memory: Vec<ScanMemory>,
+}
+
+/// How much memory a scanner's driver needs at one resolution, as a multiple of what the same
+/// scan needs at a resolution where it holds only the image (the host's estimate is made for
+/// those, [`Capabilities::scan_memory`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScanMemory {
+    /// The resolution, dpi.
+    pub dpi: u16,
+    /// The multiple, 1 or more.
+    pub times: f64,
 }
 
 /// The correction of a scanner's colours from one source.
@@ -152,6 +168,7 @@ impl Capabilities {
             },
             stripes: Vec::new(),
             colour: Vec::new(),
+            scan_memory: Vec::new(),
         }
     }
 
@@ -162,6 +179,15 @@ impl Capabilities {
             .iter()
             .find(|s| s.source == source && s.dpi == dpi)
             .map(|s| usize::from(s.repeat))
+    }
+
+    /// How much more memory a scan at `dpi` needs in the driver ([`ScanMemory`]): 1 where it
+    /// declares nothing.
+    pub fn scan_memory_at(&self, dpi: u16) -> f64 {
+        self.scan_memory
+            .iter()
+            .find(|m| m.dpi == dpi)
+            .map_or(1.0, |m| m.times.max(1.0))
     }
 
     /// The correction of the colours of a scan from `source`, if it has
