@@ -691,8 +691,14 @@ fn film_scan(
     let c = &s.calibration;
     println!(
         "calibration: lid unit back {} steps, offsets {:02x?}, exposures {:?} us, gains \
-         {:02x?}, image gains {:02x?}",
-        c.back, c.offsets, c.exposures, c.gains, c.image_gains
+         {:02x?}, image gains {:02x?}; columns read {}-{}",
+        c.back,
+        c.offsets,
+        c.exposures,
+        c.gains,
+        c.image_gains,
+        c.plan.geometry.columns.0,
+        c.plan.geometry.columns.1
     );
     if let Some(path) = raw {
         std::fs::write(path, &s.raw)

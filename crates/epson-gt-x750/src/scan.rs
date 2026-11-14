@@ -796,7 +796,7 @@ fn film_calibration<T: Transport>(
         wait_ready(g, log)?;
         let d = read_all(g, 4, 4, window_px * 3)?;
         wait_ready(g, log)?;
-        match fc::exposure_round(x, window_level(&d), held) {
+        match fc::exposure_round(x, window_level(&d), held, fc::exposure_cap(base)) {
             Some(next) => x = next,
             None => break,
         }

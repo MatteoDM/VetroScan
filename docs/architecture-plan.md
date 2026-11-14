@@ -1730,6 +1730,20 @@ never run by us (step 12).
     steps (the same move, 12 steps shorter or longer, the unit stopping inside the travel it has
     just made) are let out too, Matteo's decision (`guard::FILM_BACK_MOVES`); further ones are still
     refused. The white bytes' rule (2-4 units off) can wait for that scan's result.
+    **Every film combination captured tried** (15 November 2026, Matteo at the scanner, captures
+    90-96, `05-catture.md`): negatives at 1200, 2400 (16 and 8 bits) and 4800 dpi and a slide at
+    2400, each Epson Scan's request, each through and the carriages home (60, 75, 78, 132 and 59 s);
+    against Epson Scan's TIFF of the same request rank correlations of 0.94-0.99 a channel, the
+    three channels at the same offset (no colour fringes, no comb from the staggered columns at
+    4800), 0.1-0.35 mm from Epson Scan's (the film put back by hand). The slide came out mirrored
+    left to right against capture 80 (put in the holder the other way: Epson Scan's own read of 80
+    is not mirrored against its TIFF); mirrored back, 0.97-0.98, and scanned again turned in the
+    holder (97) it came out as Epson Scan's, 0.98, unmirrored. On the way: the slide's red asked
+    more than 16,363 µs at its third exposure round, a line time over the longest captured (25,344
+    µs; Epson Scan's red 16,213 and 16,272 in 80 and 81), and the guard stopped it (94); a channel
+    now stops at that limit (`film_cal::exposure_cap`) and the loop ends when nothing more moves
+    (96: red 16,363). A scan stopped half-way leaves the carriages where they were; the next opening
+    refuses to start from there, and the scanner then takes them home by itself (88, 95).
     **Left of step 14**, what Epson Scan computes from its calibration reads (each in the
     captures with its reads, to rebuild the same way): N from the 150-line read; the line time T and
     the three exposures of `1E 21` (from reads of the window at T 9600 / 13,056 and exposures

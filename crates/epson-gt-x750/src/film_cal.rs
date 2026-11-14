@@ -65,20 +65,32 @@ pub fn level(lines: &[&[u8]]) -> [u32; 3] {
 }
 
 /// One round of the exposures' loop (`0x426210`, `0x4254d0`): a channel whose level is outside
-/// [`EXPOSURE_WINDOW`] and not `held` gets X x 230 / level, at least [`EXPOSURE_START`]; `None`
-/// when every channel not held is inside (the loop is over). For a negative the second and
-/// third channels are held while the first is found; for a slide none.
-pub fn exposure_round(x: [u32; 3], level: [u32; 3], held: [bool; 3]) -> Option<[u32; 3]> {
+/// [`EXPOSURE_WINDOW`] and not `held` gets X x 230 / level, at least [`EXPOSURE_START`] and at
+/// most `cap` ([`exposure_cap`]); `None` when no channel moved: every channel not held is
+/// inside, or stays at its limit (the loop is over). For a negative the second and third
+/// channels are held while the first is found; for a slide none.
+pub fn exposure_round(x: [u32; 3], level: [u32; 3], held: [bool; 3], cap: u32) -> Option<[u32; 3]> {
     let mut next = x;
     let mut moved = false;
     for c in 0..3 {
         if held[c] || (EXPOSURE_WINDOW.0..=EXPOSURE_WINDOW.1).contains(&level[c]) {
             continue;
         }
-        next[c] = (x[c] * EXPOSURE_TARGET / level[c].max(1)).max(EXPOSURE_START);
-        moved = true;
+        next[c] = (x[c] * EXPOSURE_TARGET / level[c].max(1))
+            .clamp(EXPOSURE_START, cap.max(EXPOSURE_START));
+        moved |= next[c] != x[c];
     }
     moved.then_some(next)
+}
+
+/// The longest exposure a window read may ask at `base`: its line time (the margin + the
+/// longest exposure, [`window_block21`]) kept within the longest Epson Scan was captured
+/// sending, 25,344 µs (`crate::guard::FILM_LINE_TIMES`; captures 80, 81: a slide's red at
+/// 16,213 and 16,272 µs). Our first slide (capture 94, 15 November 2026) asked more than that
+/// for its red: Epson Scan's own limit is in a table of its interpreter not read (`0x40c820`);
+/// ours keeps the scanner inside what was captured, the red a little under its level.
+pub fn exposure_cap(base: u32) -> u32 {
+    crate::guard::FILM_LINE_TIMES.end() - margin(base)
 }
 
 /// The constant 110 µs the interpreter takes off an exposure before it rounds it, and adds back.
@@ -372,34 +384,59 @@ mod tests {
         panic!("the search did not end");
     }
 
+    /// A channel that would need a line time longer than any captured stops at its limit, and
+    /// the loop ends when nothing more moves (our first slide, capture 94: red 16,355 µs, then
+    /// more asked).
+    #[test]
+    fn an_exposure_stops_at_the_longest_line_time_captured() {
+        let cap = exposure_cap(4800);
+        assert_eq!(cap, 16_363);
+        assert_eq!(cap + margin(4800), 25_344);
+        assert_eq!(exposure_cap(2400) + margin(2400), 25_344);
+        let x = [16_355, 5927, 5661];
+        assert_eq!(
+            exposure_round(x, [218, 230, 228], [false; 3], cap),
+            Some([16_363, 5927, 5661])
+        );
+        assert_eq!(
+            exposure_round([16_363, 5927, 5661], [219, 230, 228], [false; 3], cap),
+            None
+        );
+        // Its line time is the longest captured.
+        let b = window_block21(4800, [16_363, 5927, 5661], false, 2);
+        assert_eq!(u32::from_le_bytes([b[0], b[1], b[2], 0]), 25_344);
+    }
+
     #[test]
     fn the_exposures_follow_the_captures() {
         let neg = [false, true, true];
+        // Never reached in Epson Scan's captures: the same at any limit above them.
+        let cap = exposure_cap(4800);
         // 74: 3840 -> 13,182 on the first channel, then in the window.
         assert_eq!(
-            exposure_round([3840; 3], [67, 147, 165], neg),
+            exposure_round([3840; 3], [67, 147, 165], neg, cap),
             Some([13_182, 3840, 3840])
         );
         assert_eq!(
-            exposure_round([13_182, 3840, 3840], [223, 149, 168], neg),
+            exposure_round([13_182, 3840, 3840], [223, 149, 168], neg, cap),
             None
         );
         // 77: three rounds.
         assert_eq!(
-            exposure_round([12_988, 3840, 3840], [219, 147, 168], neg),
+            exposure_round([12_988, 3840, 3840], [219, 147, 168], neg, cap),
             Some([13_640, 3840, 3840])
         );
         // 80, a slide: all three channels, then the first again.
         assert_eq!(
-            exposure_round([3840; 3], [58, 160, 174], [false; 3]),
+            exposure_round([3840; 3], [58, 160, 174], [false; 3], cap),
             Some([15_227, 5520, 5075])
         );
         assert_eq!(
-            exposure_round([15_227, 5520, 5075], [216, 231, 230], [false; 3]),
+            exposure_round([15_227, 5520, 5075], [216, 231, 230], [false; 3], cap),
             Some([16_213, 5520, 5075])
         );
         assert_eq!(
-            exposure_round([16_213, 5520, 5075], [229, 230, 230], [false; 3]),
+            exposure_round([16_213, 5520, 5075], [229, 230, 230], [false; 3], cap),
             None
         );
     }
