@@ -1575,7 +1575,27 @@ never run by us (step 12).
 15. **The adapter in the contract**: `Adapter { area 68 x 236 mm, Slide and Negative, its
     resolutions }`; strips of six and four slides with `film::frames` as on the 3770; the 6 x 12
     cm frame is the "medium format" field already planned (below, "Behind trait Scanner").
+    **Since the captures** (14 November 2026): the window is 2.7 x 9.33 in (68.6 x 237 mm,
+    `film::ADAPTER_INCHES`), the same for strips and slides, rather than 68 x 236; the
+    resolutions to declare are the captured ones (`guard::FILM_COVERED`: negatives 600, 1200,
+    2400, 4800; slides 2400 only, so far); Epson Scan's frames are areas the user draws on the
+    preview, no frame finding of its own was seen (`film::frames` stays the app's). Not started:
+    nothing to declare before the film path scans.
 16. Phase 13's films (base, levels, colour) on the 4490's scans: nothing new in the app.
+    **Material** (14 November 2026): Epson Scan's TIFFs of the same negative frame at 600, 1200
+    and 4800 dpi (74-76), of frame 6 at 2400 dpi in 16 and 8 bits (77, 78) and of two slides at
+    2400 (80, 81), in `captures/epson4490`, to set our film scans against once the film path
+    scans; and the lid's lamp's warm-up to measure then (step 13). Not started.
+
+**Where the films stand, in order** (14 November 2026, night):
+1. Done: captures 72-81 (82, medium format, when Matteo has a film); the film guard
+   (`47322f3`); the lid's lamp both ways (`38b779b`, tried on the scanner).
+2. The film path's rules (step 14, "Left of step 14"), each rebuilt from 74-81 by a test,
+   nothing sent.
+3. The first film moves of ours: an exact replay of capture 74 (`epson4490 replay ... --move`),
+   Matteo told before; then our own plan through the guard, opened one combination at a time.
+4. The adapter in the contract and the app (step 15), then phase 13's films on its scans
+   (step 16) and the lid's lamp's warm-up measured; then Digital ICE (step 17).
 
 **E. Digital ICE** (milestone 6)
 
