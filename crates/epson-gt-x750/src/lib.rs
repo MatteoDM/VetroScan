@@ -45,8 +45,8 @@ pub use usbscan::UsbscanTransport;
 
 use protocol::FirmwareOutcome;
 use scanner_api::{
-    ButtonInfo, Capabilities, ColourMode, DeviceStatus, Error, LampInfo, Progress, Result,
-    ScanRequest, ScanResult, SuggestedAction, Tone, UsbId,
+    ButtonInfo, Capabilities, ColourCorrection, ColourMatrix, ColourMode, DeviceStatus, Error,
+    LampInfo, Progress, Result, ScanRequest, ScanResult, Source, SuggestedAction, Tone, UsbId,
 };
 use std::fmt;
 use std::path::PathBuf;
@@ -250,9 +250,35 @@ pub fn capabilities() -> Capabilities {
             gamma: 1.8,
         },
         stripes: Vec::new(),
-        colour: Vec::new(),
+        colour: vec![ColourCorrection {
+            source: Source::Glass,
+            matrix: GLASS_COLOUR,
+        }],
     }
 }
+
+/// Epson Scan's correction of the glass's colours: it sends the scanner no colour correction
+/// (`1E 57` byte 33 is 0 in every capture) and applies this matrix on the computer to what the
+/// scanner sends, values of its tone tables (gamma about 1.8: 1.76-1.87 by channel, captures
+/// 15 and 59). In thirty-seconds, rows adding up to 1; blue the most changed (48/32, less 14/32
+/// of green). Measured on Epson Scan's own captures, the data sent against its TIFF
+/// (`captures/epson4490/tools/colour_fit.py`, 14 November 2026): 15 (600 dpi) every pixel
+/// exactly, 13 and 57 (2400 dpi, two power-ons) within 0.003. At 4800 dpi Epson Scan does more
+/// of its own and the fit is looser (59, 14); the matrix is taken as the same.
+pub const GLASS_COLOUR: ColourMatrix = ColourMatrix {
+    rows: [
+        35.0 / 32.0,
+        -2.0 / 32.0,
+        -1.0 / 32.0,
+        -3.0 / 32.0,
+        38.0 / 32.0,
+        -3.0 / 32.0,
+        -2.0 / 32.0,
+        -14.0 / 32.0,
+        48.0 / 32.0,
+    ],
+    gamma: 1.8,
+};
 
 /// A scan as the contract wants it: 8-bit linear RGB (the top byte of 16-bit samples), and
 /// the 16-bit samples when the scan read them.
@@ -616,6 +642,14 @@ mod tests {
             vec![100, 200, 300, 400, 600, 1200, 2400, 4800]
         );
         assert_eq!(caps.buttons.len(), 4);
+        // Epson Scan's colours on the glass, grey left grey; none for films yet.
+        let m = caps
+            .colour_at(Source::Glass)
+            .expect("the glass's correction");
+        for row in m.rows.chunks(3) {
+            assert!((row.iter().sum::<f32>() - 1.0).abs() < 1e-6, "{row:?}");
+        }
+        assert_eq!(caps.colour_at(Source::Negative), None);
         let lamp = caps.lamp.expect("a lamp the host switches off");
         assert_eq!(lamp.warm_up, Duration::from_secs(150));
         assert_eq!(lamp.switches_off_after, Some(Duration::from_secs(900)));

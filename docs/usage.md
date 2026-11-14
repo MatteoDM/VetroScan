@@ -275,6 +275,11 @@ from grey to colour and back.
 even while the viewer shows a page: the pages keep theirs. The colour of a page already
 scanned is changed in the **Adjust** tab, with **Mode** at the top while the page is shown.
 
+**Correct the scanner's colours** (in the **Scan** tab, on by default, shown only for a
+scanner that declares a correction for the glass: the Epson Perfection 4490, with the one
+Epson Scan applies, which makes blues and greens livelier): untick it to get the colours as
+the sensor reads them. It applies from the next scan.
+
 ### Depth: 8 or 16 bits
 
 Only for scanners that give 16 bits, like the HP 3770.

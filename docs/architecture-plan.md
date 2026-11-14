@@ -1289,7 +1289,23 @@ never run by us (step 12).
    with it. On the scanner after a power-on: `15`, the table loaded, the scan right; again:
    `06`, the same image.
 10. **The stripes and the colour** on the 4490: "Misura le righe" and the colour matrix, as for
-    the 3770 (phase 13's tools).
+    the 3770 (phase 13's tools). **The colour done** (14 November 2026): no target needed,
+    Epson Scan's own correction measured. It sends the scanner none (`1E 57` byte 33 is 0 in
+    every capture) and applies a matrix on the computer to what the scanner sends (values of
+    its tone tables, gamma 1.76-1.87 by channel, its levels per scan). Fitted on its captures,
+    the data sent against its TIFF (`captures/epson4490/tools/colour_fit.py`): 15 (600 dpi)
+    every pixel exactly, in thirty-seconds, rows of 32: (35, -2, -1), (-3, 38, -3), (-2, -14,
+    48); 13 and 57 (2400 dpi, two power-ons) within 0.003; 59 and 14 (4800) looser, Epson
+    Scan doing more of its own there. `epson_gt_x750::GLASS_COLOUR` (gamma 1.8) declared for
+    `Source::Glass`; the app applies a glass correction in `cleaned`, before anything else, on
+    the 16-bit samples or the 8-bit ones brought to 16 (films keep theirs in `develop`), the
+    tick in the Scan tab where the scanner declares one; on by default (Matteo, after trying
+    it), the "off" older files keep in Documento and Foto cleared once (`Prefs::migrated`,
+    `glass_colour_default`, a test). An e2e with a made-up scanner declaring one and one not.
+    Checked on our own 2400 scan of capture 57's place against Epson Scan's TIFF, 16 x 16
+    blocks, any tone allowed: blue left over 0.231 without, 0.147 with (red 0.097/0.089,
+    green 0.121/0.117). **The stripes**: not known whether the 4490 has them; a scan of a
+    white sheet at a few resolutions decides, and only then anything is built.
 11. **2400 dpi**: the rules already rebuild Epson Scan's capture 13 (2400 x 3200, reduced on the
     computer). A second capture at 2400, then the guard and the reduction in the driver.
     **2400 dpi done** (13-14 November 2026): Epson Scan's captures 57 (2400 dpi, 48 bit, 20 x

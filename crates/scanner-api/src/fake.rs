@@ -103,6 +103,13 @@ pub const SLIDE_COLOUR: ColourMatrix = ColourMatrix {
     gamma: 2.2,
 };
 
+/// The correction of the glass's colours of [`FakeScanner::with_glass_colour`]: made up, more
+/// saturated colours, grey left grey.
+pub const GLASS_COLOUR: ColourMatrix = ColourMatrix {
+    rows: [1.3, -0.15, -0.15, -0.15, 1.3, -0.15, -0.15, -0.15, 1.3],
+    gamma: 1.8,
+};
+
 /// The transmission of the adapter's area with slides in the holder (as
 /// [`film`]): the lamp in the slot at the top, the slides' pictures (a
 /// scene lighter across, in a warm colour), the opaque mounts and holder
@@ -347,6 +354,18 @@ impl FakeScanner {
             matrix: SLIDE_COLOUR,
         });
         s.controls.load(Holder::Slides);
+        s
+    }
+
+    /// [`Self::flatbed`] declaring a correction of the glass's colours ([`GLASS_COLOUR`]), as
+    /// the Epson 4490 declares Epson Scan's.
+    pub fn with_glass_colour() -> Self {
+        let mut s = Self::flatbed();
+        s.caps.model = "Flatbed A4 colour".into();
+        s.caps.colour.push(ColourCorrection {
+            source: Source::Glass,
+            matrix: GLASS_COLOUR,
+        });
         s
     }
 

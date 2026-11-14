@@ -716,7 +716,9 @@ impl Settings {
             destripe: false,
             double: false,
             colour_noise: false,
-            scanner_colour: false,
+            // The scanner's correction of the glass's colours, where it declares one: on, as
+            // for films (Matteo, 14 November 2026).
+            scanner_colour: true,
         }
     }
 
@@ -2807,13 +2809,12 @@ impl App {
         self.mm_draft = None;
     }
 
-    /// The scanner's correction of the colours of the film in the
-    /// adapter, where it declares one and the user leaves it on.
+    /// The scanner's correction of the colours from where the scans come (the glass, the film
+    /// in the adapter), where it declares one and the user leaves it on.
     fn colour_correction(&self) -> Option<ColourMatrix> {
-        let source = self.source();
         self.caps
-            .colour_at(source)
-            .filter(|_| source != Source::Glass && self.settings().scanner_colour)
+            .colour_at(self.source())
+            .filter(|_| self.settings().scanner_colour)
     }
 
     /// Where the scans come from.
@@ -4011,6 +4012,8 @@ impl App {
             photo_buttons: self.legacy_button_keys(Kind::Photo),
             buttons: self.button_actions.clone(),
             stripes: self.measured.clone(),
+            // Loaded preferences are migrated ([`prefs::Prefs::migrated`]).
+            glass_colour_default: true,
             document: self.document.to_stored(),
             photo: self.photo.to_stored(),
             film: prefs::StoredMode {
@@ -5767,6 +5770,27 @@ impl App {
         if self.filming() {
             return (image, samples16);
         }
+        // The scanner's correction of the glass's colours, where it declares one and the user
+        // leaves it on: on the linear samples, before anything else (films: in `develop`).
+        if let (Some(c), Format::Rgb) = (self.colour_correction(), image.format) {
+            let n = image.data.len();
+            match samples16.as_deref_mut().filter(|s| s.len() == n) {
+                Some(deep) => {
+                    c.apply(deep);
+                    for (v, &d) in image.data.iter_mut().zip(deep.iter()) {
+                        *v = (d >> 8) as u8;
+                    }
+                }
+                None => {
+                    let mut deep: Vec<u16> =
+                        image.data.iter().map(|&v| u16::from(v) * 257).collect();
+                    c.apply(&mut deep);
+                    for (v, d) in image.data.iter_mut().zip(deep) {
+                        *v = ((u32::from(d) + 128) / 257) as u8;
+                    }
+                }
+            }
+        }
         if doubled && image.format == Format::Rgb {
             let (w, h) = (image.width, image.height);
             let (data, nw, nh) = transform::halved(&image.data, w, h, 3);
@@ -7232,6 +7256,25 @@ impl App {
                         text(tr(
                             "Le righe chiare e scure che lo scanner lascia in ogni scansione: \
                              tolte dopo, senza tempo in più.",
+                        ))
+                        .size(11),
+                    );
+            }
+            // The glass: the scanner's correction of its colours, where it declares one (films
+            // have theirs below).
+            if !self.filming() && self.caps.colour_at(Source::Glass).is_some() {
+                pane = pane
+                    .push(
+                        checkbox(self.settings().scanner_colour)
+                            .label(tr("Correggi i colori dello scanner"))
+                            .on_toggle(Message::ScannerColour)
+                            .text_size(13),
+                    )
+                    .push(
+                        text(tr(
+                            "La correzione che lo scanner dichiara per gli originali sul vetro. \
+                             Senza, i colori come li legge il sensore. Vale dalla prossima \
+                             scansione.",
                         ))
                         .size(11),
                     );

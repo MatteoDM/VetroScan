@@ -130,8 +130,8 @@ pub struct StoredMode {
     /// Films: smooth the colour's noise (absent: the default of the way of
     /// working, yes for films).
     pub colour_noise: Option<bool>,
-    /// Films: correct the colours with the scanner's matrix for the film
-    /// (absent: the default of the way of working, yes for films).
+    /// Correct the colours with the scanner's matrix for where they come from, the glass or
+    /// the film, where it declares one (absent: the default of the way of working, yes).
     pub scanner_colour: Option<bool>,
     /// Films: the base of the roll in the adapter, locked ("Blocca la base"),
     /// transmission per channel (absent: each strip measures its own).
@@ -204,6 +204,10 @@ pub struct Prefs {
     /// The stripes measured on each scanner ("HP Scanjet 3770"), in place
     /// of what its model declares.
     pub stripes: BTreeMap<String, Vec<StoredStripes>>,
+    /// Whether [`Prefs::migrated`] has cleared the "off" every older file keeps for the
+    /// scanner's colours in Documento and Foto: the glass had no such correction then, and its
+    /// default became "on" (14 November 2026).
+    pub glass_colour_default: bool,
 }
 
 impl Default for Prefs {
@@ -240,6 +244,7 @@ impl Default for Prefs {
             lamp_off_minutes: 2,
             language: "automatica".into(),
             stripes: BTreeMap::new(),
+            glass_colour_default: false,
         }
     }
 }
@@ -343,8 +348,14 @@ impl Prefs {
 
     /// Preferences of an older version brought up to date: the actions of
     /// the HP Scanjet 3770's buttons, by position, become the actions of
-    /// its buttons by id.
+    /// its buttons by id; the "off" kept for the scanner's colours in Documento and Foto,
+    /// once, becomes the default (on).
     pub fn migrated(mut self) -> Self {
+        if !self.glass_colour_default {
+            self.document.scanner_colour = None;
+            self.photo.scanner_colour = None;
+            self.glass_colour_default = true;
+        }
         if !self.buttons.contains_key(LEGACY_MODEL) {
             let by_id = |actions: &[String]| -> BTreeMap<String, String> {
                 LEGACY_BUTTONS
@@ -485,6 +496,29 @@ mod tests {
             fresh.buttons[LEGACY_MODEL].document["scan"],
             "aggiungi-pagina"
         );
+    }
+
+    #[test]
+    fn the_glass_colour_off_of_older_files_becomes_the_default_once() {
+        // A file of v0.7: the scanner's colours kept "off" in Documento and Foto (the glass
+        // had no correction then), on for films.
+        let old = r#"{"document": {"dpi": 300, "colour": "colore", "threshold": 128,
+                        "output": "pdf", "pdf_size": "scansione", "pdf_sheet": "auto",
+                        "pdf_fit": "reale", "auto_save": false, "scanner_colour": false,
+                        "slides": false, "adjust": {}},
+                      "film": {"dpi": 1200, "colour": "colore", "threshold": 128,
+                        "output": "jpeg", "pdf_size": "scansione", "pdf_sheet": "auto",
+                        "pdf_fit": "reale", "auto_save": false, "scanner_colour": false,
+                        "slides": false, "adjust": {}}}"#;
+        let p = serde_json::from_str::<Prefs>(old).unwrap().migrated();
+        assert_eq!(p.document.scanner_colour, None, "the default, on");
+        assert_eq!(p.photo.scanner_colour, None);
+        assert_eq!(p.film.scanner_colour, Some(false), "films: a choice, kept");
+        assert!(p.glass_colour_default);
+        // Once migrated, an "off" chosen since stays.
+        let mut again = p.clone();
+        again.document.scanner_colour = Some(false);
+        assert_eq!(again.migrated().document.scanner_colour, Some(false));
     }
 
     #[test]

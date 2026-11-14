@@ -35,6 +35,10 @@ GitHub; here they are in English.
   A scan at 4800 dpi can be at most 58 mm wide at 16 bits and 116 mm at 8 bits (a wider line
   was never seen from the scanner). Tried on the scanner, at the glass's left edge too: the
   same image as Epson Scan's of the same place, to the pixel.
+- **Correct the scanner's colours** on the glass too, for a scanner that declares a correction
+  for it, on by default in Document and Photo: the Epson Perfection 4490 declares the one
+  Epson Scan applies (measured on Epson Scan's own scans: its blues and greens livelier than
+  the sensor's). Settings saved by earlier versions take the new default once.
 
 ### Changed
 - A scan that would need more than half of the computer's memory is refused, with how much it

@@ -2293,6 +2293,48 @@ fn the_scanners_colour_correction_is_offered_for_slides() {
     assert_eq!(ui.app.colour_correction(), None);
 }
 
+/// The scanner's correction of the glass's colours: offered where it declares one, on by
+/// default, kept per way of working, and the picture more colourful with it, at 8 and 16
+/// bits; a scanner declaring none has no tick.
+#[test]
+fn the_scanners_colour_correction_is_offered_for_the_glass() {
+    let tick = "Correggi i colori dello scanner";
+    // How far apart the channels are, over the picture.
+    let spread = |data: &[u8]| -> f64 {
+        let (mut s, mut n) = (0.0, 0.0);
+        for p in data.chunks_exact(3) {
+            let m = (f64::from(p[0]) + f64::from(p[1]) + f64::from(p[2])) / 3.0;
+            s += p.iter().map(|&v| (f64::from(v) - m).abs()).sum::<f64>();
+            n += 1.0;
+        }
+        s / n
+    };
+    let scan = |on: bool, depth: u8| {
+        let mut ui = Ui::with_scanners(vec![FakeScanner::with_glass_colour()]);
+        ui.click("Foto");
+        ui.send(Message::Pane(crate::Pane::Scan));
+        assert!(ui.shows(tick));
+        assert!(ui.app.settings().scanner_colour, "on by default");
+        ui.send(Message::Depth(crate::Depth(depth)));
+        ui.send(Message::ScannerColour(on));
+        assert_eq!(ui.app.prefs().photo.scanner_colour, Some(on));
+        ui.click("Scansiona foto");
+        assert_eq!(ui.app.pages.len(), 1, "{}", ui.app.note);
+        spread(&ui.app.pages[0].raw.full.data)
+    };
+    for depth in [8, 16] {
+        let (without, with) = (scan(false, depth), scan(true, depth));
+        assert!(with > without * 1.1, "{depth} bits: {without} then {with}");
+    }
+    // A scanner declaring none: no tick, nothing changed.
+    let mut ui = Ui::with_scanners(vec![FakeScanner::flatbed()]);
+    ui.click("Foto");
+    ui.send(Message::Pane(crate::Pane::Scan));
+    ui.send(Message::ScannerColour(true));
+    assert!(!ui.shows(tick));
+    assert_eq!(ui.app.colour_correction(), None);
+}
+
 /// Where the adapter takes one film only, there is no choice: its film.
 #[test]
 fn an_adapter_for_one_film_has_no_choice() {
