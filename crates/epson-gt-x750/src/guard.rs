@@ -21,7 +21,11 @@
 //!   and moves `1E 84` type 04 and `1E 01`, `1E 05` only right after the start
 //!   move's `1E 01`, once,
 //!   the tone tables and a shading table as wide as its columns), `1E 42`,
-//!   `1E 31` and `1E 47`.
+//!   `1E 31` and `1E 47`;
+//! * during a film's opening, once [`Guarded::permit_film`] has accepted a film request
+//!   ([`check_film_request`]): the same opening and read-only commands, that request's `1E 57`
+//!   (Epson Scan's form, [`crate::film::request_block`]) and the lid's lamp (`1E A2 02`); nothing
+//!   that moves, as the film path's moves are not in the driver yet.
 //!
 //! What a scan may ask ([`check_request`], [`check_plan`]): the glass, colour,
 //! 100, 200, 300, 400, 600 and 1200 dpi, at 8 bits (WIA) or 16 (Epson Scan,
@@ -29,9 +33,11 @@
 //! (so the motor's speeds) each resolution was captured with; a start move
 //! of a kind seen; no read further than the furthest captured. Refused, as
 //! not captured: 800 (WIA asks 1200), 900, 2400 and 4800 dpi, black and
-//! white, films, Epson Scan's draft mode. Anything else is refused with an
-//! error and never reaches the scanner.
+//! white, Epson Scan's draft mode. Films: only the requests Epson Scan was
+//! captured sending ([`FILM_COVERED`], inside [`crate::film::ADAPTER_INCHES`]).
+//! Anything else is refused with an error and never reaches the scanner.
 
+use crate::film::{self, Film, FilmRequest};
 use crate::firmware::{HEADER_LEN, PAYLOAD_LEN};
 use crate::protocol::{
     checksum, FIRMWARE_BEGIN, FIRMWARE_END, FIRMWARE_RUN, GET_BUTTONS, GET_STATE, TABLE_CHUNK,
@@ -67,6 +73,20 @@ pub const COVERED: [(u32, u8); 16] = [
     (2400, 16),
     (4800, 8),
     (4800, 16),
+];
+
+/// The film requests a scan may send: resolution across and along, bits, the films, as Epson
+/// Scan was captured sending them (14 November 2026; captures 16-19 and 72-81): its preview of
+/// the whole window at 300 dpi, 8 bits; a negative at 600, 1200 and 2400 dpi, 16 bits, at 2400
+/// at 8 bits too, and at 4800 dpi read along at 5400 ([`film::READ_ALONG`]); a slide at 2400
+/// dpi, 16 bits. Digital ICE's second pass (capture 18) is not here.
+pub const FILM_COVERED: [(u32, u32, u8, &[Film]); 6] = [
+    (300, 300, 8, &[Film::Negative, Film::Positive]),
+    (600, 600, 16, &[Film::Negative]),
+    (1200, 1200, 16, &[Film::Negative]),
+    (2400, 2400, 16, &[Film::Negative, Film::Positive]),
+    (2400, 2400, 8, &[Film::Negative]),
+    (4800, 5400, 16, &[Film::Negative]),
 ];
 
 /// The line times (µs) each resolution was captured with: the motor's speed
@@ -153,6 +173,37 @@ pub fn check_request(r: &Request) -> Result<()> {
     Ok(())
 }
 
+/// Whether a film request may be sent: a resolution, depth and film Epson Scan was captured
+/// sending ([`FILM_COVERED`]), an area inside the transparency unit's window.
+pub fn check_film_request(r: &FilmRequest) -> Result<()> {
+    let refuse = |why: String| Err(Error::InvalidRequest(format!("Epson 4490: {why}")));
+    let kind = match r.film {
+        Film::Negative => "a negative",
+        Film::Positive => "a slide",
+    };
+    let covered = FILM_COVERED
+        .iter()
+        .any(|&(d, y, b, f)| d == r.dpi && y == r.ydpi && b == r.bits && f.contains(&r.film));
+    if !covered {
+        return refuse(format!(
+            "{kind} at {} x {} dpi and {} bits was never captured (negatives: 600, 1200, 2400 at              16 bits, 2400 at 8, 4800 x 5400 at 16; slides: 2400 at 16; the preview at 300 and              8 bits)",
+            r.dpi, r.ydpi, r.bits
+        ));
+    }
+    let px = |inches: f64, dpi: u32| (inches * f64::from(dpi)).round() as u64;
+    let max_w = px(film::ADAPTER_INCHES.0, r.dpi);
+    let max_h = px(film::ADAPTER_INCHES.1, r.ydpi);
+    let end = |a: u32, b: u32| u64::from(a) + u64::from(b);
+    if r.width == 0 || r.height == 0 || end(r.x, r.width) > max_w || end(r.y, r.height) > max_h {
+        return refuse(format!(
+            "the area {}x{} at {},{} is not inside the film window ({max_w} x {max_h} pixels at              {} x {} dpi)",
+            r.width, r.height, r.x, r.y, r.dpi, r.ydpi
+        ));
+    }
+    film::request_block(r)?;
+    Ok(())
+}
+
 /// Whether a plan may be sent: its request accepted, and every move and
 /// speed one the captures have shown.
 pub fn check_plan(p: &Plan) -> Result<()> {
@@ -224,10 +275,19 @@ enum Expect {
     TableHeader,
 }
 
+/// What a scan was asked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Asked {
+    /// The glass.
+    Glass(Request),
+    /// A film in the lid's transparency unit.
+    Film(FilmRequest),
+}
+
 /// What a scan may send.
 #[derive(Debug, Clone)]
 struct Permit {
-    request: Request,
+    asked: Asked,
     e57: [u8; 42],
     plan: Option<Plan>,
 }
@@ -302,8 +362,24 @@ impl<T: Transport> Guarded<T> {
     pub fn permit_request(&mut self, request: &Request) -> Result<()> {
         check_request(request)?;
         self.permit = Some(Permit {
-            request: *request,
+            asked: Asked::Glass(*request),
             e57: setup::request_block(request)?,
+            plan: None,
+        });
+        self.expect = None;
+        self.start_armed = false;
+        self.start_done = false;
+        Ok(())
+    }
+
+    /// Lets out a film's opening for `request`, if [`check_film_request`] accepts it: the
+    /// commands of the glass's opening, the film's `1E 57` and the lid's lamp (`1E A2 02`). No
+    /// plan follows: nothing that moves goes out for a film yet.
+    pub fn permit_film(&mut self, request: &FilmRequest) -> Result<()> {
+        check_film_request(request)?;
+        self.permit = Some(Permit {
+            asked: Asked::Film(*request),
+            e57: film::request_block(request)?,
             plan: None,
         });
         self.expect = None;
@@ -318,10 +394,19 @@ impl<T: Transport> Guarded<T> {
         let permit = self.permit.as_mut().ok_or_else(|| {
             Error::Other("Epson 4490: a plan without its request permitted".into())
         })?;
-        if permit.request != plan.request {
-            return Err(Error::Other(
-                "Epson 4490: the plan is not for the request permitted".into(),
-            ));
+        match permit.asked {
+            Asked::Glass(r) if r == plan.request => {}
+            Asked::Glass(_) => {
+                return Err(Error::Other(
+                    "Epson 4490: the plan is not for the request permitted".into(),
+                ))
+            }
+            Asked::Film(_) => {
+                return Err(Error::Other(
+                    "Epson 4490: a glass plan for a film: the film path's moves are not in the                      driver yet"
+                        .into(),
+                ))
+            }
         }
         check_plan(plan)?;
         permit.plan = Some(plan.clone());
@@ -393,12 +478,20 @@ impl<T: Transport> Guarded<T> {
             }
             return Err(refusal(data, "no scan permitted"));
         };
+        let film = matches!(permit.asked, Asked::Film(_));
+        // The glass's lamp in a glass scan, the lid's for a film (Epson Scan, captures 72-81).
+        let lamps: &[&[u8]] = if film {
+            &[&[0x02]]
+        } else {
+            &[&[0x00], &[0x01]]
+        };
         let request_level = match data {
             [0x1B, 0x40] | [0x1B, 0x13] => Some(None),
             [0x1E, 0x53 | 0xA1 | 0x92 | 0x8C | 0x04 | 0x8B] => Some(None),
             [0x1E, 0x87] => Some(one(&[&[0x00]])),
-            [0x1E, 0xA2] => Some(one(&[&[0x00], &[0x01]])),
-            // The lid's lamp switched back to the glass's (WIA's driver, capture 25); no block.
+            [0x1E, 0xA2] => Some(one(lamps)),
+            // The lid's lamp switched back to the glass's (WIA's driver, capture 25), and Epson
+            // Scan's opening (captures 72, 73); no block.
             [0x1E, 0x77] => Some(None),
             [0x1E, 0xB3] => Some(Some(Expect::GammaChannel)),
             [0x1E, 0x57] => Some(one(&[&permit.e57])),
@@ -409,6 +502,12 @@ impl<T: Transport> Guarded<T> {
             return idle(next);
         }
         let Some(p) = &permit.plan else {
+            if film {
+                return Err(refusal(
+                    data,
+                    "a film moves nothing yet: the film path is not in the driver",
+                ));
+            }
             return Err(refusal(data, "the scan's plan is not permitted yet"));
         };
         let next = match data {
@@ -1006,5 +1105,110 @@ mod tests {
         assert!(t
             .permit_request(&Request::new(2400, 0, 0, 591, 591, 8))
             .is_err());
+    }
+
+    /// A film request like one captured, with some fields changed.
+    fn film_like(i: usize, change: impl FnOnce(&mut FilmRequest)) -> FilmRequest {
+        let mut r = crate::film::tests::CAPTURED[i].1;
+        change(&mut r);
+        r
+    }
+
+    #[test]
+    fn every_captured_film_request_is_accepted() {
+        for (_, r) in crate::film::tests::CAPTURED {
+            check_film_request(&r).unwrap_or_else(|e| panic!("{r:?}: {e}"));
+        }
+    }
+
+    #[test]
+    fn film_requests_never_captured_are_refused() {
+        let refused = [
+            // A slide at 600 dpi (only negatives were scanned there).
+            film_like(2, |r| r.film = Film::Positive),
+            // 1200 dpi at 8 bits.
+            film_like(3, |r| r.bits = 8),
+            // 4800 read along at 4800 (Epson Scan read 5400).
+            film_like(4, |r| r.ydpi = 4800),
+            // 2400 read along at 3200, as on the glass.
+            film_like(5, |r| r.ydpi = 3200),
+            // A slide at 2400 dpi, 8 bits.
+            film_like(8, |r| r.bits = 8),
+            // The preview at 16 bits, and at 200 dpi.
+            film_like(0, |r| r.bits = 16),
+            film_like(0, |r| {
+                r.dpi = 200;
+                r.ydpi = 200;
+                r.width = 540;
+                r.height = 1866;
+            }),
+            // Past the window's right edge and its bottom, and empty.
+            film_like(0, |r| r.x = 1),
+            film_like(6, |r| r.y = 22_392 - r.height + 1),
+            film_like(6, |r| r.width = 0),
+            film_like(6, |r| r.x = u32::MAX - 10),
+        ];
+        for r in refused {
+            assert!(check_film_request(&r).is_err(), "{r:?}");
+        }
+        // The window's last line at 2400 dpi (9.33 in) is inside.
+        check_film_request(&film_like(6, |r| r.y = 22_392 - r.height)).unwrap();
+    }
+
+    #[test]
+    fn a_films_opening_goes_out_and_nothing_moves() {
+        let r = crate::film::tests::CAPTURED[6].1;
+        let mut t = guarded(&[]);
+        // No film permitted: its 1E 57 and the lid's lamp are refused.
+        t.bulk_out(&[0x1E, 0x57]).unwrap_err();
+        t.permit_film(&r).unwrap();
+        t.bulk_out(&[0x1B, 0x40]).unwrap();
+        t.bulk_out(&[0x1E, 0x77]).unwrap();
+        t.bulk_out(&[0x1E, 0x57]).unwrap();
+        // The glass's form of the request is not this film's.
+        let glass = setup::request_block(&Request::new(r.dpi, r.x, r.y, r.width, r.height, r.bits))
+            .unwrap();
+        assert!(t.bulk_out(&glass).is_err());
+        t.bulk_out(&[0x1E, 0x57]).unwrap();
+        t.bulk_out(&film::request_block(&r).unwrap()).unwrap();
+        // The lid's lamp, not the glass's, and not off.
+        t.bulk_out(&[0x1E, 0xA2]).unwrap();
+        assert!(t.bulk_out(&[0x01]).is_err());
+        t.bulk_out(&[0x1E, 0xA2]).unwrap();
+        assert!(t.bulk_out(&[0x00]).is_err());
+        t.bulk_out(&[0x1E, 0xA2]).unwrap();
+        t.bulk_out(&[0x02]).unwrap();
+        let sent = t.inner().writes.len();
+        // Nothing of the film path: what moves, its tables, the lid's other lamp, 1E 8A.
+        for m in [
+            &[0x1E, 0x25][..],
+            &[0x1E, 0x01],
+            &[0x1E, 0x05],
+            &[0x1E, 0x47],
+            &[0x1E, 0x84],
+            &[0x1E, 0x8A],
+            &[0x1E, 0x11],
+            &[0x1E, 0x41],
+        ] {
+            let e = t.bulk_out(m).unwrap_err().to_string();
+            assert!(e.contains("a film moves nothing yet"), "{e}");
+        }
+        assert_eq!(t.inner().writes.len(), sent);
+        // No glass plan for it either.
+        let p = plan(300, 472, 709, 591, 591, 8).unwrap();
+        assert!(t.permit_plan(&p).is_err());
+        // Once over, not even the lid's lamp.
+        t.end_scan();
+        t.bulk_out(&[0x1E, 0xA2]).unwrap();
+        assert!(t.bulk_out(&[0x02]).is_err());
+    }
+
+    #[test]
+    fn a_glass_scan_cannot_light_the_lids_lamp() {
+        let mut t = guarded(&[]);
+        t.permit_request(&Request::new(300, 0, 0, 591, 591, 8))
+            .unwrap();
+        t.bulk_out(&[0x1E, 0xA2]).unwrap();
+        assert!(t.bulk_out(&[0x02]).is_err());
     }
 }

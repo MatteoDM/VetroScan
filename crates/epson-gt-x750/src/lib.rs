@@ -25,6 +25,7 @@
 //! [`scanner_api::Registry`]; without the scanner it lists nothing and
 //! sends nothing.
 
+pub mod film;
 pub mod firmware;
 pub mod guard;
 pub mod mark;

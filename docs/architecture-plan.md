@@ -1519,6 +1519,46 @@ never run by us (step 12).
     2400 dpi 48 bits): motor base 600 steps per inch, ramps of 64 and 128 values, origins 647 and
     36, 4800 dpi across halved on the computer; then the guard for films, as `NEGATIVE_RESOLUTIONS`
     on the 3770.
+    **Captured** (14 November 2026, Matteo at Epson Scan, Professional mode, no corrections;
+    `captures/epson4490/05-catture.md`, "Le pellicole, catture 72-81"; `tools/film.py` there
+    prints a film capture in short): 72 the glass's preview then a negative's (the lamp switched
+    with the glass's warm), 73 a negative's preview right after a power cycle, 74-76 frame 1 of a
+    colour negative strip at 600, 1200, 4800 dpi (16 bits), 77-78 frame 6 at 2400 dpi (16, 8
+    bits), 79 the slides' preview, 80-81 the slides in positions 1 and 4 at 2400 dpi (16 bits).
+    82 (the 6 x 12 cm holder) waits for a medium-format film (Matteo has none yet).
+    **Read from them**:
+    - **The request** (`1E 57`) is Epson Scan's form: source `01` (byte 26), gamma `04`, the lines
+      per block (byte 28) 262,144 over the bytes of a line, at most 32, the film in byte 37 (`01`
+      negative, `00` positive); rebuilt byte for byte for all eleven film requests captured
+      (`film::request_block`, a test). **The window** is the same for strips and slides: the
+      preview asks 810 x 2799 at 300 dpi from (0, 0), 2.7 x 9.33 in (`film::ADAPTER_INCHES`).
+      **4800 dpi is read along at 5400** (capture 76: 7,872 lines read, Epson's image 6,997),
+      **2400 at 2400** (not 3200 as on the glass; captures 17, 19, 77, 78, 80, 81).
+    - **The sequence is the same at every resolution and film**: `1E 25 00` and a move of 970 +
+      1,024 steps parks the carriage at 1994 (`1E 86` then answers 1994; `04-carriage.md`'s park);
+      `1E 25 02`, 8 steps; a read of 150 lines (columns 2800-3184, while moving 1,920 steps, ramp
+      256) with the lid's lamp; `1E 25 02` and a move back of 228-252 steps (`1E 01` flag `0x30`,
+      the other direction), then `1E 8A` with 1,024 + those steps (`f0 04`, `fc 04`, `e4 04`):
+      the transparency unit's origin found from that read, it seems (the unit's position after
+      it is always 1416 less the move back). Then `1E 25 03` and a loop of short reads (4 lines,
+      the black pixels 35-83, then columns 2276-8756) with `1E 31` changed between them (bytes
+      0-5 from `80 00` to `8a 00 8c 00 90 00`, a binary search; then bytes 8-10 from `22 1b 1b`
+      down: the offsets, then the gains or the exposure, set by the driver per film, which the
+      glass never does), `1E 92` reading it back; a dark read with **`1E A2 03`** (the lid's
+      lamp off, it seems) then `1E A2 02` again; `1E 8B`/`1E 83` and the 07 table as at 1200 on
+      the glass; the image read with a shading table (`1E 84` type 05) and `1E 47`.
+    - **The guard for films** (`guard::FILM_COVERED`, `check_film_request`, `permit_film`;
+      committed): only those requests, inside the window; a film's opening may send its `1E 57`
+      and the lid's lamp (`1E A2 02`, not `01`, not `00`), and nothing that moves (`1E 25`, `01`,
+      `05`, `47`, `84`, `8A`, `11`, `41` refused for a film: "a film moves nothing yet"); a
+      glass scan cannot light the lid's lamp. Tests.
+    **Left of step 14**: the film path as rules (`setup.rs`' work for films): the park, the
+    unit's origin from the 150-line read, the `1E 31` search (what it aims at, from the reads),
+    the dark read, the columns and moves at each resolution, the 4800 reduction along; each
+    rebuilt from captures 74-81 by a test before anything moves. The first film scan of ours is
+    then an exact replay of capture 74 (600 dpi, the shortest: `epson4490 replay ... --move`,
+    the script made from the capture as for the glass's 24-26), Matteo told first; only then
+    our own plan.
 15. **The adapter in the contract**: `Adapter { area 68 x 236 mm, Slide and Negative, its
     resolutions }`; strips of six and four slides with `film::frames` as on the 3770; the 6 x 12
     cm frame is the "medium format" field already planned (below, "Behind trait Scanner").
