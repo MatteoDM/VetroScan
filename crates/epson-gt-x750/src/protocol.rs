@@ -93,7 +93,8 @@ impl State {
     pub fn error_text(self) -> String {
         format!(
             "the scanner reports an error of its own (1B 03 answered {:02X} {:02X}, its light \
-             flashing red): nothing more was sent to it; switch it off and on",
+             flashing red): nothing more was sent to it; the next scan clears it as Epson Scan \
+             does (1B 40), and if it comes back, switch it off and on",
             self.0[0], self.0[1]
         )
     }

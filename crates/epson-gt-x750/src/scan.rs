@@ -164,6 +164,22 @@ fn ramp_bytes(r: &[u16]) -> Vec<u8> {
 /// A wait longer than one poll goes to `log`, with the states seen. Answers when it first
 /// saw the lamp warming, if it did.
 fn wait_ready(t: &mut dyn Transport, log: &mut dyn FnMut(String)) -> Result<Option<Instant>> {
+    match wait_state(t, log)? {
+        Waited::Ready(warming) => Ok(warming),
+        Waited::Error(s) => Err(other(s.error_text())),
+    }
+}
+
+/// What [`wait_state`] found.
+enum Waited {
+    /// At rest, with when it first saw the lamp warming, if it did.
+    Ready(Option<Instant>),
+    /// The scanner's own error flag ([`State::error`]).
+    Error(State),
+}
+
+/// [`wait_ready`], the scanner's own error answered rather than turned into one.
+fn wait_state(t: &mut dyn Transport, log: &mut dyn FnMut(String)) -> Result<Waited> {
     let start = Instant::now();
     let mut warming = None;
     let until = start + WAIT;
@@ -178,7 +194,7 @@ fn wait_ready(t: &mut dyn Transport, log: &mut dyn FnMut(String)) -> Result<Opti
             )));
         }
         if s.error() {
-            return Err(other(s.error_text()));
+            return Ok(Waited::Error(s));
         }
         let at = start.elapsed().as_secs_f64();
         if s.0[0] & 0x01 != 0 && warming.is_none() {
@@ -195,7 +211,7 @@ fn wait_ready(t: &mut dyn Transport, log: &mut dyn FnMut(String)) -> Result<Opti
                     .collect();
                 log(format!("1B 03: waited {at:.2} s: {}", states.join(", ")));
             }
-            return Ok(warming);
+            return Ok(Waited::Ready(warming));
         }
         if Instant::now() > until {
             return Err(other(format!(
@@ -252,13 +268,85 @@ fn lamp_error(answer: u8) -> Error {
     ))
 }
 
-/// At the opening: the glass's lamp, or none (`00`: switched off by the host, lit again by
-/// the scan's `1E A2 01`). Whether it was off.
-fn lamp_glass_or_off(t: &mut dyn Transport) -> Result<bool> {
+/// `1E A1` at the opening: `01` the glass's lamp, `00` none (switched off by the host, lit
+/// again by the scan's `1E A2 01`), `02` the lid's (after films, capture 25, or after the
+/// scanner was reset with `1B 40`, captures 66 and 68: switched back with `1E 77`).
+fn lamp_at_opening(t: &mut dyn Transport) -> Result<u8> {
     match lamp_in_use(t)? {
-        0x01 => Ok(false),
-        0x00 => Ok(true),
-        other_ => Err(lamp_error(other_)),
+        a @ (0x00..=0x02) => Ok(a),
+        other_ => Err(other(format!(
+            "1E A1 answered {other_:02X}: neither the glass's lamp (01), the lid's (02) nor none (00)"
+        ))),
+    }
+}
+
+/// How long Epson Scan waited after `1B 40` before asking the state again, on a scanner it
+/// found in its own error (captures 66 and 68: 7 and 6 s; the carriages went home meanwhile,
+/// Matteo saw).
+const AFTER_RESET: Duration = if cfg!(test) {
+    Duration::ZERO
+} else {
+    Duration::from_secs(7)
+};
+
+/// How often the state is asked while the scanner's error clears.
+const RESET_POLL: Duration = if cfg!(test) {
+    Duration::from_millis(1)
+} else {
+    Duration::from_secs(1)
+};
+
+/// The scanner's own error ([`State::ERROR`], `98 81`, its light flashing red) cleared as Epson
+/// Scan clears it when opened then: `1B 40` (captures 66 and 68, 14 November 2026: `06`, the
+/// carriages home, then `19 81`, the lid's lamp selected and warming; ready again in under
+/// two minutes in 68-69, back in error by itself once, 66-67, with Epson Scan alone). Waited
+/// for as a warm-up, asked every second and stoppable; an error again ends it, to be switched
+/// off and on.
+fn clear_error(
+    t: &mut dyn Transport,
+    s: State,
+    log: &mut dyn FnMut(String),
+    events: &mut dyn FnMut(Event) -> bool,
+) -> Result<()> {
+    log(format!(
+        "1B 03: {:02X} {:02X}, the scanner's own error: 1B 40, as Epson Scan clears it",
+        s.0[0], s.0[1]
+    ));
+    command(t, [0x1B, 0x40])?;
+    let start = Instant::now();
+    let until = start + AFTER_RESET + WAIT;
+    loop {
+        let waited = start.elapsed();
+        let left = (until.saturating_duration_since(Instant::now())).as_secs();
+        if !events(Event::WarmingUp { left }) {
+            return Err(Error::Cancelled);
+        }
+        if waited >= AFTER_RESET {
+            let s = State(read_two(ask(t, GET_STATE, 2)?));
+            if s.error() {
+                return Err(other(format!(
+                    "the scanner reports an error of its own again (1B 03 answered {:02X} {:02X}, \
+                     its light flashing red): it came back after 1B 40; switch it off and on",
+                    s.0[0], s.0[1]
+                )));
+            }
+            if s.firmware_running() && s.0[0] & 0x43 == 0 {
+                log(format!(
+                    "the scanner's error cleared: ready after {:.0} s",
+                    waited.as_secs_f64()
+                ));
+                return Ok(());
+            }
+            if Instant::now() > until {
+                return Err(other(format!(
+                    "after 1B 40 the scanner still answers {:02X} {:02X} to 1B 03 after {} s",
+                    s.0[0],
+                    s.0[1],
+                    (AFTER_RESET + WAIT).as_secs()
+                )));
+            }
+        }
+        std::thread::sleep(RESET_POLL);
     }
 }
 
@@ -622,8 +710,15 @@ fn run<T: Transport>(
 ) -> Result<Scanned> {
     let Options { last_used, curves } = options;
     let e57 = setup::request_block(&request)?;
-    // The opening, as WIA's driver does it.
-    let warming = wait_ready(g, log)?;
+    // The opening, as WIA's driver does it; the scanner's own error cleared first, as Epson
+    // Scan does, its lamp then warmed again.
+    let (warming, reset) = match wait_state(g, log)? {
+        Waited::Ready(warming) => (warming, false),
+        Waited::Error(s) => {
+            clear_error(g, s, log, events)?;
+            (wait_ready(g, log)?, true)
+        }
+    };
     ask(g, [0x1E, 0x53], 42)?;
     wait_ready(g, log)?;
     command(g, [0x1B, 0x40])?;
@@ -637,16 +732,27 @@ fn run<T: Transport>(
             String::from_utf8_lossy(IDENTITY)
         )));
     }
-    let mut lamp_was_off = false;
+    // Any lamp but the glass's, or none: lit with `1E A2 01` below and waited for.
+    let mut lamp_was_off = reset;
     for _ in 0..2 {
         wait_ready(g, log)?;
-        lamp_was_off |= lamp_glass_or_off(g)?;
+        lamp_was_off |= lamp_at_opening(g)? != 0x01;
     }
     wait_ready(g, log)?;
     command(g, [0x1B, 0x40])?;
     ask(g, [0x1E, 0x53], 42)?;
     wait_ready(g, log)?;
-    lamp_was_off |= lamp_glass_or_off(g)?;
+    let lamp = lamp_at_opening(g)?;
+    lamp_was_off |= lamp != 0x01;
+    if lamp == 0x02 {
+        // The lid's lamp in use: WIA's driver sends 1E 77 here, then lights the glass's with
+        // 1E A2 01 and asks 1E A1 until 01 (capture 25, a glass scan after films).
+        command(g, [0x1E, 0x77])?;
+        log("the lid's lamp in use: 1E 77, as WIA's driver".into());
+        // Then the state and the lamp asked again (still 02 until 1E A2 01).
+        wait_ready(g, log)?;
+        lamp_at_opening(g)?;
+    }
     let gamma = curves.gamma();
     for channel in 0..3u8 {
         command(g, [0x1E, 0xB3])?;
@@ -654,11 +760,11 @@ fn run<T: Transport>(
         g.bulk_out(&gamma)?;
     }
     wait_ready(g, log)?;
-    lamp_was_off |= lamp_glass_or_off(g)?;
+    lamp_was_off |= lamp_at_opening(g)? != 0x01;
     ask(g, [0x1E, 0x53], 42)?;
     send(g, [0x1E, 0x57], &e57)?;
     wait_ready(g, log)?;
-    lamp_was_off |= lamp_glass_or_off(g)?;
+    lamp_was_off |= lamp_at_opening(g)? != 0x01;
     send(g, [0x1E, 0xA2], &[0x01])?;
     let lit = Instant::now();
     log("lamp on (1E A2 01)".into());
@@ -1227,8 +1333,45 @@ pub(crate) mod tests {
         }
     }
 
-    /// The scanner's own error flag stops the scan where it is seen, with nothing more sent:
-    /// at the opening, before the lamp, in the calibration.
+    /// With the lid's lamp in use (after films), the opening writes what WIA's driver wrote in
+    /// capture 25 as far as the glass's lamp lit: `1E 77`, the state and the lamp asked again,
+    /// the tables, `1E A2 01`; WIA then waits for the lamp asking `1B 03` and `1E A1` in turn,
+    /// ours with its own warm-up.
+    #[test]
+    fn the_lids_lamp_is_switched_back_as_wias_driver_does() {
+        let (_, text) = CAPTURES.iter().find(|(n, _)| *n == "25").unwrap();
+        let (r, at, _) = scan("25", text);
+        let e = r.unwrap_err().to_string();
+        assert!(at >= 59, "stopped at line {at}: {e}");
+        assert!(e.contains("(after 1E A2)"), "{e}");
+    }
+
+    /// The scanner's own error, found at the opening, is cleared with `1B 40` as Epson Scan
+    /// clears it (captures 66, 68), the state asked until at rest; an error again ends it.
+    #[test]
+    fn the_scanners_own_error_at_the_opening_is_cleared_with_1b_40() {
+        use crate::protocol::tests::Mock;
+        let error = State([0x98, 0x81]);
+        let mut t = Mock::answering(&[&[ACK], &[0x19, 0x81], &[0x18, 0x81]]);
+        clear_error(&mut t, error, &mut |_| {}, &mut |_| true).unwrap();
+        assert_eq!(
+            t.writes,
+            [vec![0x1B, 0x40], GET_STATE.to_vec(), GET_STATE.to_vec()]
+        );
+        let mut t = Mock::answering(&[&[ACK], &[0x19, 0x81], &[0x98, 0x81]]);
+        let e = clear_error(&mut t, error, &mut |_| {}, &mut |_| true)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("came back after 1B 40"), "{e}");
+        // Stopped while it clears: nothing more asked.
+        let mut t = Mock::answering(&[&[ACK]]);
+        let r = clear_error(&mut t, error, &mut |_| {}, &mut |_| false);
+        assert!(matches!(r, Err(Error::Cancelled)));
+        assert_eq!(t.writes, [vec![0x1B, 0x40]]);
+    }
+
+    /// The scanner's own error flag stops the scan where it is seen after the opening, with
+    /// nothing more sent: before the lamp, in the calibration.
     #[test]
     fn the_scanners_own_error_stops_the_scan() {
         let (_, text) = CAPTURES.iter().find(|(n, _)| *n == "29").unwrap();
@@ -1237,7 +1380,7 @@ pub(crate) mod tests {
             last_used: Some(SystemTime::now()),
             curves: Curves::Wia,
         };
-        for at in [1, 4, 8, 12] {
+        for at in [4, 8, 12] {
             let mut g = Guarded::new(Erring {
                 follow: Follow::new("29", text),
                 states: 0,
@@ -1249,9 +1392,8 @@ pub(crate) mod tests {
             let e = r.unwrap_err().to_string();
             assert!(e.contains("98 81"), "at {at}: {e}");
             assert_eq!(g.inner().after, Some(Vec::new()), "at {at}");
-            // Where it stopped: nothing sent yet at the first state; 1B 13 before the fourth.
+            // Where it stopped: 1B 13 before the fourth state.
             match at {
-                1 => assert!(!e.contains("(after"), "{e}"),
                 4 => assert!(e.ends_with("(after 1B 13)"), "{e}"),
                 _ => assert!(e.contains("(after 1E "), "at {at}: {e}"),
             }

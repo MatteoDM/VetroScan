@@ -398,6 +398,8 @@ impl<T: Transport> Guarded<T> {
             [0x1E, 0x53 | 0xA1 | 0x92 | 0x8C | 0x04 | 0x8B] => Some(None),
             [0x1E, 0x87] => Some(one(&[&[0x00]])),
             [0x1E, 0xA2] => Some(one(&[&[0x00], &[0x01]])),
+            // The lid's lamp switched back to the glass's (WIA's driver, capture 25); no block.
+            [0x1E, 0x77] => Some(None),
             [0x1E, 0xB3] => Some(Some(Expect::GammaChannel)),
             [0x1E, 0x57] => Some(one(&[&permit.e57])),
             [0x1E, 0x31] => Some(Some(Expect::Len(12))),

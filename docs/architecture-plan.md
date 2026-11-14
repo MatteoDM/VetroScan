@@ -1477,7 +1477,13 @@ never run by us (step 12).
 
 13. **The lid's lamp**: switching it as Epson's driver does (`1E 77`, `1E A2 01`/`02`, `1E A1`
     polled until it answers, capture 25), both ways; today a scan of the glass after films stops
-    with an error.
+    with an error. **Back to the glass done** (14 November 2026): at the opening's third
+    `1E A1`, `02` (the lid's) gets `1E 77`, the state and `1E A1` asked again, then the scan's
+    `1E A2 01` lights the glass's and `wait_lamp_lit` asks `1E A1` until `01`, the lamp then
+    warmed as one that was off (a test: capture 25 written write by write as far as `1E A2 01`;
+    the guard lets `1E 77` out at the opening, no block). Tried on the scanner after an Epson
+    Scan session: `02`, `1E 77`, `01` at once, the scan whole. The other way (to the lid's, for
+    films) with step 14.
 14. **The film path's rules** from captures 16-19 (negatives, a slide, previews; Epson Scan at
     2400 dpi 48 bits): motor base 600 steps per inch, ramps of 64 and 128 values, origins 647 and
     36, 4800 dpi across halved on the computer; then the guard for films, as `NEGATIVE_RESOLUTIONS`
@@ -1883,6 +1889,22 @@ the three photos, in reading order (tried in the app); the two previews of the 3
   gamma, `1E 57`). Switched off and on, the firmware sent again, the same scan ran whole.
   Both times the app had used the scanner just before; not shown to be the cause. Now the
   scan's error ends with the last command sent ("(after 1E 57)"; a test).
+  **Seen again, and caught** (14 November 2026, morning, Windows, captures 66-69 in
+  `captures/epson4490/05-catture.md`): the app opened, its lamp switched off by its lamp
+  choice, then a preview found `98 81` before sending anything (the last command the buttons'
+  poll); lid closed, nothing touched (Matteo). Epson Scan opened then (66) sends `1B 40` at
+  once: `06`, the carriages home (Matteo saw), `19 81` with `1E A1` answering `02` (the lid's
+  lamp selected) and warming, the lid's light on for a moment, no lamp lit after; **with
+  Epson Scan alone, idle, `98 81` again** a couple of minutes later (67: only `1B 03` and `1E
+  85` sent). Reset once more (68, lid open, then closed, 69): ready again in under two
+  minutes. In capture 24 (12 November) the same warm-up after `1B 40` lasted 53 s. So the
+  error is the scanner's own, during the warm-up of the lamp it selected, with or without our
+  driver; the cause is not known (the lid's cable was firmly in; an intermittent lamp supply
+  is a guess). **Done**: at a scan's opening `98 81` gets `1B 40` (`clear_error`, as Epson
+  Scan), 7 s, then the state asked every second as a warm-up (stoppable) until at rest; an
+  error again ends the scan, to be switched off and on (tests). The opening's wait is one
+  `1B 03` read whether or not there is an error (`wait_state`), so the replays of the captures
+  are unchanged. Not yet seen on the scanner: the error does not come on demand.
 - **The search with the lid open, on the real scan** (`scansioni/epson_coperchio_aperto_
   20261113.png`, the empty glass): the room is dark (blocks of 6-32 levels of 255, a smooth
   lighter band down the middle) and the search found **one** original, the whole glass: its

@@ -61,6 +61,13 @@ GitHub; here they are in English.
   less the last fraction of a millimetre no scan with Epson's driver was seen reaching).
 
 ### Fixed
+- Epson Perfection 4490 with its light flashing red (an error of the scanner's own, which
+  comes now and then while its lamp warms up, with Epson Scan too): the next preview or scan
+  clears it as Epson Scan does and goes on, with no need to switch it off and on; only if the
+  error comes back at once does VetroScan say so.
+- Epson Perfection 4490 after Epson Scan or after films: a scan of the glass no longer stops
+  because the lid's lamp is the one in use; it switches to the glass's lamp as Epson's driver
+  does.
 - Epson Perfection 4490: a scan at 1200 dpi wider than about 115 mm no longer hangs before
   reading, leaving the scanner deaf until switched off and on with its carriage away from
   home: its shading table, over 64 KB there, now goes to the scanner in pieces with a short
