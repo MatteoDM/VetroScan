@@ -1473,7 +1473,11 @@ never run by us (step 12).
        29 scanned a minute after a scan of the same power-on (no warm-up) and of another one
        (warm-up). In the app the open scanner is opened again after a power cycle and its
        last use forgotten, so the app already warmed the lamp up: the command line was the
-       case seen. Not yet tried on the scanner: a quick power cycle, then `epson4490 scan`.
+       case seen. **Tried** the same afternoon (`scansioni/epson_riaccensione_20261114`,
+       `epson4490 scan 100 40 60 50 50`): the first scan warmed up (x correction -128 in
+       that power-on), the second right after did not (12.6 s, `1E 87` the same); switched off
+       for 5 s and on, the scanner at rest at once (`18 81`, no warming flag: the case of the
+       fault), the third said "switched off and on since" (-101 now) and waited 150 s.
     3. The app's memory limit there: the Scan tab with a scan over half the PC's memory (the
        memory read with PowerShell, `ram.rs`; until read, no limit). In part (13 November
        2026): `ram.rs`' command, run alone, prints 34,274,361,344 (32 GB) in about 0.5 s,
@@ -1902,9 +1906,11 @@ decide. None changes the commands a scanner gets in the normal cases.
   a scan of another program left half-way (Epson Scan killed while reading), where taking the
   lock has Epson's driver send `1B 06` (capture 44). Tests: the lock first with nothing
   written, busy with nothing written, a left mark settled before the lock, a scan marked while
-  it lasts. Not yet tried on the scanner: the app opened while Epson Scan scans (it must say
-  busy and leave Epson Scan's scan whole), and the app killed half-way through a scan, then
-  opened again (it must stop the scan, as capture 54).
+  it lasts. **Tried** the same afternoon (the release build of `55c447e`): VetroScan closed
+  half-way through a 1200 dpi scan left its mark (and the scanner half-way; one `probe
+  --no-lock` sent by mistake then, as capture 46); opened again it said "collegamento" a while,
+  the carriage went home, the mark was gone and the scanner ready. Not tried in the app:
+  opening it while Epson Scan scans (capture 70 ran the same lock call, nothing written).
 - HP 3770 on Windows: the reason a scanner is not found (in use by another program, access
   denied, through `Backend::why_none`) shown in the app with the 3770 held by another program.
 
