@@ -26,6 +26,7 @@
 //! sends nothing.
 
 pub mod film;
+pub mod film_cal;
 pub mod firmware;
 pub mod guard;
 pub mod mark;

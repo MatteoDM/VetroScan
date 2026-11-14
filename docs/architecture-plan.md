@@ -1618,8 +1618,24 @@ never run by us (step 12).
     (two or three reads); then final exposures that do not come from these reads (the same
     13,550 / 9070 / 5953 for frame 1 at 600, 1200 and 4800 dpi, whatever the loop's last read
     gave: from the preview, it seems), the second and third always 0.6694 and 0.4393 of the
-    first; then the gains. Left: that last step (`0x424320`, `0x422600`), the gains' search, M
-    exactly, the image's and the white and dark reads' `1E 21`.
+    first; then the gains. **All of it read** (14 November 2026, night; `film_cal.rs`, tests from
+    the captures; the model's `--check-gains`, 30 steps, and a check of the 52 window reads'
+    `1E 21`, 0 differences): the negatives' final exposures (`0x423180`) are the first channel's
+    less 110 µs rounded up to 384, then that, 10/15 and 10/23 of it, each + 110 (13,182 gives
+    13,550 / 9070 / 5953; not the preview, as first thought); the rounded value is the image's
+    line time (13,440). M (`0x422dd0`) = ((C - X) / r) / 2 + X / 2, C from the interpreter's
+    table at `0x40ca20` (41,980 at base 4800, 21,100 at 2400), X the window read's start r8 +
+    its 12,960 or 6480 columns + 160, r 6 or 3: 8981 and 5731. The window reads' `1E 21`: T = M
+    + the longest exposure rounded up to 384, each channel's value T - X, byte 12 `3f`, the
+    window's words (3840, 550 or 2209, 548: the film origin without the x correction), then
+    (M + 254) / 2 in the loop or the least value / 2 after the negatives' final step, and the
+    greatest value / 2. The gains (`1E 31` bytes 8-10, from `22 1b 1b`): indices into the
+    interpreter's 64-value table at `0x401180` (966 to 6424, 2.6 % apart); a channel at 222-230
+    keeps its gain, any other goes to the highest index whose value is at most value x 228 /
+    level; the search ends after a read that moved none. The table at `0x40ca20` also holds the
+    film origin 13,320 and the window's 12,960 columns (6660 and 6480 at base 2400). Left of
+    the calibration: N, the white and dark reads' and the image's `1E 21` and `1E 31`, the
+    `1E 42` blocks and the shading, the gamma tables.
     **Left of step 14**, what Epson Scan computes from its calibration reads (each in the
     captures with its reads, to rebuild the same way): N from the 150-line read; the line time T and
     the three exposures of `1E 21` (from reads of the window at T 9600 / 13,056 and exposures
