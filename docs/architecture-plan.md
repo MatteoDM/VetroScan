@@ -1695,11 +1695,25 @@ never run by us (step 12).
     otherwise) is refused: never captured (the least start move seen is 267 steps beyond them,
     capture 74). Stopping during the image read is not sent as `1E 18` (no film capture was
     stopped): the read goes on to its end, then ends as cancelled; a read that fails is still
-    stopped with `1E 18`, as on the glass, so that the scanner is not left sending. Left of step 14:
-    the image put together (the colours' offsets, the staggered columns at 4800 across, 2400 halved
-    across, 5400 reduced along), a command to try it; then the first film scan of ours with Matteo
-    at the scanner (capture 74's frame at 600 dpi). The white bytes' rule (2-4 units off) can wait
-    for that scan's result.
+    stopped with `1E 18`, as on the glass, so that the scanner is not left sending.
+    **The image put together** (same night; `scan::assemble_film`, measured with
+    `captures/epson4490/tools/film_image.py`: each capture's raw image read, from the `.pcap`,
+    against Epson Scan's TIFF by rank correlation, its curve being monotonic): the colours at 0,
+    ydpi / 50 and 2 x ydpi / 50 lines as on the glass, the TIFF's first line the blue's first and
+    its first pixel the read's first; read at 4800 across (2400 and 4800 dpi) the **odd** sensor
+    columns (`c0 + i` odd) ydpi / 600 lines later, 4 at 2400 along and 9 at 5400 (on the glass the
+    even ones), with the start column odd (17, 76) or even (77, 80, 81); a 2400 dpi film halved
+    across with weights 1/4, 1/2, 1/4 around the read's pixel 2j + 1 (a pair's mean does 0.97 on a
+    negative, the filter 0.998-1.000); 4800 x 5400 reduced to 4800 lines an inch by the glass's
+    weighted mean (0.9975 against 0.9976 for the best linear interpolation tried: Epson Scan's own
+    rule not found). The rule on the whole image (every fourth line and column), R G B: 74 1.0000
+    0.9996 0.9970, 75 1.0000 0.9996 0.9969, 76 (1200 columns) 0.9966 0.9980 0.9970, 77 0.9999 0.9998
+    0.9991, 78 0.9982 0.9990 0.9967, 80 0.9973 0.9998 0.9979, 81 0.9986 0.9999 0.9981, 17 1.0000
+    0.9994 0.9967; the same size as Epson Scan's TIFFs but 78 (8 bits: Epson Scan asked 2308 pixels
+    and saved 2307). The Rust and the tool's model give the same image bit for bit (17, 74, 77).
+    Left of step 14: a command to try it; then the first film scan of ours with Matteo at the
+    scanner (capture 74's frame at 600 dpi). The white bytes' rule (2-4 units off) can wait for that
+    scan's result.
     **Left of step 14**, what Epson Scan computes from its calibration reads (each in the
     captures with its reads, to rebuild the same way): N from the 150-line read; the line time T and
     the three exposures of `1E 21` (from reads of the window at T 9600 / 13,056 and exposures

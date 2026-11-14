@@ -915,6 +915,8 @@ fn film_calibration<T: Transport>(
 /// A film scanned ([`scan_film`]).
 #[derive(Debug, Clone)]
 pub struct FilmScanned {
+    /// The image put together ([`assemble_film`]): the request's pixels, at its `dpi` both ways.
+    pub image: Image,
     /// What the calibration found and set.
     pub calibration: FilmCalibration,
     /// The shading computed from its white and dark reads.
@@ -927,7 +929,8 @@ pub struct FilmScanned {
 /// Scans a film as Epson Scan does (captures 74-81): its calibration ([`calibrate_film`]), then
 /// the image: `1E 8B` and the 07 table, the carriages' positions, the image's `1E 21`, the tone
 /// tables (linear), the start move with the film path's ramp, the image's set-up with the
-/// shading, the read's one-value ramp and move, the read, and the carriages home.
+/// shading, the read's one-value ramp and move, the read, and the carriages home; the image then
+/// put together on the computer ([`assemble_film`]).
 ///
 /// Stopping (`events` answering `false`) is honoured up to the calibration; once the image is
 /// being read it goes on to its end, as no film scan was ever captured stopped with `1E 18`
@@ -1093,6 +1096,7 @@ fn film_image<T: Transport>(
         return Err(Error::Cancelled);
     }
     Ok(FilmScanned {
+        image: assemble_film(&raw, &c.plan),
         calibration: c,
         shading,
         raw,
@@ -1301,22 +1305,100 @@ pub fn assemble(raw: &[u8], p: &Plan) -> Image {
     }
 }
 
+/// The lines a film's sensor columns of odd parity (`c0 + i` odd) come later than the even ones
+/// when it is read at 4800 across: `ydpi / 600` (4 at 2400 along, 9 at 5400; the sensor's two
+/// staggered rows, 1/600 in apart). Measured against Epson Scan's TIFFs (captures 17, 76, 77,
+/// 80, 81; `captures/epson4490/tools/film_image.py`): on films the odd columns are the late
+/// ones, with the start column odd (17, 76) or even (77, 80, 81), where on the glass the even
+/// are ([`Plan::late`]). 0 at base 2400.
+pub fn film_stagger(plan: &FilmPlan) -> u32 {
+    if plan.geometry.read_dpi == 4800 {
+        plan.request.ydpi / 600
+    } else {
+        0
+    }
+}
+
+/// A film's image put together from its read ([`FilmScanned::raw`]) as Epson Scan's TIFFs show
+/// it (captures 17 and 74-81 against their raw data, `captures/epson4490/tools/film_image.py`;
+/// rank correlations 0.997-1.000 on the whole image): the colours realigned as on the glass
+/// (green `ydpi / 50` lines below blue, red twice as many; the TIFF's first line is the blue's
+/// first), the odd sensor columns [`film_stagger`] lines later; a 2400 dpi film, read at 4800
+/// across, halved with weights 1/4, 1/2, 1/4 around the read's pixel `2j + 1` (the pair's mean
+/// does worse on a negative, 0.97); cropped to the request from the read's first pixel; a 4800
+/// dpi film, read at 5400 along, reduced to 4800 lines an inch as the glass's 3200 to 2400
+/// ([`reduce_along`]: Epson Scan's own rule not found, a linear interpolation does as well).
+pub fn assemble_film(raw: &[u8], plan: &FilmPlan) -> Image {
+    let r = plan.request;
+    let geo = &plan.geometry;
+    let s = usize::from(r.bits / 8);
+    let line = geo.line_bytes(r.bits) as usize;
+    let px = geo.pixels as usize;
+    let k = (r.ydpi / 50) as usize;
+    let offsets = [2 * k, k, 0];
+    let stagger = film_stagger(plan) as usize;
+    let c0 = geo.columns.0 as usize;
+    let sample = |y: usize, i: usize, c: usize| -> u32 {
+        let i = i.min(px - 1);
+        let late = if (c0 + i) % 2 == 1 { stagger } else { 0 };
+        let at = (y + offsets[c] + late) * line + (i * 3 + c) * s;
+        if s == 2 {
+            u32::from(u16::from_le_bytes([raw[at], raw[at + 1]]))
+        } else {
+            u32::from(raw[at])
+        }
+    };
+    let halved = geo.read_dpi != r.dpi;
+    let (w, h) = (r.width as usize, r.height as usize);
+    let mut data = Vec::with_capacity(w * h * 3 * s);
+    for y in 0..h {
+        for x in 0..w {
+            for c in 0..3 {
+                let v = if halved {
+                    let i = 2 * x + 1;
+                    (sample(y, i - 1, c) + 2 * sample(y, i, c) + sample(y, i + 1, c) + 2) / 4
+                } else {
+                    sample(y, x, c)
+                };
+                if s == 2 {
+                    data.extend_from_slice(&(v as u16).to_le_bytes());
+                } else {
+                    data.push(v as u8);
+                }
+            }
+        }
+    }
+    let image = Image {
+        width: r.width,
+        height: r.height,
+        bits: r.bits,
+        data,
+    };
+    let h_out = u64::from(r.height) * u64::from(r.dpi) / u64::from(r.ydpi);
+    reduce_lines(image, r.dpi, r.ydpi, h_out as u32)
+}
+
 /// An image read along at `r.ydpi` brought to `r.dpi` lines an inch ([`Request::image_height`]
 /// lines): each line the average of the lines read that it covers, weighted by how much of each
 /// (at 3200 to 2400: 3/4 + 1/4, 1/2 + 1/2, 1/4 + 3/4 of two lines in turn). Epson Scan reads
 /// 2400 dpi so and reduces on the computer (captures 13, 57, 58); how it reduces is not known,
 /// this is an average with no sharpening. The same image when both are equal.
 pub fn reduce_along(image: Image, r: &Request) -> Image {
-    if r.ydpi == r.dpi {
+    reduce_lines(image, r.dpi, r.ydpi, r.image_height())
+}
+
+/// [`reduce_along`] from `ydpi` lines an inch to `dpi`, `h_out` lines.
+fn reduce_lines(image: Image, dpi: u32, ydpi: u32, h_out: u32) -> Image {
+    if ydpi == dpi {
         return image;
     }
     let s = usize::from(image.bits / 8);
     let row = image.width as usize * 3 * s;
     let samples = image.width as usize * 3;
     let h_in = image.height as usize;
-    let h_out = r.image_height() as usize;
+    let h_out = h_out as usize;
     // Input line i spans [i * dpi, (i + 1) * dpi), output line j [j * ydpi, (j + 1) * ydpi).
-    let (dpi, ydpi) = (u64::from(r.dpi), u64::from(r.ydpi));
+    let (dpi, ydpi) = (u64::from(dpi), u64::from(ydpi));
     let read = |line: &[u8], k: usize| -> u64 {
         if s == 2 {
             u64::from(u16::from_le_bytes([line[2 * k], line[2 * k + 1]]))
@@ -2268,6 +2350,8 @@ pub(crate) mod tests {
         let geo = c.plan.geometry;
         assert_eq!(s.raw.len() as u32, geo.lines * geo.line_bytes(16));
         assert_eq!(s.shading.table.len() as u32, geo.column_count() * 3);
+        // As Epson Scan's TIFF: 576 x 874.
+        assert_eq!((s.image.width, s.image.height), (576, 874));
 
         let mut g = Guarded::new(Follow::film("74", text, reads));
         calibrate_film(&mut g, &request, 10, &mut |_| {}, &mut |_| true)
@@ -2331,6 +2415,11 @@ pub(crate) mod tests {
             );
             let geo = c.plan.geometry;
             assert_eq!(s.raw.len() as u32, geo.lines * geo.line_bytes(16), "{name}");
+            assert_eq!(
+                (s.image.width, s.image.height),
+                (request.width, request.height),
+                "{name}"
+            );
         }
     }
 
@@ -2657,6 +2746,73 @@ pub(crate) mod tests {
         assert!(e.contains("not a state"), "{e}");
         let mut t = Mock::answering(&[&[0x58, 0x81], &[0x18, 0x81]]);
         assert!(wait_ready(&mut t, &mut |_| {}).is_ok());
+    }
+
+    /// A film's read made up: every 16-bit sample tells its line, pixel and channel.
+    fn film_read(p: &FilmPlan) -> (Vec<u8>, impl Fn(usize, usize, usize) -> u32) {
+        let f = |l: usize, i: usize, c: usize| ((l * 131 + i * 17 + c * 7) % 60_000) as u32;
+        let g = p.geometry;
+        let mut raw = Vec::new();
+        for l in 0..g.lines as usize {
+            for i in 0..g.pixels as usize {
+                for c in 0..3 {
+                    raw.extend_from_slice(&(f(l, i, c) as u16).to_le_bytes());
+                }
+            }
+        }
+        (raw, f)
+    }
+
+    fn px16(img: &Image, x: usize, y: usize, c: usize) -> u32 {
+        let at = ((y * img.width as usize + x) * 3 + c) * 2;
+        u32::from(u16::from_le_bytes([img.data[at], img.data[at + 1]]))
+    }
+
+    /// A film's image as Epson Scan's TIFFs show it: at 600 dpi the colours alone; at 2400 the
+    /// odd sensor columns 4 lines later and two pixels read a pixel, 1/4, 1/2, 1/4 around the
+    /// second; at 4800 x 5400 the odd columns 9 lines later and the lines reduced to 4800.
+    #[test]
+    fn films_are_put_together_as_epson_scans_tiffs() {
+        let small = |i: usize, w: u32, h: u32| {
+            let mut r = crate::film::tests::CAPTURED[i].1;
+            (r.width, r.height) = (w, h);
+            FilmPlan::new(r, XCorrection(-122)).unwrap()
+        };
+        // 600 dpi (capture 74's): red 24 lines below blue, green 12.
+        let p = small(2, 10, 5);
+        let (raw, f) = film_read(&p);
+        let img = assemble_film(&raw, &p);
+        assert_eq!((img.width, img.height, img.bits), (10, 5, 16));
+        for (x, y) in [(0, 0), (9, 4), (3, 2)] {
+            assert_eq!(px16(&img, x, y, 0), f(y + 24, x, 0));
+            assert_eq!(px16(&img, x, y, 1), f(y + 12, x, 1));
+            assert_eq!(px16(&img, x, y, 2), f(y, x, 2));
+        }
+        // 2400 dpi (capture 77's, start column 2410, even): read pixel i is late when i is odd.
+        let p = small(6, 20, 10);
+        assert_eq!((p.geometry.columns.0, film_stagger(&p)), (2410, 4));
+        let (raw, f) = film_read(&p);
+        let img = assemble_film(&raw, &p);
+        assert_eq!((img.width, img.height), (20, 10));
+        for (x, y, c, off) in [(0, 0, 2, 0), (5, 3, 1, 48), (19, 9, 0, 96)] {
+            let want = (f(y + off, 2 * x, c)
+                + 2 * f(y + off + 4, 2 * x + 1, c)
+                + f(y + off, 2 * x + 2, c)
+                + 2)
+                / 4;
+            assert_eq!(px16(&img, x, y, c), want, "{x}, {y}, {c}");
+        }
+        // 4800 x 5400 (capture 76's, start column 2423, odd): even pixels late, 9 lines.
+        let p = small(4, 16, 90);
+        assert_eq!((p.geometry.columns.0, film_stagger(&p)), (2423, 9));
+        let (raw, f) = film_read(&p);
+        let img = assemble_film(&raw, &p);
+        assert_eq!((img.width, img.height), (16, 80));
+        // Line 0 is 8/9 of line 0 and 1/9 of line 1 (5400 to 4800), blue at 0.
+        let mix = |a: u32, b: u32| (8 * a + b + 4) / 9;
+        assert_eq!(px16(&img, 1, 0, 2), mix(f(0, 1, 2), f(1, 1, 2)));
+        assert_eq!(px16(&img, 0, 0, 2), mix(f(9, 0, 2), f(10, 0, 2)));
+        assert_eq!(px16(&img, 0, 0, 0), mix(f(225, 0, 0), f(226, 0, 0)));
     }
 
     #[test]
