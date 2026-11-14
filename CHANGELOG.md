@@ -17,6 +17,13 @@ GitHub; here they are in English.
 
 ## [Unreleased]
 
+### Fixed
+- Epson Perfection 4490: a scan within 14 minutes of the last one, after the scanner was
+  switched off and on, gets the lamp's two and a half minutes of warm-up again (before, it
+  went without once the scanner had stopped saying its lamp was warming, about 20 s after
+  switching on). The scanner is known to have been switched on by the numbers it measures then
+  (`1E 87`), the same at every scan until it is switched off.
+
 ### Changed
 - The memory a scan needs (said in the Scan tab, and above half the computer's memory the scan
   is refused) counts what each scanner's driver holds at that resolution: for the Epson 4490

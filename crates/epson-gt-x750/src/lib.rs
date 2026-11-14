@@ -435,8 +435,9 @@ pub struct Gt4490 {
     transport: guard::Guarded<Box<dyn Transport>>,
     caps: Capabilities,
     firmware: FirmwareOutcome,
-    /// When a scan of ours last ended: the lamp was lit then ([`scan::lamp_is_cold`]).
-    lamp_used: Option<SystemTime>,
+    /// When a scan of ours last ended (the lamp was lit then) and in which power-on
+    /// ([`scan::lamp_is_cold`]).
+    lamp_used: Option<scan::LampUse>,
     /// What opening found and did about a scan left half-way, if there was one.
     recovered: Vec<String>,
 }
@@ -603,8 +604,17 @@ impl scanner_api::Scanner for Gt4490 {
             },
         );
         // The lamp is lit once a scan got as far as switching it on: taken so, cancelled or not.
+        // A cancelled scan keeps the power-on known before it: if it was another, the next scan
+        // warms the lamp up once more.
+        let power_on = match &scanned {
+            Ok(s) => Some(s.power_on),
+            _ => self.lamp_used.and_then(|l| l.power_on),
+        };
         if matches!(&scanned, Ok(_) | Err(Error::Cancelled)) {
-            self.lamp_used = Some(SystemTime::now());
+            self.lamp_used = Some(scan::LampUse {
+                ended: SystemTime::now(),
+                power_on,
+            });
         }
         let s = scanned?;
         progress(Progress::Finishing);
@@ -695,7 +705,7 @@ mod tests {
         // The opening's 1B 03, then 06 twice.
         let t = Mock::answering(&[&IDLE, &IDLE, &[6], &[6]]);
         let mut s = Gt4490::start(Box::new(t), || panic!("no firmware needed")).unwrap();
-        s.lamp_used = Some(SystemTime::now());
+        s.lamp_used = scan::tests::just_used();
         s.lamp_off().unwrap();
         assert_eq!(s.lamp_used, None);
         // A NAK is an error.
@@ -719,7 +729,7 @@ mod tests {
         let mut f = scan::tests::Follow::new("29", &format!("P 1b03 1881\nP 1b03 1881\n{text}"));
         f.curves = tables::Curves::Linear;
         let mut s = Gt4490::start(Box::new(f), || panic!("no firmware needed")).unwrap();
-        s.lamp_used = Some(SystemTime::now());
+        s.lamp_used = scan::tests::just_used();
         s
     }
 

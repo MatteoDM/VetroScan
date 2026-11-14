@@ -59,6 +59,26 @@ pub const WARM_UP: Duration = Duration::from_secs(150);
 /// itself after about 15 minutes idle (capture 21), without saying so.
 pub const LAMP_OFF_AFTER: Duration = Duration::from_secs(14 * 60);
 
+/// What the scanner measured when it was switched on: `1E 87`'s answer (the x origin's
+/// correction and three more numbers). The same at every scan while it stays on (captures 03-37,
+/// two days and 35 scans with the lamp off, warming, warm, `1B 40` and the lid's lamp; 38-43;
+/// 61-65) and different after each power-on seen (five, every number of it: `a3 ff 1b 00 32
+/// 01 cc`, `6a ff 45 00 08 01 c0`, `9e ff fd ff 1a 01 d8`, `9a ff 03 00 1a 01 d8`, `60 ff 60 00
+/// fc 00 ba`): how a scan tells that the scanner was switched off and on since the last
+/// ([`lamp_is_cold`]), which nothing else it asks shows once `1B 03`'s warming flag (about
+/// 20 s) has gone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PowerOn(pub [u8; 10]);
+
+/// The lamp's last use by a scan of ours.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LampUse {
+    /// When the scan ended: the lamp was lit then.
+    pub ended: SystemTime,
+    /// The power-on it was made in, if the scan got as far as asking (`1E 87`).
+    pub power_on: Option<PowerOn>,
+}
+
 /// A scanned image: RGB interleaved, 8 bits or 16 bits little-endian.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Image {
@@ -84,6 +104,8 @@ pub struct Scanned {
     /// The image data as the scanner sent it, trailers removed (the lines
     /// before realigning, every pixel read).
     pub raw: Vec<u8>,
+    /// The power-on it was made in.
+    pub power_on: PowerOn,
 }
 
 fn other(what: String) -> Error {
@@ -614,11 +636,22 @@ pub fn reduce_along(image: Image, r: &Request) -> Image {
 }
 
 /// Whether the lamp must be given [`WARM_UP`] before the calibration: the scanner flagged it
-/// warming, or no scan of ours ended in the last [`LAMP_OFF_AFTER`] (`last_used`; none known
-/// counts as long ago, as does a clock gone back).
-pub fn lamp_is_cold(warming_seen: bool, last_used: Option<SystemTime>, now: SystemTime) -> bool {
-    let idle = last_used.and_then(|t| now.duration_since(t).ok());
-    warming_seen || idle.is_none_or(|idle| idle >= LAMP_OFF_AFTER)
+/// warming, no scan of ours ended in the last [`LAMP_OFF_AFTER`] (`last_used`; none known
+/// counts as long ago, as does a clock gone back), or the scanner was switched off and on since
+/// it (`power_on` not the last scan's, where that is known).
+pub fn lamp_is_cold(
+    warming_seen: bool,
+    last_used: Option<LampUse>,
+    power_on: PowerOn,
+    now: SystemTime,
+) -> bool {
+    let Some(last) = last_used else {
+        return true;
+    };
+    let idle = now.duration_since(last.ended).ok();
+    warming_seen
+        || idle.is_none_or(|idle| idle >= LAMP_OFF_AFTER)
+        || last.power_on.is_some_and(|p| p != power_on)
 }
 
 /// Waits until [`WARM_UP`] after `lit`, polling `1B 03` every second. `events` may stop it:
@@ -651,9 +684,9 @@ fn warm_up(
 /// How a scan is made, besides its request.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Options {
-    /// When a scan of ours last ended (the lamp was lit then), if known: a lamp taken to be
-    /// cold ([`lamp_is_cold`]) gets [`WARM_UP`] first.
-    pub last_used: Option<SystemTime>,
+    /// When a scan of ours last ended (the lamp was lit then) and in which power-on, if known:
+    /// a lamp taken to be cold ([`lamp_is_cold`]) gets [`WARM_UP`] first.
+    pub last_used: Option<LampUse>,
     /// The tables loaded into the scanner.
     pub curves: Curves,
 }
@@ -772,18 +805,28 @@ fn run<T: Transport>(
         wait_lamp_lit(g, log)?;
     }
     let warming = warming.or(wait_ready(g, log)?);
-    if lamp_was_off || lamp_is_cold(warming.is_some(), last_used, SystemTime::now()) {
-        // Lit when the scanner was switched on (flagged warming) or just now.
-        warm_up(g, warming.unwrap_or(lit).min(lit), log, events)?;
-    }
 
-    // The x origin's correction, stored in the scanner; then the plan.
+    // The x origin's correction, stored in the scanner since it was switched on; then the
+    // plan. Asked before the warm-up (Epson's drivers ask it once the lamp answers, with no
+    // warm-up of their own): its answer tells a power-on since the last scan.
     command(g, [0x1E, 0x87])?;
     g.bulk_out(&[0x00])?;
     let a87 = read_exact(g, 10, "1E 87")?;
     let xc = XCorrection::from_1e87(&a87)?;
+    let power_on = PowerOn(a87.as_slice().try_into().expect("10 bytes"));
     let p = Plan::new(request, xc)?;
     g.permit_plan(&p)?;
+    if last_used
+        .and_then(|l| l.power_on)
+        .is_some_and(|p| p != power_on)
+    {
+        log("1E 87 answered otherwise than at the last scan: the scanner was switched off and on since"
+            .into());
+    }
+    if lamp_was_off || lamp_is_cold(warming.is_some(), last_used, power_on, SystemTime::now()) {
+        // Lit when the scanner was switched on (flagged warming) or just now.
+        warm_up(g, warming.unwrap_or(lit).min(lit), log, events)?;
+    }
     log(format!(
         "1E 87: x correction {} (4800ths of an inch); columns {}-{}, {} lines of {} pixels, \
          T {} µs, {} steps/s ({:?}), start move {} steps, lead {}",
@@ -973,6 +1016,7 @@ fn run<T: Transport>(
         plan: p,
         shading,
         raw,
+        power_on,
     })
 }
 
@@ -1081,6 +1125,14 @@ pub(crate) mod tests {
         }
     }
 
+    /// The lamp used by a scan that just ended, in a power-on not known.
+    pub(crate) fn just_used() -> Option<LampUse> {
+        Some(LampUse {
+            ended: SystemTime::now(),
+            power_on: None,
+        })
+    }
+
     /// Scans a capture's request on a scanner answering as in it: the result, then
     /// how far into the capture it got and how many writes it made.
     fn scan(name: &'static str, text: &str) -> (Result<Scanned>, usize, usize) {
@@ -1090,7 +1142,7 @@ pub(crate) mod tests {
             &mut g,
             request,
             Options {
-                last_used: Some(SystemTime::now()),
+                last_used: just_used(),
                 curves: Curves::Wia,
             },
             &mut |_| {},
@@ -1168,18 +1220,70 @@ pub(crate) mod tests {
     #[test]
     fn a_lamp_is_cold_when_flagged_or_idle_long_enough() {
         let now = SystemTime::now();
-        let ago = |s: u64| Some(now - Duration::from_secs(s));
-        assert!(!lamp_is_cold(false, ago(60), now));
-        assert!(!lamp_is_cold(false, ago(13 * 60), now));
-        assert!(lamp_is_cold(false, ago(14 * 60), now));
-        assert!(lamp_is_cold(true, ago(60), now));
+        let this = PowerOn([1, 0, 0xA3, 0xFF, 0x1B, 0, 0x32, 1, 0xCC, 0]);
+        let other = PowerOn([1, 0, 0x6A, 0xFF, 0x45, 0, 0x08, 1, 0xC0, 0]);
+        let used = |ended: SystemTime, power_on| Some(LampUse { ended, power_on });
+        let ago = |s: u64| used(now - Duration::from_secs(s), None);
+        assert!(!lamp_is_cold(false, ago(60), this, now));
+        assert!(!lamp_is_cold(false, ago(13 * 60), this, now));
+        assert!(lamp_is_cold(false, ago(14 * 60), this, now));
+        assert!(lamp_is_cold(true, ago(60), this, now));
         // Never used by us, or a clock gone back: cold.
-        assert!(lamp_is_cold(false, None, now));
+        assert!(lamp_is_cold(false, None, this, now));
         assert!(lamp_is_cold(
             false,
-            Some(now + Duration::from_secs(60)),
+            used(now + Duration::from_secs(60), None),
+            this,
             now
         ));
+        // A minute ago in this power-on: warm; in another one (switched off and on since): cold.
+        let minute = now - Duration::from_secs(60);
+        assert!(!lamp_is_cold(false, used(minute, Some(this)), this, now));
+        assert!(lamp_is_cold(false, used(minute, Some(other)), this, now));
+    }
+
+    /// A scan a minute after one of ours, the scanner not flagging its lamp warming: no warm-up
+    /// in the same power-on (`1E 87` answering as at the last scan), the warm-up after a power
+    /// cycle (`1E 87` answering otherwise), said in the log.
+    #[test]
+    fn a_power_cycle_since_the_last_scan_warms_the_lamp() {
+        let (_, text) = CAPTURES.iter().find(|(n, _)| *n == "29").unwrap();
+        let (request, _, _) = request_of(&parse(text));
+        let (r, _, _) = scan("29", text);
+        let this = r.unwrap().power_on;
+        assert_eq!(this.0[2..4], [0xA3, 0xFF], "-93, capture 29's x correction");
+        let mut other = this;
+        other.0[4] ^= 0x40;
+        let minute_ago = SystemTime::now() - Duration::from_secs(60);
+        for (power_on, warms) in [(this, false), (other, true)] {
+            let mut g = Guarded::new(Follow::new("29", text));
+            let mut said = Vec::new();
+            let mut warmed = false;
+            let r = scan_glass(
+                &mut g,
+                request,
+                Options {
+                    last_used: Some(LampUse {
+                        ended: minute_ago,
+                        power_on: Some(power_on),
+                    }),
+                    curves: Curves::Wia,
+                },
+                &mut |l| said.push(l),
+                // Stopped at the warm-up, if there is one.
+                &mut |e| {
+                    warmed |= matches!(e, Event::WarmingUp { .. });
+                    !warmed
+                },
+            );
+            assert_eq!(warmed, warms);
+            assert_eq!(r.is_ok(), !warms);
+            assert_eq!(
+                said.iter().any(|l| l.contains("switched off and on")),
+                warms,
+                "{said:?}"
+            );
+        }
     }
 
     /// A capture's scanner until `1E 18`, then the scanner of capture 11 after it: `06`,
@@ -1238,7 +1342,7 @@ pub(crate) mod tests {
         let (_, text) = CAPTURES.iter().find(|(n, _)| *n == "29").unwrap();
         let (request, _, _) = request_of(&parse(text));
         let options = Options {
-            last_used: Some(SystemTime::now()),
+            last_used: just_used(),
             curves: Curves::Wia,
         };
         // The answer right away, or after two packets of image already put out.
@@ -1377,7 +1481,7 @@ pub(crate) mod tests {
         let (_, text) = CAPTURES.iter().find(|(n, _)| *n == "29").unwrap();
         let (request, _, _) = request_of(&parse(text));
         let options = Options {
-            last_used: Some(SystemTime::now()),
+            last_used: just_used(),
             curves: Curves::Wia,
         };
         for at in [4, 8, 12] {
@@ -1449,7 +1553,7 @@ pub(crate) mod tests {
                 &mut g,
                 request,
                 Options {
-                    last_used: Some(SystemTime::now()),
+                    last_used: just_used(),
                     curves: Curves::Wia,
                 },
                 &mut |l| said.push(l),

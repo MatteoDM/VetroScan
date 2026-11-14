@@ -1460,6 +1460,20 @@ never run by us (step 12).
        scan within `LAMP_OFF_AFTER` of the last, after the scanner was switched off and on,
        does not warm the lamp up if `1B 03`'s warming flag (about 20 s) went by before it (the
        first of the six, 13 November); the scanner's switching on is not seen otherwise.
+       **Done** (14 November 2026): `1E 87`'s answer is the power-on's fingerprint. In the
+       captures it is the same at every scan of a power-on (03-37: two days, 35 scans with the
+       lamp off, warming and warm, `1B 40`, the lid's lamp; 38-43; 55-56; 57-60; 61-65) and
+       every number of it differs from one power-on to the next (five: x correction -93, -150,
+       -98, -102, -160, and the three numbers after it too; `1E 8B` answering `15`, the 1200 dpi
+       table lost, confirms the power-ons at 05, 42, 55, 61). The scan now asks `1E 87` before
+       the warm-up (Epson's drivers ask it once the lamp answers, and have no warm-up of their
+       own; only `1B 03` polls come after it now when the lamp is cold); a different answer
+       from the last scan's (`scan::LampUse`, kept by the open scanner and in the command's
+       temporary file) means a cold lamp, said in the log. Tests: `lamp_is_cold`, and capture
+       29 scanned a minute after a scan of the same power-on (no warm-up) and of another one
+       (warm-up). In the app the open scanner is opened again after a power cycle and its
+       last use forgotten, so the app already warmed the lamp up: the command line was the
+       case seen. Not yet tried on the scanner: a quick power cycle, then `epson4490 scan`.
     3. The app's memory limit there: the Scan tab with a scan over half the PC's memory (the
        memory read with PowerShell, `ram.rs`; until read, no limit). In part (13 November
        2026): `ram.rs`' command, run alone, prints 34,274,361,344 (32 GB) in about 0.5 s,

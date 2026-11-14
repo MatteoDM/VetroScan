@@ -29,7 +29,8 @@
 //! driver ask the scanner its state, capture 44) and writes nothing at all: it only reads.
 //! `epson4490 lamp-off` switches the lamp off (`1E A2 00`), as the application's lamp timer.
 //! Without `--move` it only prints the plan and what the guard says of it. A lamp taken to be
-//! cold (switched on, or no scan for 14 minutes; the time of the last scan is kept in the
+//! cold (switched on, or no scan for 14 minutes, or switched off and on since: `1E 87`; the
+//! time and `1E 87` of the last scan are kept in the
 //! temporary folder, `epson4490-lamp.txt`) gets two and a half minutes before the calibration.
 //!
 //! `replay` is the one command that moves the carriage, so it asks for `--move`. It sends only
@@ -44,6 +45,7 @@
 
 use epson_gt_x750::guard::{self, Guarded};
 use epson_gt_x750::protocol::{self, FirmwareOutcome, State};
+use epson_gt_x750::scan::{LampUse, PowerOn};
 use epson_gt_x750::setup::{self, Request};
 use epson_gt_x750::shading::{black_block, Shading};
 use epson_gt_x750::tables::Curves;
@@ -530,8 +532,12 @@ fn scan(
     );
     // After a scan that went through or was cancelled (the lamp lit either way): a failed one
     // may not have lit it, and a warm-up too many costs only two and a half minutes.
+    // A cancelled one keeps the power-on known before it.
     if matches!(&s, Ok(_) | Err(Error::Cancelled)) {
-        remember_lamp();
+        remember_lamp(match &s {
+            Ok(s) => Some(s.power_on),
+            _ => lamp_last_used().and_then(|l| l.power_on),
+        });
     }
     let s = s?;
     if let Some(path) = raw {
@@ -555,25 +561,38 @@ fn scan(
     Ok(())
 }
 
-/// Where the command remembers when its last scan ended (the lamp lit then): each run is a
-/// new process, and a lamp idle for 14 minutes is taken to be off (`scan::LAMP_OFF_AFTER`).
+/// Where the command remembers when its last scan ended (the lamp lit then) and in which
+/// power-on (`1E 87`'s answer, in hex): each run is a new process, and a lamp idle for 14
+/// minutes, or a scanner switched off and on since, is taken to be cold
+/// (`scan::lamp_is_cold`). A file of before 14 November 2026 has the time alone.
 fn lamp_file() -> PathBuf {
     std::env::temp_dir().join("epson4490-lamp.txt")
 }
 
-fn lamp_last_used() -> Option<std::time::SystemTime> {
-    let secs: u64 = std::fs::read_to_string(lamp_file())
-        .ok()?
-        .trim()
-        .parse()
-        .ok()?;
-    Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs))
+fn lamp_last_used() -> Option<LampUse> {
+    let text = std::fs::read_to_string(lamp_file()).ok()?;
+    let mut words = text.split_whitespace();
+    let secs: u64 = words.next()?.parse().ok()?;
+    let power_on = words
+        .next()
+        .and_then(|h| hex(h).ok())
+        .and_then(|b| b.try_into().ok())
+        .map(PowerOn);
+    Some(LampUse {
+        ended: std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs),
+        power_on,
+    })
 }
 
-fn remember_lamp() {
+fn remember_lamp(power_on: Option<PowerOn>) {
     if let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        let mut text = now.as_secs().to_string();
+        if let Some(p) = power_on {
+            text.push(' ');
+            text.extend(p.0.iter().map(|b| format!("{b:02x}")));
+        }
         // Losing it only costs a warm-up.
-        let _ = std::fs::write(lamp_file(), now.as_secs().to_string());
+        let _ = std::fs::write(lamp_file(), text);
     }
 }
 
