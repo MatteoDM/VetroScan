@@ -1584,9 +1584,19 @@ never run by us (step 12).
     film with values it reads from the scanner (`0x421470`, the holder's marks it seems, with
     defaults): in every capture they gave the same window, so the constant; not known when they
     would differ.
+    **The offsets read** (same night; `filmsetup.py --check-offsets`, 0 differences on the
+    eleven film captures, previews included, every read and every value): `1E 31` bytes 0, 2, 4
+    (one a channel) start at `80`; after each read of the black pixels (4 lines, 16 bits) every
+    channel whose mean is above 1536 goes down by the step, below 1024 up, the step `40`, `20`,
+    `10`, `08`, `04`, `02`, `01`; every channel is judged again at every read (capture 72: one in
+    the window at `88`, out of it at the next read, moved by `02`); the search ends after a read
+    that moved none, then one more read with the result. **The exposures, seen**: in `1E 21`
+    each channel integrates T less its own value (bytes 3-5, 6-8, 9-11), and the 8-bit levels of
+    the window's reads follow it (74: 61 at 3840, 207 at 13,182); for negatives the gains then
+    (`1E 31` bytes 8-10, from `22 1b 1b`, at most 5 down a read, about 2.5 % a unit) bring each
+    channel's mean to about 204-211. Their exact rules: not read yet.
     **Left of step 14**, what Epson Scan computes from its calibration reads (each in the
-    captures with its reads, to rebuild the same way): N from the 150-line read; the offsets
-    (`1E 31` bytes 0-5: a search bit by bit from `80`, on the black pixels); the line time T and
+    captures with its reads, to rebuild the same way): N from the 150-line read; the line time T and
     the three exposures of `1E 21` (from reads of the window at T 9600 / 13,056 and exposures
     5760 / 9216: two or three rounds; slides differently from negatives); the gains (`1E 31`
     bytes 8-10, negatives only, steps of 5); the white read's and the dark read's `1E 21`; the
