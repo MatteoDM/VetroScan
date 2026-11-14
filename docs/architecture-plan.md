@@ -1711,9 +1711,13 @@ never run by us (step 12).
     0.9991, 78 0.9982 0.9990 0.9967, 80 0.9973 0.9998 0.9979, 81 0.9986 0.9999 0.9981, 17 1.0000
     0.9994 0.9967; the same size as Epson Scan's TIFFs but 78 (8 bits: Epson Scan asked 2308 pixels
     and saved 2307). The Rust and the tool's model give the same image bit for bit (17, 74, 77).
-    Left of step 14: a command to try it; then the first film scan of ours with Matteo at the
-    scanner (capture 74's frame at 600 dpi). The white bytes' rule (2-4 units off) can wait for that
-    scan's result.
+    **The command** (same night): `epson4490 film-scan DPI X Y W H OUT.png [--positive] [--bits 8]
+    [--pixels] [--raw FILE] --move`, the area in millimetres in the film window or in pixels;
+    without `--move` it prints the plan and what the guard says, and sends nothing (capture 74's
+    request: columns 2379-4683, 898 lines of 576 pixels, start move 267 steps, read move 3720 with a
+    lead of 128, as captured). Left of step 14: the first film scan of ours with Matteo at the
+    scanner (capture 74's frame at 600 dpi, with a capture). The white bytes' rule (2-4 units off)
+    can wait for that scan's result.
     **Left of step 14**, what Epson Scan computes from its calibration reads (each in the
     captures with its reads, to rebuild the same way): N from the 150-line read; the line time T and
     the three exposures of `1E 21` (from reads of the window at T 9600 / 13,056 and exposures

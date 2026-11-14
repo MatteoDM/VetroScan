@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! `epson4490`: the Epson Perfection 4490 from the command line, for its
 //! first days on the desk (phase 12). But for `replay` (below), every write goes through the
-//! backend's guard: nothing moves the carriage but `scan`, inside what the captures cover.
+//! backend's guard: nothing moves the carriage but `scan` and `film-scan`, inside what the
+//! captures cover.
 //!
 //! ```text
 //! epson4490 list                       the scanners found, nothing sent
@@ -12,7 +13,20 @@
 //! epson4490 replay SCRIPT OUT --move   replays a script made from a capture of Epson's driver
 //! epson4490 scan DPI X Y W H OUT.png [--bits 16] [--tone wia|linear] [--raw FILE] --move
 //!                                      scans an area of the glass, in millimetres
+//! epson4490 film-scan DPI X Y W H OUT.png [--positive] [--bits 8] [--pixels] [--raw FILE] --move
+//!                                      scans an area of the film window (the lid's unit)
 //! ```
+//!
+//! `film-scan` scans a film in the lid's transparency unit as Epson Scan does
+//! (`epson_gt_x750::scan::scan_film`): the area in millimetres from the film window's corner
+//! (Epson Scan's preview of the whole window, 68.6 x 237 mm), or with `--pixels` in pixels at
+//! DPI (along at the resolution read along: 5400 for 4800 dpi), a negative unless `--positive`,
+//! 16 bits unless `--bits 8`. The guard refuses what Epson Scan was never captured asking
+//! (negatives at 600, 1200, 2400 and 4800 dpi, slides at 2400; a frame too near the window's
+//! top). Without `--move` it prints the plan and what the guard says of it, and sends nothing.
+//! The carriages must be home or where the scanner puts them when it lights the lid's lamp again
+//! (1994, 1078); Epson Scan closed. Killed half-way (Ctrl+C) it leaves the scanner as a killed
+//! `scan` does: `epson4490 recover` stops it with `1E 18` (never tried on films).
 //!
 //! `scan` computes the whole sequence from the request (`epson_gt_x750::scan`): the area in
 //! millimetres from the glass's corner, rounded to pixels as WIA does; the guard refuses what no
@@ -59,7 +73,8 @@ use std::process::ExitCode;
 
 const USAGE: &str = "usage: epson4490 list | firmware [--firmware FILE] | probe | \
                      upload [--firmware FILE] | buttons [SECONDS] | replay SCRIPT OUT --move | \
-                     scan DPI X Y W H OUT.png [--bits 16] [--tone wia|linear] [--raw FILE] [--cancel-after BLOCKS] --move   (X Y W H in mm) | probe/drain [--no-lock] | recover | lamp-off | lid-lamp [--positive]";
+                     scan DPI X Y W H OUT.png [--bits 16] [--tone wia|linear] [--raw FILE] [--cancel-after BLOCKS] --move   (X Y W H in mm) | probe/drain [--no-lock] | recover | lamp-off | lid-lamp [--positive] | \
+                     film-scan DPI X Y W H OUT.png [--positive] [--bits 8] [--pixels] [--raw FILE] --move   (X Y W H in mm in the film window, or pixels)";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -69,7 +84,8 @@ fn main() -> ExitCode {
     let mut operands: Vec<String> = Vec::new();
     let mut moves = false;
     let mut no_lock = false;
-    let mut bits = 8u8;
+    let mut bits = None;
+    let mut pixels = false;
     let mut raw_path = None;
     let mut curves = Curves::Wia;
     let mut cancel_after = None;
@@ -84,8 +100,9 @@ fn main() -> ExitCode {
             "--move" => moves = true,
             "--no-lock" => no_lock = true,
             "--positive" => positive = true,
+            "--pixels" => pixels = true,
             "--bits" => match rest.next().map(|b| b.parse()) {
-                Some(Ok(b)) => bits = b,
+                Some(Ok(b)) => bits = Some(b),
                 _ => return usage(),
             },
             "--cancel-after" => match rest.next().map(|n| n.parse::<usize>()) {
@@ -109,7 +126,7 @@ fn main() -> ExitCode {
             o if command.as_deref() == Some("replay") && operands.len() < 2 => {
                 operands.push(o.to_owned())
             }
-            o if command.as_deref() == Some("scan") && operands.len() < 6 => {
+            o if matches!(command.as_deref(), Some("scan" | "film-scan")) && operands.len() < 6 => {
                 operands.push(o.to_owned())
             }
             n if command.as_deref() == Some("buttons") && seconds.is_none() => {
@@ -139,8 +156,26 @@ fn main() -> ExitCode {
             eprintln!("epson4490: replay moves the carriage: add --move to run it");
             return ExitCode::from(2);
         }
+        Some("film-scan") if operands.len() == 6 => {
+            let request = match film_request(&operands[..5], bits.unwrap_or(16), positive, pixels) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("epson4490: {e}");
+                    return ExitCode::from(2);
+                }
+            };
+            let fine = show_film_plan(&request);
+            if !moves {
+                eprintln!("epson4490: film-scan moves the carriages: add --move to run it");
+                return ExitCode::from(2);
+            }
+            if !fine {
+                return ExitCode::FAILURE;
+            }
+            film_scan(&request, &operands[5], raw_path.as_deref())
+        }
         Some("scan") if operands.len() == 6 => {
-            let request = match scan_request(&operands[..5], bits) {
+            let request = match scan_request(&operands[..5], bits.unwrap_or(8)) {
                 Ok(r) => r,
                 Err(e) => {
                     eprintln!("epson4490: {e}");
@@ -495,6 +530,170 @@ fn scan_request(args: &[String], bits: u8) -> Result<Request, String> {
         px(mm[3]),
         bits,
     ))
+}
+
+/// The film request of `DPI X Y W H`: millimetres from the film window's corner, rounded to the
+/// nearest pixel (across at DPI, along at the resolution read along), or pixels with `pixels`.
+fn film_request(
+    args: &[String],
+    bits: u8,
+    positive: bool,
+    pixels: bool,
+) -> Result<epson_gt_x750::film::FilmRequest, String> {
+    use epson_gt_x750::film::{Film, FilmRequest, READ_ALONG};
+    let dpi: u32 = args[0]
+        .parse()
+        .map_err(|_| format!("{}: not a resolution", args[0]))?;
+    let ydpi = READ_ALONG
+        .iter()
+        .find(|(d, _)| *d == dpi)
+        .map_or(dpi, |(_, y)| *y);
+    let v: Vec<f64> = args[1..5]
+        .iter()
+        .map(|a| a.parse::<f64>().map_err(|_| format!("{a}: not a number")))
+        .collect::<Result<_, _>>()?;
+    if v.iter().any(|v| !v.is_finite() || *v < 0.0) {
+        return Err("negative or not finite".into());
+    }
+    let px = |v: f64, res: u32| {
+        if pixels {
+            v.round() as u32
+        } else {
+            (v / 25.4 * f64::from(res)).round() as u32
+        }
+    };
+    Ok(FilmRequest {
+        dpi,
+        ydpi,
+        x: px(v[0], dpi),
+        y: px(v[1], ydpi),
+        width: px(v[2], dpi),
+        height: px(v[3], ydpi),
+        bits,
+        film: if positive {
+            Film::Positive
+        } else {
+            Film::Negative
+        },
+    })
+}
+
+/// Prints a film request's plan with the x correction of captures 74-81 (the scan reads the
+/// scanner's own) and what the guard says of it: whether it may go out.
+fn show_film_plan(r: &epson_gt_x750::film::FilmRequest) -> bool {
+    use epson_gt_x750::film::FilmPlan;
+    let mm = |v: u32, res: u32| f64::from(v) * 25.4 / f64::from(res);
+    println!(
+        "{:?}, {} x {} dpi, {} bits: x {} y {} px, {} x {} px ({:.2} x {:.2} mm at {:.2}, {:.2} mm)",
+        r.film,
+        r.dpi,
+        r.ydpi,
+        r.bits,
+        r.x,
+        r.y,
+        r.width,
+        r.height,
+        mm(r.width, r.dpi),
+        mm(r.height, r.ydpi),
+        mm(r.x, r.dpi),
+        mm(r.y, r.ydpi)
+    );
+    if let Err(e) = guard::check_film_request(r) {
+        println!("the guard refuses it: {e}");
+        return false;
+    }
+    match FilmPlan::new(*r, setup::XCorrection(-122)) {
+        Ok(p) => {
+            let g = p.geometry;
+            println!(
+                "with the x correction -122: base {}, read at {} across, columns {}-{}, {} lines \
+                 of {} pixels, start move {} steps (+1024 of ramps), read move {} steps (lead \
+                 {}), 1E 11 {:02x}",
+                g.base,
+                g.read_dpi,
+                g.columns.0,
+                g.columns.1,
+                g.lines,
+                g.pixels,
+                g.start_steps,
+                g.read_steps,
+                g.lead,
+                g.e11
+            );
+            println!("the guard lets it out");
+            true
+        }
+        Err(e) => {
+            println!("no plan: {e}");
+            false
+        }
+    }
+}
+
+/// Scans a film (`scan::scan_film`) and writes its image, and its raw read with `raw`.
+fn film_scan(
+    request: &epson_gt_x750::film::FilmRequest,
+    out: &str,
+    raw: Option<&std::path::Path>,
+) -> Result<(), Error> {
+    let mut t = open_first()?;
+    let state = protocol::state(&mut t)?;
+    println!("state (1B 03): {}", describe(state));
+    if !state.firmware_running() {
+        return Err(Error::Other(
+            "the firmware is not running: run `epson4490 upload` first".into(),
+        ));
+    }
+    let start = std::time::Instant::now();
+    let mut shown = 0;
+    // Marked as the application's: killed half-way, the application's opening stops it.
+    let _mark = epson_gt_x750::mark::ScanMark::begin(&epson_gt_x750::mark::default_path());
+    let s = epson_gt_x750::scan::scan_film(
+        &mut t,
+        request,
+        10,
+        &mut |line| println!("  {:5.1} s  {line}", start.elapsed().as_secs_f64()),
+        &mut |event| {
+            if let epson_gt_x750::scan::Event::Reading { done, total } = event {
+                let tenth = done * 10 / total.max(1);
+                if tenth > shown {
+                    shown = tenth;
+                    println!(
+                        "  {:5.1} s  {} of {} MB",
+                        start.elapsed().as_secs_f64(),
+                        done / 1_000_000,
+                        total / 1_000_000
+                    );
+                }
+            }
+            true
+        },
+    )?;
+    let c = &s.calibration;
+    println!(
+        "calibration: lid unit back {} steps, offsets {:02x?}, exposures {:?} us, gains \
+         {:02x?}, image gains {:02x?}",
+        c.back, c.offsets, c.exposures, c.gains, c.image_gains
+    );
+    if let Some(path) = raw {
+        std::fs::write(path, &s.raw)
+            .map_err(|e| Error::Other(format!("{}: {e}", path.display())))?;
+        println!(
+            "raw data: {} lines of {} pixels -> {}",
+            c.plan.geometry.lines,
+            c.plan.geometry.pixels,
+            path.display()
+        );
+    }
+    write_png(out, &s.image)?;
+    println!(
+        "done in {:.1} s: {} x {} pixels, {} bits -> {out}",
+        start.elapsed().as_secs_f64(),
+        s.image.width,
+        s.image.height,
+        s.image.bits
+    );
+    Ok(())
 }
 
 /// Prints the plan of `request` with the x correction of Matteo's 4490 (the scan reads the
@@ -1005,6 +1204,33 @@ mod tests {
             answers: answers.iter().map(|a| a.to_vec()).collect(),
             ..Default::default()
         }
+    }
+
+    /// Capture 74's frame (Epson Scan's request: 93, 209, 576 x 874 pixels at 600 dpi) asked in
+    /// millimetres or in pixels; 4800 dpi along at 5400.
+    #[test]
+    fn a_film_request_in_millimetres_or_pixels() {
+        use epson_gt_x750::film::Film;
+        let args = |v: [&str; 5]| v.map(String::from);
+        let mm = film_request(
+            &args(["600", "3.94", "8.85", "24.38", "37"]),
+            16,
+            false,
+            false,
+        )
+        .unwrap();
+        let px = film_request(&args(["600", "93", "209", "576", "874"]), 16, false, true).unwrap();
+        assert_eq!(mm, px);
+        assert_eq!(
+            (px.dpi, px.ydpi, px.x, px.y, px.width, px.height, px.bits, px.film),
+            (600, 600, 93, 209, 576, 874, 16, Film::Negative)
+        );
+        assert!(show_film_plan(&px));
+        let r = film_request(&args(["4800", "4", "10", "24", "37"]), 16, true, false).unwrap();
+        assert_eq!((r.ydpi, r.y, r.film), (5400, 2126, Film::Positive));
+        // A slide at 4800 dpi was never captured: refused.
+        assert!(!show_film_plan(&r));
+        assert!(film_request(&args(["600", "-1", "0", "1", "1"]), 16, false, false).is_err());
     }
 
     #[test]
