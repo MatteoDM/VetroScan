@@ -180,6 +180,144 @@ pub fn gains_round(g: [u8; 3], level: [u32; 3]) -> Option<[u8; 3]> {
     (next != g).then_some(next)
 }
 
+/// The margin of a read of the image's columns (`0x422dd0` with them): as [`margin`], X the
+/// read's start r8 + its columns + 160 (74: 4338 at base 2400; 77: 5509 at base 4800).
+pub fn image_margin(base: u32, r8: u32, columns: u32) -> u32 {
+    let (c, r) = if base == 4800 {
+        (41_980, 6)
+    } else {
+        (21_100, 3)
+    };
+    let x = r8 + columns + 160;
+    (((c - x) / r) >> 1) + (x >> 1)
+}
+
+/// A `1E 21` block from its parts.
+fn block21(t: u32, e: [u32; 3], b12: u8, words: [u16; 4], last: u8) -> [u8; 26] {
+    let mut b = [0u8; 26];
+    b[..3].copy_from_slice(&t.to_le_bytes()[..3]);
+    for c in 0..3 {
+        b[3 + 3 * c..6 + 3 * c].copy_from_slice(&e[c].to_le_bytes()[..3]);
+    }
+    b[12] = b12;
+    for (i, w) in words.iter().enumerate() {
+        b[13 + 2 * i..15 + 2 * i].copy_from_slice(&w.to_le_bytes());
+    }
+    b[25] = last;
+    b
+}
+
+/// The white read's `1E 21` (`0x425c20`), from the final exposures `x`, the image's words and
+/// the image's margin ([`image_margin`]): when the longest exposure exceeds the next by at least
+/// that margin, T is it rounded up to 384 and that channel integrates the whole line (its value
+/// 0, byte 12 `3e`, `3b` or `2f` for the first, second or third), the others T - X; otherwise
+/// the last window read's block (`last_window`) with the image's words. Then the least value
+/// (not zero) / 2 and the greatest / 2. All eight film scans captured.
+pub fn white_block21(
+    x: [u32; 3],
+    words: (u16, u16),
+    image_margin: u32,
+    last_window: &[u8; 26],
+    last: u8,
+) -> [u8; 26] {
+    let mut order = [0usize, 1, 2];
+    order.sort_by_key(|&c| x[c]);
+    let (longest, second) = (order[2], x[order[1]]);
+    if x[longest] >= second + image_margin {
+        let t = round_up_384(x[longest]);
+        let mut e = x.map(|v| t - v);
+        e[longest] = 0;
+        let b12 = [0x3E, 0x3B, 0x2F][longest];
+        let least = e.iter().copied().filter(|&v| v > 0).min().unwrap_or(0);
+        let most = e.iter().copied().max().unwrap_or(0);
+        block21(
+            t,
+            e,
+            b12,
+            [words.0, words.1, (least >> 1) as u16, (most >> 1) as u16],
+            last,
+        )
+    } else {
+        let mut b = *last_window;
+        b[13..15].copy_from_slice(&words.0.to_le_bytes());
+        b[15..17].copy_from_slice(&words.1.to_le_bytes());
+        b[25] = last;
+        b
+    }
+}
+
+/// A negative's dark and image reads' `1E 21`: every channel the whole line T (the image's,
+/// [`negative_exposures`]), byte 12 `2a`, the image's words, then zeros.
+pub fn negative_image_block21(t: u32, words: (u16, u16), last: u8) -> [u8; 26] {
+    block21(t, [0; 3], 0x2A, [words.0, words.1, 0, 0], last)
+}
+
+/// A slide's dark and image reads' `1E 21`: the white's form ([`white_block21`]'s first) with
+/// the exposures scaled by `factor` tenths around 110 µs, (X - 110) x factor / 10 + 110. The
+/// factor is Epson Scan's own choice (15 for capture 80, 10 for 81; from its preview, it seems):
+/// 10 keeps the white's.
+pub fn slide_image_exposures(x: [u32; 3], factor: u32) -> [u32; 3] {
+    x.map(|v| (v - EXPOSURE_OFFSET) * factor / 10 + EXPOSURE_OFFSET)
+}
+
+/// A negative's image gains from its calibration gains (`0x424320`): the first kept, the second
+/// to the highest index whose value is at most value x 2000 / 1500, the third x 3000 / 2300
+/// (74: `21 09 16` gives `21 14 1f`).
+pub fn negative_image_gains(g: [u8; 3]) -> [u8; 3] {
+    let up = |g: u8, num: u32, den: u32| {
+        let v = u32::from(GAIN_TABLE[usize::from(g).min(63)]) * num / den;
+        GAIN_TABLE
+            .iter()
+            .rposition(|&t| u32::from(t) <= v)
+            .unwrap_or(0) as u8
+    };
+    [g[0], up(g[1], 2000, 1500), up(g[2], 3000, 2300)]
+}
+
+/// The slides' gains (`1E 31` bytes 8-10, captures 79-81): no search, these throughout.
+pub const SLIDE_GAINS: [u8; 3] = [0x18, 0x1B, 0x18];
+
+/// The lid unit's origin read: 150 lines of 384 pixels, 8 bits, three a pixel.
+pub const ORIGIN_READ: (usize, usize) = (150, 384);
+
+/// What `1E 8A` carries when the origin read finds no edge (`0x420fe0`): the default move.
+pub const ORIGIN_DEFAULT: u32 = 0x436;
+
+/// The lid unit's origin from its 150-line read (`0x420fe0`; all 14 film captures): each line's
+/// level is its second channel's sum x 2/3 >> 8 (the mean); the threshold 5 x the highest level
+/// / 10; after more than five lines above it, the first line below it is the edge; `1E 8A` is
+/// (150 - edge + 35) x 12 + 256, and the move back that many steps less 1024 (a 512-value ramp's).
+/// `None` when no edge is found (Epson Scan then moves by [`ORIGIN_DEFAULT`]).
+pub fn origin(read: &[u8]) -> Option<u32> {
+    let (lines, pixels) = ORIGIN_READ;
+    if read.len() < lines * pixels * 3 {
+        return None;
+    }
+    let levels: Vec<u32> = read
+        .chunks_exact(pixels * 3)
+        .take(lines)
+        .map(|l| {
+            let sum: u64 = l.iter().skip(1).step_by(3).map(|&v| u64::from(v)).sum();
+            (((sum * 0xAAAA_AAAB) >> 32) >> 8) as u32
+        })
+        .collect();
+    let threshold = 5 * levels.iter().map(|v| v / 10).max().unwrap_or(0);
+    let mut above = 0;
+    let mut edge = 0;
+    for (i, &v) in levels.iter().enumerate() {
+        if v > threshold {
+            above += 1;
+        }
+        if above > 5 {
+            edge = i;
+            if v < threshold {
+                break;
+            }
+        }
+    }
+    (edge > 0).then(|| (lines as u32 - edge as u32 + 35) * 12 + 256)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -334,5 +472,53 @@ mod tests {
                 (40 + 50 + 40 + 50) / 4
             ]
         );
+    }
+    #[test]
+    fn the_white_dark_and_image_blocks_are_as_captured() {
+        // 74 (base 2400): the image's margin 4338; the white in the "3e" form.
+        assert_eq!(image_margin(2400, 3, 2304), 4338);
+        let w = white_block21([13_550, 9070, 5953], (1190, 574), 4338, &[0; 26], 6);
+        assert_eq!(
+            w.to_vec(),
+            hex("003600000000921200bf1e003ea6043e0249095f0f0000000006")
+        );
+        assert_eq!(
+            negative_image_block21(13_440, (1190, 574), 2).to_vec(),
+            hex("8034000000000000000000002aa6043e02000000000000000002")
+        );
+        assert_eq!(negative_image_gains([0x21, 0x09, 0x16]), [0x21, 0x14, 0x1F]);
+        // 77 (base 4800): the image's margin 5509 is too much: the last window block, the
+        // image's words.
+        assert_eq!(image_margin(4800, 42, 4624), 5509);
+        let window = window_block21(4800, [13_934, 9326, 6120], true, 2);
+        let w = white_block21([13_934, 9326, 6120], (1778, 572), 5509, &window, 6);
+        assert_eq!(u32::from_le_bytes([w[0], w[1], w[2], 0]), 23_040);
+        assert_eq!(w[12], 0x3F);
+        assert_eq!(&w[13..17], &[0xF2, 0x06, 0x3C, 0x02]);
+        // 80, a slide: the white, then the image with Epson Scan's factor 15.
+        let x = [16_213, 5520, 5075];
+        let w = white_block21(x, (2421, 672), image_margin(4800, 20, 6816), &[0; 26], 6);
+        assert_eq!(u32::from_le_bytes([w[0], w[1], w[2], 0]), 16_512);
+        let img = slide_image_exposures(x, 15);
+        let i = white_block21(img, (2421, 672), image_margin(4800, 20, 6816), &[0; 26], 6);
+        assert_eq!(
+            i.to_vec(),
+            hex("006000000000df3f007b42003e7509a002ef1f3d210000000006")
+        );
+    }
+    /// A made-up origin read: the light from line 20 to line 100 (second channel 200, else 20):
+    /// the edge at 100, so (150 - 100 + 35) x 12 + 256 = 1276, as capture 75's.
+    #[test]
+    fn the_lid_units_origin_is_the_lights_edge() {
+        let (lines, pixels) = ORIGIN_READ;
+        let mut read = Vec::with_capacity(lines * pixels * 3);
+        for line in 0..lines {
+            let g = if (20..100).contains(&line) { 200 } else { 20 };
+            for _ in 0..pixels {
+                read.extend([30, g, 40]);
+            }
+        }
+        assert_eq!(origin(&read), Some(1276));
+        assert_eq!(origin(&vec![0; lines * pixels * 3]), None);
     }
 }

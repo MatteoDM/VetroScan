@@ -1633,9 +1633,30 @@ never run by us (step 12).
     interpreter's 64-value table at `0x401180` (966 to 6424, 2.6 % apart); a channel at 222-230
     keeps its gain, any other goes to the highest index whose value is at most value x 228 /
     level; the search ends after a read that moved none. The table at `0x40ca20` also holds the
-    film origin 13,320 and the window's 12,960 columns (6660 and 6480 at base 2400). Left of
-    the calibration: N, the white and dark reads' and the image's `1E 21` and `1E 31`, the
-    `1E 42` blocks and the shading, the gamma tables.
+    film origin 13,320 and the window's 12,960 columns (6660 and 6480 at base 2400).
+    **The rest of the calibration read** (same night; `film_cal.rs`, `shading.rs`, tests from the
+    captures; checked on all eight film scans): **N** (`0x420fe0`): each line of the 150-line read
+    its second channel's mean; the threshold half the highest (in tens); after more than five
+    lines above it, the first line below is the edge; `1E 8A` = (150 - edge + 35) x 12 + 256, the
+    move back that less 1024 (all 14 captures). **The white read's `1E 21`** (`0x425c20`): when
+    the longest exposure exceeds the next by at least the margin of the image's columns (4338 in
+    74, 5509 in 77), T is it rounded up to 384, that channel 0 (byte 12 `3e`, `3b`, `2f` by
+    channel), the others T - X; otherwise the last window read's block with the image's words
+    (77, 76, 17). **Negatives' dark and image**: every channel the whole line, T the rounded first
+    exposure (13,440), byte 12 `2a`; the image's gains from the calibration's: the second to the
+    table's value x 2000 / 1500, the third x 3000 / 2300 (`21 09 16` to `21 14 1f`); the dark read
+    with the image's settings. **Slides' dark and image**: the white's form with the exposures
+    (X - 110) x f / 10 + 110, f Epson Scan's own choice (15 in 80, 10 in 81: its auto exposure
+    from the preview, it seems; ours may keep 10); gains `18 1b 18` throughout. **The shading**: the
+    glass's computation, but at base 4800 the minimum dark of the even and the odd columns apart
+    (`1E 42` carries both: 687 and 1650 in 77): then the dark bytes as Epson's but a few; the white
+    bytes 2-4 units off (the glass's about 1; Epson's rule for dusty lines unknown).
+    **Decided, not read**: the gamma and tone tables linear (the identity), as on the glass, where
+    the app turns the samples into its tone (Epson Scan sends a negative's inverted curve). Left
+    of step 14: the white bytes' rule, then the film scan's sequence in `scan.rs` with all this,
+    through the guard (opened for the film path's commands, as captured), tested against
+    captures 74-81 write by write where nothing depends on the reads; then the first film scan of
+    ours with Matteo at the scanner (capture 74's frame at 600 dpi).
     **Left of step 14**, what Epson Scan computes from its calibration reads (each in the
     captures with its reads, to rebuild the same way): N from the 150-line read; the line time T and
     the three exposures of `1E 21` (from reads of the window at T 9600 / 13,056 and exposures

@@ -41,8 +41,11 @@ pub fn black_block(raw: &[u8]) -> Vec<u8> {
 pub struct Shading {
     /// The white's base per channel (`1E 42`).
     pub k: [u16; 3],
-    /// The minimum dark per channel (`1E 42`).
+    /// The minimum dark per channel (`1E 42`); of the even columns where they differ.
     pub dark_min: [u16; 3],
+    /// The odd columns' minimum dark: the same as `dark_min` but on a sensor whose two rows of
+    /// columns have darks of their own ([`Shading::compute_by_parity`]).
+    pub dark_min_odd: [u16; 3],
     /// The white's scale, 2^`white_shift` (`1E 41` byte 15, high nibble).
     pub white_shift: u8,
     /// The dark's scale, 2^`dark_shift` (low nibble).
@@ -80,6 +83,31 @@ impl Shading {
     /// From the white and dark reads (16-bit RGB over `cols` columns), for a table of `len`
     /// values covering the first `width` columns.
     pub fn compute(white: &[u8], dark: &[u8], cols: usize, width: usize, len: usize) -> Self {
+        Self::compute_with(white, dark, cols, width, len, false)
+    }
+
+    /// [`Shading::compute`] with the minimum dark of the even and the odd columns apart, each
+    /// column's dark byte from its own: Epson Scan's films at base 4800 (captures 76-81: its
+    /// `1E 42` carries two minimum darks a channel, 687 and 1650 in 77, and with them every dark
+    /// byte but a few comes out as its table's). At base 2400 the two are the same.
+    pub fn compute_by_parity(
+        white: &[u8],
+        dark: &[u8],
+        cols: usize,
+        width: usize,
+        len: usize,
+    ) -> Self {
+        Self::compute_with(white, dark, cols, width, len, true)
+    }
+
+    fn compute_with(
+        white: &[u8],
+        dark: &[u8],
+        cols: usize,
+        width: usize,
+        len: usize,
+        by_parity: bool,
+    ) -> Self {
         let w = columns(white, cols);
         let d = columns(dark, cols);
         let width = width.min(cols);
@@ -101,13 +129,31 @@ impl Shading {
         let min = |v: &[[f64; 3]], ch: usize| v.iter().map(|c| c[ch]).fold(f64::MAX, f64::min);
         let max = |v: &[[f64; 3]], ch: usize| v.iter().map(|c| c[ch]).fold(f64::MIN, f64::max);
         let k: [u16; 3] = std::array::from_fn(|ch| min(&white_col, ch).floor() as u16);
-        let dark_min: [u16; 3] = std::array::from_fn(|ch| min(&dark_col, ch).floor() as u16);
+        let min_of = |parity: usize, ch: usize| {
+            dark_col
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| !by_parity || i % 2 == parity)
+                .map(|(_, c)| c[ch])
+                .fold(f64::MAX, f64::min)
+                .floor() as u16
+        };
+        let dark_min: [u16; 3] = std::array::from_fn(|ch| min_of(0, ch));
+        let dark_min_odd: [u16; 3] = std::array::from_fn(|ch| min_of(1, ch));
+        let dark_of = |col: usize, ch: usize| {
+            if col % 2 == 1 {
+                dark_min_odd[ch]
+            } else {
+                dark_min[ch]
+            }
+        };
         let white_shift = (0..3)
             .map(|ch| shift_for(max(&white_col, ch) - f64::from(k[ch])))
             .max()
             .unwrap_or(0);
-        let dark_shift = (0..3)
-            .map(|ch| shift_for(max(&dark_col, ch) - f64::from(dark_min[ch])))
+        let dark_shift = (0..width)
+            .flat_map(|col| (0..3).map(move |ch| (col, ch)))
+            .map(|(col, ch)| shift_for(dark_col[col][ch] - f64::from(dark_of(col, ch))))
             .max()
             .unwrap_or(0);
         let mut table = vec![0u16; len];
@@ -120,7 +166,7 @@ impl Shading {
                 let hi = ((white_col[col][ch] - f64::from(k[ch])) / f64::from(1u32 << white_shift))
                     .floor()
                     .clamp(0.0, 255.0) as u16;
-                let lo = ((dark_col[col][ch] - f64::from(dark_min[ch]))
+                let lo = ((dark_col[col][ch] - f64::from(dark_of(col, ch)))
                     / f64::from(1u32 << dark_shift))
                 .floor()
                 .clamp(0.0, 255.0) as u16;
@@ -130,16 +176,19 @@ impl Shading {
         Self {
             k,
             dark_min,
+            dark_min_odd,
             white_shift,
             dark_shift,
             table,
         }
     }
 
-    /// The `1E 42` block: K per channel, then each minimum dark twice.
+    /// The `1E 42` block: K per channel, then each channel's minimum dark of the even columns
+    /// and of the odd (the same twice but for [`Shading::compute_by_parity`]).
     pub fn block42(&self) -> Vec<u8> {
         let [d0, d1, d2] = self.dark_min;
-        [self.k[0], self.k[1], self.k[2], d0, d0, d1, d1, d2, d2]
+        let [o0, o1, o2] = self.dark_min_odd;
+        [self.k[0], self.k[1], self.k[2], d0, o0, d1, o1, d2, o2]
             .iter()
             .flat_map(|v| v.to_le_bytes())
             .collect()
@@ -195,5 +244,25 @@ mod tests {
             [0, 0, 0, 255 << 8 | 40, 255 << 8 | 40, 255 << 8 | 40, 0, 0]
         );
         assert_eq!(s.block42()[..6], [0xE8, 0x03, 0xE8, 0x03, 0xE8, 0x03]);
+    }
+
+    #[test]
+    fn the_dark_by_parity_has_two_minimums() {
+        // Two columns, the odd one darker by 960: by parity each is its own minimum.
+        let mut white = Vec::new();
+        let mut dark = Vec::new();
+        for _ in 0..16 {
+            white.extend(rgb16(&[[1000; 3], [1000; 3]]));
+            dark.extend(rgb16(&[[700; 3], [1660; 3]]));
+        }
+        let s = Shading::compute_by_parity(&white, &dark, 2, 2, 6);
+        assert_eq!((s.dark_min, s.dark_min_odd), ([700; 3], [1660; 3]));
+        assert_eq!(s.dark_shift, 0);
+        assert!(s.table.iter().all(|v| v & 0xFF == 0));
+        let k = s.block42();
+        assert_eq!(&k[6..10], &[0xBC, 0x02, 0x7C, 0x06]);
+        // The glass's: one minimum, twice.
+        let g = Shading::compute(&white, &dark, 2, 2, 6);
+        assert_eq!((g.dark_min, g.dark_min_odd), ([700; 3], [700; 3]));
     }
 }
