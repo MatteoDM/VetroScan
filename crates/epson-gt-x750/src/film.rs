@@ -237,6 +237,20 @@ pub const E43_READS: [u8; 12] = [
 pub const E43_IMAGE: [u8; 12] = [
     0x00, 0x40, 0x00, 0x40, 0x00, 0x40, 0x00, 0x40, 0x00, 0x40, 0x00, 0x40,
 ];
+/// A slide's `1E 43`, for its reads and its image alike: gain 1.0 (`8000`) throughout (captures
+/// 79-81).
+pub const E43_SLIDE: [u8; 12] = [
+    0x00, 0x80, 0x00, 0x80, 0x00, 0x80, 0x00, 0x80, 0x00, 0x80, 0x00, 0x80,
+];
+
+/// The `1E 43` of a film's calibration reads (`image` false) or of its image.
+pub fn e43(film: Film, image: bool) -> [u8; 12] {
+    match (film, image) {
+        (Film::Positive, _) => E43_SLIDE,
+        (Film::Negative, false) => E43_READS,
+        (Film::Negative, true) => E43_IMAGE,
+    }
+}
 
 /// The lid unit's origin read (every film capture): `1E 11` 03, `1E 21` T 6144 and nothing else
 /// but byte 12 `2a`, `1E 41` columns 2800-3184, 150 lines, 8 bits, ratio 1/12, `1E 31` offsets
@@ -245,6 +259,11 @@ pub const E43_IMAGE: [u8; 12] = [
 pub const ORIGIN_E11: u8 = 0x03;
 /// The origin read's `1E 31`.
 pub const ORIGIN_E31: [u8; 12] = [0x80, 0, 0x80, 0, 0x80, 0, 0, 0, 0x1E, 0x1E, 0x1E, 0];
+
+/// The lid unit's origin read's `1E 41`: columns 2800-3184, 150 lines, 8 bits, ratio 1/12.
+pub fn origin_e41() -> [u8; 22] {
+    crate::setup::block41(2800, 3184, 150, 0x01, 1, 12, 0, 0, 0x80, 0x80, 150)
+}
 
 /// What a film scan sends that follows from its request and `1E 87`'s correction: the
 /// [`Geometry`], and every `1E 41` and fixed move of its reads (captures 17, 74-81; the
@@ -298,7 +317,7 @@ impl FilmPlan {
         Ok(Self {
             request,
             e21_origin,
-            e41_origin: block41(2800, 3184, 150, 0x01, 1, 12, 0, 0, 0x80, 0x80, 150),
+            e41_origin: origin_e41(),
             e41_black: block41(b0, b1, 4, 0x00, den, num, 0, 0, 0x80, 0, 4),
             e41_window: block41(w0, w1, 4, 0x01, den, num, 0, 0, 0x80, 0, 4),
             e41_white: block41(c0, c1, 16, 0x00, 1, 2, 0x40, 0, 0x80, 0x80, 16),

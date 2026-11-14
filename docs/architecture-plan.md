@@ -1658,15 +1658,30 @@ never run by us (step 12).
     lines, the image's ratio), the image; the black reads' words and margin (60, 0 and 3596 at
     base 2400; 81, 0 and 3634 at 4800, from the captures' T and words). **The film path's
     512-value ramp** (`0x401460`, the park and start moves) computed with the glass's formula,
-    period 222 µs and k 1023.065 (`setup::film_ramp`: every value as the interpreter's). **To ask
-    Matteo**: `film_cal::GAIN_TABLE` is the interpreter's 64 values copied (no formula found),
-    where the ramps are computed.
+    period 222 µs and k 1023.065 (`setup::film_ramp`: every value as the interpreter's).
+    `film_cal::GAIN_TABLE` is the interpreter's 64 values copied (no formula found), where the
+    ramps are computed: kept so (Matteo, 14 November 2026).
     **Decided, not read**: the gamma and tone tables linear (the identity), as on the glass, where
-    the app turns the samples into its tone (Epson Scan sends a negative's inverted curve). Left
-    of step 14: the white bytes' rule, then the film scan's sequence in `scan.rs` with all this,
-    through the guard (opened for the film path's commands, as captured), tested against
-    captures 74-81 write by write where nothing depends on the reads; then the first film scan of
-    ours with Matteo at the scanner (capture 74's frame at 600 dpi).
+    the app turns the samples into its tone (Epson Scan sends a negative's inverted curve).
+    **The film's calibration in the driver** (same night; `scan::calibrate_film`): the lamp, the
+    park (from home, or from where the scanner puts the carriages when it lights the lid's lamp
+    again, capture 72), the lid unit's origin, `1E 87`, the offsets, the exposures and a
+    negative's gains, the black pixels, the white and the dark read; tested write by write
+    against captures 74, 77 and 80 (`testdata/*_film.txt`, with reads made up from what the rules
+    take from the real ones: the same offsets, exposures and gains as Epson Scan's). Learnt on the
+    way: a slide's `1E 43` is `8000` throughout; after its loop a slide sends its window block
+    once more, and its black read takes the black pixels' margin. **The guard for the film path**
+    (`permit_film_path`, `permit_film_plan`): `1E 25` 00/02/03; only the moves captured (the
+    park from home, the unit back from 1078, the 8 steps, the origin read's 1920, the moves back
+    of 228, 240 or 252 steps and their `1E 8A`, the white's 64), the plan's start and read moves
+    once permitted; `1E 05` only after a move; `1E 21` with a line time a multiple of 384 within
+    6144-25,344 µs; one-value ramps no faster than 156; the plan's `1E 41`; the ramps computed
+    (the film's 512 and the origin read's); linear tone tables; the plan's shading. Left of step
+    14: the image read (`1E 8B`/`1E 83`, the tone tables, the start move, the image's set-up with
+    the shading, the read), the image put together (the colours' offsets, the staggered columns
+    at 4800 across, 2400 halved across, 5400 reduced along), a command to try it; then the first
+    film scan of ours with Matteo at the scanner (capture 74's frame at 600 dpi). The white bytes'
+    rule (2-4 units off) can wait for that scan's result.
     **Left of step 14**, what Epson Scan computes from its calibration reads (each in the
     captures with its reads, to rebuild the same way): N from the 150-line read; the line time T and
     the three exposures of `1E 21` (from reads of the window at T 9600 / 13,056 and exposures

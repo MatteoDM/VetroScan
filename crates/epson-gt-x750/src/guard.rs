@@ -37,7 +37,7 @@
 //! captured sending ([`FILM_COVERED`], inside [`crate::film::ADAPTER_INCHES`]).
 //! Anything else is refused with an error and never reaches the scanner.
 
-use crate::film::{self, Film, FilmRequest};
+use crate::film::{self, Film, FilmPlan, FilmRequest};
 use crate::firmware::{HEADER_LEN, PAYLOAD_LEN};
 use crate::protocol::{
     checksum, FIRMWARE_BEGIN, FIRMWARE_END, FIRMWARE_RUN, GET_BUTTONS, GET_STATE, TABLE_CHUNK,
@@ -273,6 +273,49 @@ enum Expect {
     GammaChannel,
     /// `1E 84`: a header the plan allows.
     TableHeader,
+    /// One of a film's `1E 01` blocks: the moves `1E 05` starts (first), the reads' (second).
+    FilmMove(Vec<Vec<u8>>, Vec<Vec<u8>>),
+    /// A film's `1E 21`: a line time a multiple of 384 µs within [`FILM_LINE_TIMES`].
+    FilmBlock21,
+    /// A film's `1E 84` header.
+    FilmTable,
+    /// A one-value ramp no faster than this (µs / 16).
+    MinWord(u16),
+}
+
+/// The line times a film's `1E 21` may carry, µs: from the origin read's 6144 to the window
+/// reads' 25,344 (captures 17, 72-81); every one a multiple of 384.
+pub const FILM_LINE_TIMES: std::ops::RangeInclusive<u32> = 6144..=25_344;
+
+/// The moves back the lid unit was seen to make after its origin read (`1E 8A` less 1024):
+/// a computed origin outside them is refused.
+pub const FILM_BACK_MOVES: [u32; 3] = [228, 240, 252];
+
+/// The film path's moves before its plan (every film capture): the park from home (1994 less
+/// the 512 ramp's 1024), the lid unit back from where the scanner put it when it lit its lamp
+/// again (1078, capture 72), the 8 steps before the origin read; then the moves back.
+fn film_moves() -> Vec<Vec<u8>> {
+    let mut m = vec![
+        setup::move_block(film::PARK - film::RAMP_512_STEPS, 0, 0x1FF, 0x10).to_vec(),
+        setup::move_block(1078 - film::RAMP_512_STEPS, 0, 0x1FF, 0x30).to_vec(),
+        setup::move_block(8, 0, 0, 0x18).to_vec(),
+    ];
+    m.extend(
+        FILM_BACK_MOVES
+            .iter()
+            .map(|&n| setup::move_block(n, 0, 0x1FF, 0x30).to_vec()),
+    );
+    m
+}
+
+/// The origin read's move (1920 steps, lead 120: every film capture).
+pub fn film_origin_read_move() -> [u8; 12] {
+    setup::move_block(1920, 120, 0xFF, 0x12)
+}
+
+/// `1E 8A`'s block for a move back of `n` steps: n + 1024, u32.
+pub fn film_origin_block(n: u32) -> [u8; 4] {
+    (n + film::RAMP_512_STEPS).to_le_bytes()
 }
 
 /// What a scan was asked.
@@ -290,6 +333,10 @@ struct Permit {
     asked: Asked,
     e57: [u8; 42],
     plan: Option<Plan>,
+    /// A film's path is open (after its lamp): its moves before the plan.
+    film_path: bool,
+    /// A film's plan, once `1E 87` has given the correction.
+    film_plan: Option<FilmPlan>,
 }
 
 /// Where the firmware upload is.
@@ -365,6 +412,8 @@ impl<T: Transport> Guarded<T> {
             asked: Asked::Glass(*request),
             e57: setup::request_block(request)?,
             plan: None,
+            film_path: false,
+            film_plan: None,
         });
         self.expect = None;
         self.start_armed = false;
@@ -381,6 +430,8 @@ impl<T: Transport> Guarded<T> {
             asked: Asked::Film(*request),
             e57: film::request_block(request)?,
             plan: None,
+            film_path: false,
+            film_plan: None,
         });
         self.expect = None;
         self.start_armed = false;
@@ -411,6 +462,35 @@ impl<T: Transport> Guarded<T> {
         check_plan(plan)?;
         permit.plan = Some(plan.clone());
         Ok(())
+    }
+
+    /// Opens a permitted film's path (after its lamp): the park, the lid unit's moves and its
+    /// origin read, `1E 8A`, the calibration's set-ups, all in the forms captured.
+    pub fn permit_film_path(&mut self) -> Result<()> {
+        match self.permit.as_mut() {
+            Some(p) if matches!(p.asked, Asked::Film(_)) => {
+                p.film_path = true;
+                Ok(())
+            }
+            _ => Err(Error::Other(
+                "Epson 4490: a film's path without its film permitted".into(),
+            )),
+        }
+    }
+
+    /// Lets out a film's `plan` (its reads' `1E 41`, the start and read moves, the shading),
+    /// for the film permitted.
+    pub fn permit_film_plan(&mut self, plan: &FilmPlan) -> Result<()> {
+        match self.permit.as_mut() {
+            Some(p) if p.asked == Asked::Film(plan.request) && p.film_path => {
+                check_film_request(&plan.request)?;
+                p.film_plan = Some(plan.clone());
+                Ok(())
+            }
+            _ => Err(Error::Other(
+                "Epson 4490: a film plan not for the film permitted".into(),
+            )),
+        }
     }
 
     /// Back to the commands that move nothing.
@@ -480,7 +560,9 @@ impl<T: Transport> Guarded<T> {
         };
         let film = matches!(permit.asked, Asked::Film(_));
         // The glass's lamp in a glass scan, the lid's for a film (Epson Scan, captures 72-81).
-        let lamps: &[&[u8]] = if film {
+        let lamps: &[&[u8]] = if film && permit.film_path {
+            &[&[0x02], &[0x03]]
+        } else if film {
             &[&[0x02]]
         } else {
             &[&[0x00], &[0x01]]
@@ -500,6 +582,11 @@ impl<T: Transport> Guarded<T> {
         };
         if let Some(next) = request_level {
             return idle(next);
+        }
+        if film && permit.film_path {
+            return self
+                .film_command(permit, data)
+                .map(|next| (Stage::Idle, next));
         }
         let Some(p) = &permit.plan else {
             if film {
@@ -536,6 +623,52 @@ impl<T: Transport> Guarded<T> {
         idle(next)
     }
 
+    /// A command of a film's path: what may follow it.
+    fn film_command(&self, permit: &Permit, data: &[u8]) -> Result<Option<Expect>> {
+        let p = permit.film_plan.as_ref();
+        let plan_only = |what: &str| Err(refusal(data, &format!("{what} before the film's plan")));
+        Ok(match data {
+            [0x1E, 0x25] => one(&[[0x00], [0x02], [0x03]]),
+            [0x1E, 0x84] => Some(Expect::FilmTable),
+            [0x1E, 0x01] => {
+                let mut moves = film_moves();
+                let mut reads = vec![
+                    film_origin_read_move().to_vec(),
+                    setup::move_block(64, 32, 0, 0x18).to_vec(),
+                ];
+                if let Some(p) = p {
+                    let g = &p.geometry;
+                    moves.push(setup::move_block(g.start_steps, 0, 0x1FF, 0x10).to_vec());
+                    reads.push(setup::move_block(g.read_steps, g.lead as u16, 0, 0x08).to_vec());
+                }
+                Some(Expect::FilmMove(moves, reads))
+            }
+            [0x1E, 0x05] if self.start_armed => None,
+            [0x1E, 0x8A] => Some(Expect::OneOf(
+                FILM_BACK_MOVES
+                    .iter()
+                    .map(|&n| film_origin_block(n).to_vec())
+                    .collect(),
+            )),
+            [0x1E, 0x11] => one(&[[0x03], [0x08], [0x09]]),
+            [0x1E, 0x21] => Some(Expect::FilmBlock21),
+            [0x1E, 0x41] if p.is_some() => Some(Expect::Block41),
+            [0x1E, 0x41] => one(&[film::origin_e41()]),
+            [0x1E, 0x42] => Some(Expect::Len(18)),
+            [0x1E, 0x43] => one(&[
+                setup::GAIN_CAL,
+                film::E43_READS,
+                film::E43_IMAGE,
+                film::E43_SLIDE,
+            ]),
+            [0x1E, 0x47] => None,
+            [0x1E, 0x83] if p.is_some() => one(&[READ_83]),
+            [0x1E, 0x83] => return plan_only("1E 83"),
+            [0x1E, 0x18] => None,
+            _ => return Err(refusal(data, "not in a film's path")),
+        })
+    }
+
     /// Whether `data` is a block `expect` allows; what comes after it.
     fn block(&self, expect: &Expect, data: &[u8]) -> Result<Option<Expect>> {
         let plan = self.permit.as_ref().and_then(|p| p.plan.as_ref());
@@ -557,6 +690,32 @@ impl<T: Transport> Guarded<T> {
                 Ok(Some(Expect::Len(n - TABLE_CHUNK)))
             }
             Expect::Len(_) => bad("of the wrong length"),
+            Expect::Block41 if self.permit.as_ref().is_some_and(|p| p.film_plan.is_some()) => {
+                let fp = self
+                    .permit
+                    .as_ref()
+                    .and_then(|p| p.film_plan.as_ref())
+                    .expect("film plan");
+                let mut image = fp.e41_image;
+                if data.len() == 22 {
+                    image[15] = data[15];
+                }
+                if [
+                    fp.e41_origin,
+                    fp.e41_black,
+                    fp.e41_window,
+                    fp.e41_white,
+                    fp.e41_dark,
+                    image,
+                ]
+                .iter()
+                .any(|b| b[..] == *data)
+                {
+                    Ok(None)
+                } else {
+                    bad("a film's 1E 41")
+                }
+            }
             Expect::Block41 => {
                 let p = plan.expect("1E 41 needs a plan");
                 let mut image = p.e41_data;
@@ -581,6 +740,46 @@ impl<T: Transport> Guarded<T> {
                 ))),
                 _ => bad("1E B3's channel"),
             },
+            Expect::FilmMove(moves, reads) if moves.iter().chain(reads).any(|b| b == data) => {
+                Ok(None)
+            }
+            Expect::FilmMove(..) => bad("a film's move"),
+            Expect::FilmBlock21 => {
+                let t = u32::from_le_bytes([data[0], data[1], data[2], 0]);
+                if data.len() == 26 && t % 384 == 0 && FILM_LINE_TIMES.contains(&t) {
+                    Ok(None)
+                } else {
+                    bad("a film's 1E 21: its line time")
+                }
+            }
+            Expect::MinWord(min) => match data {
+                [lo, hi] if u16::from_le_bytes([*lo, *hi]) >= *min => Ok(None),
+                _ => bad("a one-value ramp faster than any captured"),
+            },
+            Expect::FilmTable => {
+                let fp = self.permit.as_ref().and_then(|p| p.film_plan.as_ref());
+                if setup::ramp_header(512)[..] == *data {
+                    let ramps = [setup::film_ramp(), setup::ramp(512, setup::Mode::Medium)];
+                    return Ok(Some(Expect::OneOf(
+                        ramps
+                            .iter()
+                            .map(|r| r.iter().flat_map(|v| v.to_le_bytes()).collect())
+                            .collect(),
+                    )));
+                }
+                if setup::ramp_header(1)[..] == *data {
+                    return Ok(Some(Expect::MinWord(156)));
+                }
+                if let Some(fp) = fp {
+                    if tables::TONE_HEADERS.iter().any(|h| h[..] == *data) {
+                        return Ok(Some(Expect::OneOf(vec![Curves::Linear.tone()])));
+                    }
+                    if setup::shading_header(fp.geometry.column_count())[..] == *data {
+                        return Ok(Some(Expect::Len(fp.geometry.column_count() as usize * 6)));
+                    }
+                }
+                bad("a film's 1E 84 header")
+            }
             Expect::TableHeader => {
                 let p = plan.expect("1E 84 needs a plan");
                 let ramps = std::iter::once(&p.ramp_cal)
@@ -643,8 +842,14 @@ impl<T: Transport> Guarded<T> {
             .and_then(|p| p.plan.as_ref())
             .and_then(|p| p.start_move.as_ref())
             .is_some_and(|m| m.block[..] == *data);
-        self.start_armed = matches!(self.expect, Some(Expect::Move(_))) && start_block;
-        if was_command && data == [0x1E, 0x05] {
+        let film_move = matches!(&self.expect, Some(Expect::FilmMove(moves, _)) if moves.iter().any(|b| b == data));
+        self.start_armed =
+            (matches!(self.expect, Some(Expect::Move(_))) && start_block) || film_move;
+        let film = self
+            .permit
+            .as_ref()
+            .is_some_and(|p| matches!(p.asked, Asked::Film(_)));
+        if was_command && data == [0x1E, 0x05] && !film {
             self.start_done = true;
         }
         if was_command && data.len() == 2 && matches!(data[0], 0x1B | 0x1E) && data != GET_STATE {
@@ -1210,5 +1415,56 @@ mod tests {
             .unwrap();
         t.bulk_out(&[0x1E, 0xA2]).unwrap();
         assert!(t.bulk_out(&[0x02]).is_err());
+    }
+
+    #[test]
+    fn a_films_path_lets_out_only_the_moves_and_times_captured() {
+        let r = crate::film::tests::CAPTURED[2].1;
+        let mut t = guarded(&[]);
+        // Not before its path is opened.
+        t.permit_film(&r).unwrap();
+        assert!(t.bulk_out(&[0x1E, 0x25]).is_err());
+        t.permit_film_path().unwrap();
+        // The park, then its 1E 05; a park of another length never.
+        t.bulk_out(&[0x1E, 0x01]).unwrap();
+        t.bulk_out(&setup::move_block(970, 0, 0x1FF, 0x10)).unwrap();
+        t.bulk_out(&[0x1E, 0x05]).unwrap();
+        t.bulk_out(&[0x1E, 0x01]).unwrap();
+        assert!(t.bulk_out(&setup::move_block(971, 0, 0x1FF, 0x10)).is_err());
+        assert!(t.bulk_out(&[0x1E, 0x05]).is_err());
+        // A move back never seen, and its 1E 8A.
+        t.bulk_out(&[0x1E, 0x01]).unwrap();
+        assert!(t.bulk_out(&setup::move_block(300, 0, 0x1FF, 0x30)).is_err());
+        t.bulk_out(&[0x1E, 0x8A]).unwrap();
+        assert!(t.bulk_out(&film_origin_block(300)).is_err());
+        t.bulk_out(&[0x1E, 0x8A]).unwrap();
+        t.bulk_out(&film_origin_block(240)).unwrap();
+        // Line times: multiples of 384 within the captured range only.
+        let block = |t: u32| {
+            let mut b = [0u8; 26];
+            b[..3].copy_from_slice(&t.to_le_bytes()[..3]);
+            b
+        };
+        for (lt, ok) in [
+            (13_440, true),
+            (13_441, false),
+            (5760, false),
+            (25_728, false),
+        ] {
+            t.bulk_out(&[0x1E, 0x21]).unwrap();
+            assert_eq!(t.bulk_out(&block(lt)).is_ok(), ok, "{lt}");
+        }
+        // The image's start and read moves only once the plan is permitted.
+        let p = FilmPlan::new(r, setup::XCorrection(-122)).unwrap();
+        let start = setup::move_block(p.geometry.start_steps, 0, 0x1FF, 0x10);
+        t.bulk_out(&[0x1E, 0x01]).unwrap();
+        assert!(t.bulk_out(&start).is_err());
+        t.permit_film_plan(&p).unwrap();
+        t.bulk_out(&[0x1E, 0x01]).unwrap();
+        t.bulk_out(&start).unwrap();
+        // A one-value ramp faster than any captured.
+        t.bulk_out(&[0x1E, 0x84]).unwrap();
+        t.bulk_out(&setup::ramp_header(1)).unwrap();
+        assert!(t.bulk_out(&100u16.to_le_bytes()).is_err());
     }
 }

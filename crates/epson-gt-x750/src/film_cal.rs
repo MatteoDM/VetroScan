@@ -128,7 +128,18 @@ pub fn window_words(base: u32) -> (u16, u16) {
 /// (M + 254) / 2 in the loop, or the least value / 2 once a negative's final exposures are set
 /// (`final_negative`), and the greatest value / 2; `last` the block's last byte.
 pub fn window_block21(base: u32, x: [u32; 3], final_negative: bool, last: u8) -> [u8; 26] {
-    let m = margin(base);
+    exposure_block21(margin(base), window_words(base), x, final_negative, last)
+}
+
+/// [`window_block21`] for any read: its margin `m` and its words (the black pixels' reads:
+/// [`crate::film::FilmPlan::black`]).
+pub fn exposure_block21(
+    m: u32,
+    words: (u16, u16),
+    x: [u32; 3],
+    final_negative: bool,
+    last: u8,
+) -> [u8; 26] {
     let t = round_up_384(m + x.iter().copied().max().unwrap_or(0));
     let e = x.map(|v| t - v);
     let mut b = [0u8; 26];
@@ -137,7 +148,7 @@ pub fn window_block21(base: u32, x: [u32; 3], final_negative: bool, last: u8) ->
         b[3 + 3 * c..6 + 3 * c].copy_from_slice(&e[c].to_le_bytes()[..3]);
     }
     b[12] = 0x3F;
-    let (w1, r9) = window_words(base);
+    let (w1, r9) = words;
     let w3 = if final_negative {
         e.iter().copied().filter(|&v| v > 0).min().unwrap_or(0) >> 1
     } else {

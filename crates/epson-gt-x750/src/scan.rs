@@ -22,7 +22,7 @@
 //! For films, so far only the lid's lamp ([`light_lid_lamp`]): the beginning of Epson Scan's
 //! film scan, as far as the lamp is lit; the film path itself is not here yet.
 
-use crate::film::FilmRequest;
+use crate::film::{FilmPlan, FilmRequest};
 use crate::guard::Guarded;
 use crate::protocol::{is_state, State, ACK, GET_STATE, TABLE_CHUNK, TABLE_PAUSE};
 use crate::setup::{self, Plan, Request, XCorrection, TRAILER_LEN};
@@ -467,6 +467,7 @@ fn lid_lamp<T: Transport>(
         asked.elapsed().as_secs_f64()
     ));
     let lit = Instant::now();
+    let mut warmed = false;
     loop {
         let waited = lit.elapsed();
         let s = State(read_two(ask(g, GET_STATE, 2)?));
@@ -479,8 +480,15 @@ fn lid_lamp<T: Transport>(
         if s.error() {
             return Err(other(s.error_text()));
         }
+        let ready = s.firmware_running() && s.0[0] & 0x43 == 0;
+        if ready && !warmed && before == 0x02 {
+            // Lit already (capture 74: the lamp chosen and warm, 1E A1 not asked again).
+            log("the lid's lamp lit already".into());
+            return Ok(waited);
+        }
+        warmed = true;
         let lamp = lamp_in_use(g)?;
-        if s.firmware_running() && s.0[0] & 0x43 == 0 && lamp == 0x02 {
+        if ready && lamp == 0x02 {
             log(format!(
                 "the lid's lamp lit: 1B 03 {:02X} {:02X}, 1E A1 02 after {:.1} s",
                 s.0[0],
@@ -503,6 +511,408 @@ fn lid_lamp<T: Transport>(
         }
         std::thread::sleep(LID_LAMP_POLL);
     }
+}
+
+/// What a film's calibration found and set ([`calibrate_film`]): what its image read needs.
+#[derive(Debug, Clone)]
+pub struct FilmCalibration {
+    /// The plan, with `1E 87`'s correction.
+    pub plan: FilmPlan,
+    /// The offsets found (`1E 31` bytes 0, 2, 4).
+    pub offsets: [u8; 3],
+    /// The exposures, µs a channel, after the loop (a negative's final ones).
+    pub exposures: [u32; 3],
+    /// The calibration's gains (`1E 31` bytes 8-10).
+    pub gains: [u8; 3],
+    /// The image's gains.
+    pub image_gains: [u8; 3],
+    /// The image's and the dark read's `1E 21`.
+    pub image_e21: [u8; 26],
+    /// The black pixels' last read (16 bits), the white and the dark reads.
+    pub black: Vec<u8>,
+    /// The white read (16 lines, 16 bits).
+    pub white: Vec<u8>,
+    /// The dark read (64 lines, 16 bits).
+    pub dark: Vec<u8>,
+    /// The power-on the scan was made in (`1E 87`).
+    pub power_on: PowerOn,
+}
+
+/// The `1E 31` block: offsets and gains.
+fn e31(offsets: [u8; 3], gains: [u8; 3]) -> [u8; 12] {
+    [
+        offsets[0], 0, offsets[1], 0, offsets[2], 0, 0, 0, gains[0], gains[1], gains[2], 0,
+    ]
+}
+
+const ZEROS_42: [u8; 18] = [0; 18];
+
+/// Calibrates a film as Epson Scan does (captures 72-81; the rules in [`crate::film_cal`], the
+/// blocks in [`FilmPlan`]): the lid's lamp; the carriage parked under the window and the lid's
+/// unit found its origin; `1E 87`; the offsets on the black pixels; the exposures (and a
+/// negative's gains) on the window; the black pixels, the white and the dark read. Stops before
+/// the image (`1E 8B` comes next). `slide_factor`: a slide's image exposure in tenths (10 keeps
+/// the white's; Epson Scan chose 15 once).
+pub fn calibrate_film<T: Transport>(
+    g: &mut Guarded<T>,
+    request: &FilmRequest,
+    slide_factor: u32,
+    log: &mut dyn FnMut(String),
+    events: &mut dyn FnMut(Event) -> bool,
+) -> Result<FilmCalibration> {
+    g.permit_film(request)?;
+    let result = film_calibration(g, request, slide_factor, log, events)
+        .map_err(|e| after(e, g.last_command()));
+    g.end_scan();
+    result
+}
+
+fn film_calibration<T: Transport>(
+    g: &mut Guarded<T>,
+    request: &FilmRequest,
+    slide_factor: u32,
+    log: &mut dyn FnMut(String),
+    events: &mut dyn FnMut(Event) -> bool,
+) -> Result<FilmCalibration> {
+    use crate::film::{self, Film};
+    use crate::film_cal as fc;
+    use crate::guard::{film_origin_block, film_origin_read_move, FILM_BACK_MOVES};
+    let negative = request.film == Film::Negative;
+    let e57 = film::request_block(request)?;
+    lid_lamp(g, request, log, events)?;
+    g.permit_film_path()?;
+    let positions = |a: Vec<u8>| {
+        (
+            u32::from(u16::from_le_bytes([a[0], a[1]])),
+            u32::from(u16::from_le_bytes([a[2], a[3]])),
+        )
+    };
+    // The park: the carriage under the window, the lid's unit home.
+    let ramp512: Vec<u8> = ramp_bytes(&setup::film_ramp());
+    match positions(ask(g, [0x1E, 0x86], 4)?) {
+        (0, 0) => {
+            send(g, [0x1E, 0x25], &[0x00])?;
+            table(g, &setup::ramp_header(512), &ramp512)?;
+            send(
+                g,
+                [0x1E, 0x01],
+                &setup::move_block(film::PARK - film::RAMP_512_STEPS, 0, 0x1FF, 0x10),
+            )?;
+        }
+        // Where the scanner puts them when it lights the lid's lamp again (capture 72).
+        (film::PARK, 1078) => {
+            table(g, &setup::ramp_header(512), &ramp512)?;
+            send(g, [0x1E, 0x25], &[0x02])?;
+            send(
+                g,
+                [0x1E, 0x01],
+                &setup::move_block(1078 - film::RAMP_512_STEPS, 0, 0x1FF, 0x30),
+            )?;
+        }
+        (c, u) => {
+            return Err(other(format!(
+                "the carriage at {c} and the lid's unit at {u}: a film scan starts from home \
+                 (0, 0) or from where the lid's lamp puts them (1994, 1078), as captured"
+            )))
+        }
+    }
+    command(g, [0x1E, 0x05])?;
+    wait_ready(g, log)?;
+    let at = positions(ask(g, [0x1E, 0x86], 4)?);
+    if at != (film::PARK, 0) {
+        return Err(other(format!(
+            "after the park the carriages are at {at:?}, not (1994, 0)"
+        )));
+    }
+    // The lid unit's origin.
+    if !events(Event::Calibrating) {
+        return Err(Error::Cancelled);
+    }
+    send(g, [0x1E, 0x31], &film::ORIGIN_E31)?;
+    send(g, [0x1E, 0xA2], &[0x02])?;
+    send(g, [0x1E, 0x25], &[0x02])?;
+    table(g, &setup::ramp_header(1), &156u16.to_le_bytes())?;
+    send(g, [0x1E, 0x01], &setup::move_block(8, 0, 0, 0x18))?;
+    command(g, [0x1E, 0x05])?;
+    wait_ready(g, log)?;
+    send(g, [0x1E, 0x31], &film::ORIGIN_E31)?;
+    send(g, [0x1E, 0x11], &[film::ORIGIN_E11])?;
+    let mut e21o = [0u8; 26];
+    e21o[..3].copy_from_slice(&6144u32.to_le_bytes()[..3]);
+    e21o[12] = 0x2A;
+    send(g, [0x1E, 0x21], &e21o)?;
+    send(g, [0x1E, 0x41], &film::origin_e41())?;
+    send(g, [0x1E, 0x42], &ZEROS_42)?;
+    send(g, [0x1E, 0x43], &setup::GAIN_CAL)?;
+    table(
+        g,
+        &setup::ramp_header(512),
+        &ramp_bytes(&setup::ramp(512, setup::Mode::Medium)),
+    )?;
+    send(g, [0x1E, 0x01], &film_origin_read_move())?;
+    wait_ready(g, log)?;
+    let (ol, op) = fc::ORIGIN_READ;
+    let origin = read_all(g, ol as u32, ol as u32, (op * 3) as u32)?;
+    wait_ready(g, log)?;
+    let n = fc::origin(&origin)
+        .map(|v| v - film::RAMP_512_STEPS)
+        .ok_or_else(|| other("the lid unit's origin read found no edge of its light".into()))?;
+    if !FILM_BACK_MOVES.contains(&n) {
+        return Err(other(format!(
+            "the lid unit's origin read asks a move back of {n} steps, never captured \
+             ({FILM_BACK_MOVES:?})"
+        )));
+    }
+    log(format!(
+        "the lid unit's origin: back {n} steps (1E 8A {})",
+        n + 1024
+    ));
+    send(g, [0x1E, 0x25], &[0x02])?;
+    table(g, &setup::ramp_header(512), &ramp512)?;
+    send(g, [0x1E, 0x01], &setup::move_block(n, 0, 0x1FF, 0x30))?;
+    command(g, [0x1E, 0x05])?;
+    wait_ready(g, log)?;
+    send(g, [0x1E, 0x8A], &film_origin_block(n))?;
+    send(g, [0x1E, 0x25], &[0x03])?;
+    // The correction, the request again, the positions.
+    command(g, [0x1E, 0x87])?;
+    g.bulk_out(&[0x00])?;
+    let a87 = read_exact(g, 10, "1E 87")?;
+    let xc = XCorrection::from_1e87(&a87)?;
+    let power_on = PowerOn(a87.as_slice().try_into().expect("10 bytes"));
+    ask(g, [0x1E, 0x53], 42)?;
+    send(g, [0x1E, 0x57], &e57)?;
+    let at = positions(ask(g, [0x1E, 0x86], 4)?);
+    if at != (film::PARK, 1416 - n) {
+        return Err(other(format!(
+            "after the origin the carriages are at {at:?}, not (1994, {})",
+            1416 - n
+        )));
+    }
+    let plan = FilmPlan::new(*request, xc)?;
+    g.permit_film_plan(&plan)?;
+    let e11 = plan.geometry.e11;
+    let (black_words, black_margin) = plan.black;
+    // The offsets, on the black pixels.
+    let mut gains = if negative {
+        fc::NEGATIVE_GAINS
+    } else {
+        fc::SLIDE_GAINS
+    };
+    let mut offsets = [fc::OFFSET_START; 3];
+    let x0 = [fc::EXPOSURE_START; 3];
+    send(g, [0x1E, 0x31], &e31(offsets, gains))?;
+    send(
+        g,
+        [0x1E, 0x21],
+        &fc::exposure_block21(black_margin, black_words, x0, false, 0),
+    )?;
+    let back = ask(g, [0x1E, 0x92], 12)?;
+    send(g, [0x1E, 0x31], &back)?;
+    send(g, [0x1E, 0x11], &[e11])?;
+    send(
+        g,
+        [0x1E, 0x21],
+        &fc::exposure_block21(black_margin, black_words, x0, false, 2),
+    )?;
+    send(g, [0x1E, 0x41], &plan.e41_black)?;
+    send(g, [0x1E, 0x42], &ZEROS_42)?;
+    send(g, [0x1E, 0x43], &film::e43(request.film, false))?;
+    ask(g, [0x1E, 0x92], 12)?;
+    let back = ask(g, [0x1E, 0x92], 12)?;
+    send(g, [0x1E, 0x31], &back)?;
+    wait_ready(g, log)?;
+    let black_px = u32::from(u16::from_le_bytes([plan.e41_black[2], plan.e41_black[3]]))
+        - u32::from(u16::from_le_bytes([plan.e41_black[0], plan.e41_black[1]]));
+    let black_read = |g: &mut Guarded<T>,
+                      offsets: [u8; 3],
+                      gains: [u8; 3],
+                      log: &mut dyn FnMut(String)|
+     -> Result<Vec<u8>> {
+        send(g, [0x1E, 0x31], &e31(offsets, gains))?;
+        send(g, [0x1E, 0x41], &plan.e41_black)?;
+        wait_ready(g, log)?;
+        let d = read_all(g, 4, 4, black_px * 6)?;
+        wait_ready(g, log)?;
+        Ok(d)
+    };
+    let mut step = fc::offsets_first_step();
+    loop {
+        let d = black_read(g, offsets, gains, log)?;
+        let means = channel_means16(&d);
+        let (next, s) = fc::offsets_round(offsets, step, means);
+        offsets = next;
+        match s {
+            Some(s) => step = s,
+            None => break,
+        }
+    }
+    log(format!("offsets {offsets:02X?}"));
+    // The exposures, on the window.
+    let held = if negative {
+        [false, true, true]
+    } else {
+        [false; 3]
+    };
+    let mut x = x0;
+    let base = plan.geometry.base;
+    send(g, [0x1E, 0xA2], &[0x02])?;
+    let back = ask(g, [0x1E, 0x92], 12)?;
+    send(g, [0x1E, 0x31], &back)?;
+    send(g, [0x1E, 0x21], &fc::window_block21(base, x, false, 2))?;
+    let back = ask(g, [0x1E, 0x92], 12)?;
+    send(g, [0x1E, 0x31], &back)?;
+    send(g, [0x1E, 0x11], &[e11])?;
+    send(g, [0x1E, 0x21], &fc::window_block21(base, x, false, 2))?;
+    send(g, [0x1E, 0x41], &plan.e41_window)?;
+    send(g, [0x1E, 0x42], &ZEROS_42)?;
+    send(g, [0x1E, 0x43], &film::e43(request.film, false))?;
+    wait_ready(g, log)?;
+    let window_px = u32::from(u16::from_le_bytes([plan.e41_window[2], plan.e41_window[3]]))
+        - u32::from(u16::from_le_bytes([plan.e41_window[0], plan.e41_window[1]]));
+    let window_level = |d: &[u8]| {
+        let lines: Vec<&[u8]> = d.chunks_exact((window_px * 3) as usize).collect();
+        fc::level(&lines)
+    };
+    loop {
+        send(g, [0x1E, 0x21], &fc::window_block21(base, x, false, 2))?;
+        send(g, [0x1E, 0x41], &plan.e41_window)?;
+        wait_ready(g, log)?;
+        let d = read_all(g, 4, 4, window_px * 3)?;
+        wait_ready(g, log)?;
+        match fc::exposure_round(x, window_level(&d), held) {
+            Some(next) => x = next,
+            None => break,
+        }
+    }
+    let mut last_window = fc::window_block21(base, x, false, 2);
+    let mut image_t = 0;
+    if negative {
+        let (final_x, t) = fc::negative_exposures(x[0]);
+        x = final_x;
+        image_t = t;
+        send(g, [0x1E, 0x21], &fc::window_block21(base, x, true, 2))?;
+        send(g, [0x1E, 0x21], &fc::window_block21(base, x, true, 2))?;
+        let back = ask(g, [0x1E, 0x92], 12)?;
+        send(g, [0x1E, 0x31], &back)?;
+        send(g, [0x1E, 0x11], &[e11])?;
+        last_window = fc::window_block21(base, x, true, 6);
+        send(g, [0x1E, 0x21], &last_window)?;
+        send(g, [0x1E, 0x41], &plan.e41_window)?;
+        send(g, [0x1E, 0x42], &ZEROS_42)?;
+        send(g, [0x1E, 0x43], &film::e43(request.film, false))?;
+        wait_ready(g, log)?;
+        // The gains.
+        loop {
+            send(g, [0x1E, 0x31], &e31(offsets, gains))?;
+            send(g, [0x1E, 0x41], &plan.e41_window)?;
+            wait_ready(g, log)?;
+            let d = read_all(g, 4, 4, window_px * 3)?;
+            wait_ready(g, log)?;
+            match fc::gains_round(gains, window_level(&d)) {
+                Some(next) => gains = next,
+                None => break,
+            }
+        }
+    }
+    if !negative {
+        // A slide's window block once more (captures 80, 81).
+        send(g, [0x1E, 0x21], &last_window)?;
+    }
+    log(format!("exposures {x:?} µs, gains {gains:02X?}"));
+    // The black pixels with all of it: a negative's with the window's margin and its final
+    // words, a slide's with the black pixels' own margin (captures 74-78, 80-81).
+    ask(g, [0x1E, 0x8C], 1)?;
+    send(g, [0x1E, 0x25], &[0x03])?;
+    let mut bb = if negative {
+        fc::exposure_block21(fc::margin(base), black_words, x, true, 6)
+    } else {
+        fc::exposure_block21(black_margin, black_words, x, false, 2)
+    };
+    send(g, [0x1E, 0x21], &bb)?;
+    send(g, [0x1E, 0x31], &e31(offsets, gains))?;
+    send(g, [0x1E, 0x11], &[e11])?;
+    bb[25] = 6;
+    send(g, [0x1E, 0x21], &bb)?;
+    send(g, [0x1E, 0x41], &plan.e41_black)?;
+    send(g, [0x1E, 0x42], &ZEROS_42)?;
+    send(g, [0x1E, 0x43], &film::e43(request.film, false))?;
+    wait_ready(g, log)?;
+    let black = read_all(g, 4, 4, black_px * 6)?;
+    wait_ready(g, log)?;
+    // The white.
+    let words = plan.geometry.words;
+    let white_e21 = fc::white_block21(x, words, plan.image_margin, &last_window, 6);
+    send(g, [0x1E, 0x21], &white_e21)?;
+    send(g, [0x1E, 0x31], &e31(offsets, gains))?;
+    send(g, [0x1E, 0x11], &[e11])?;
+    send(g, [0x1E, 0x21], &white_e21)?;
+    send(g, [0x1E, 0x41], &plan.e41_white)?;
+    send(g, [0x1E, 0x42], &crate::shading::black_block(&black))?;
+    send(g, [0x1E, 0x43], &film::e43(request.film, false))?;
+    let t_white = u32::from_le_bytes([white_e21[0], white_e21[1], white_e21[2], 0]);
+    table(
+        g,
+        &setup::ramp_header(1),
+        &(((t_white / 2) >> 4) as u16).to_le_bytes(),
+    )?;
+    send(g, [0x1E, 0x01], &setup::move_block(64, 32, 0, 0x18))?;
+    wait_ready(g, log)?;
+    let cols = plan.geometry.column_count();
+    let white = read_all(g, 16, 16, cols * 6)?;
+    wait_ready(g, log)?;
+    // The dark, with the image's settings.
+    let (image_e21, image_gains) = if negative {
+        (
+            fc::negative_image_block21(image_t, words, 6),
+            fc::negative_image_gains(gains),
+        )
+    } else {
+        let xi = fc::slide_image_exposures(x, slide_factor);
+        (
+            fc::white_block21(xi, words, plan.image_margin, &last_window, 6),
+            gains,
+        )
+    };
+    send(g, [0x1E, 0xA2], &[0x03])?;
+    send(g, [0x1E, 0x21], &image_e21)?;
+    send(g, [0x1E, 0x31], &e31(offsets, image_gains))?;
+    send(g, [0x1E, 0x11], &[e11])?;
+    let mut dark_e21 = image_e21;
+    dark_e21[25] = if negative { 2 } else { 6 };
+    send(g, [0x1E, 0x21], &dark_e21)?;
+    send(g, [0x1E, 0x41], &plan.e41_dark)?;
+    send(g, [0x1E, 0x42], &ZEROS_42)?;
+    send(g, [0x1E, 0x43], &film::e43(request.film, false))?;
+    wait_ready(g, log)?;
+    let dark = read_all(g, 64, 64, cols * 6)?;
+    wait_ready(g, log)?;
+    send(g, [0x1E, 0xA2], &[0x02])?;
+    Ok(FilmCalibration {
+        plan,
+        offsets,
+        exposures: x,
+        gains,
+        image_gains,
+        image_e21: dark_e21,
+        black,
+        white,
+        dark,
+        power_on,
+    })
+}
+
+/// Each channel's mean of a read of 16-bit samples, three a pixel.
+fn channel_means16(d: &[u8]) -> [f64; 3] {
+    let mut sum = [0f64; 3];
+    let mut n = 0usize;
+    for p in d.chunks_exact(6) {
+        for (c, s) in sum.iter_mut().enumerate() {
+            *s += f64::from(u16::from_le_bytes([p[2 * c], p[2 * c + 1]]));
+        }
+        n += 1;
+    }
+    sum.map(|s| s / n.max(1) as f64)
 }
 
 /// The set-up before every read: `1E 31` (the `1E 92` answer back), `1E 11`,
@@ -1152,6 +1562,10 @@ pub(crate) mod tests {
         pub(crate) writes: usize,
         /// The tables the scan is expected to load where the capture loaded WIA's.
         pub(crate) curves: Curves,
+        /// A film capture's reads, made up from what its rules take from them (one line of
+        /// `captures/epson4490/tools/film_testdata.py`'s each), and the read under way.
+        film: Option<VecDeque<String>>,
+        run: VecDeque<u8>,
     }
 
     impl Follow {
@@ -1164,7 +1578,68 @@ pub(crate) mod tests {
                 last_cmd: [0; 2],
                 writes: 0,
                 curves: Curves::Wia,
+                film: None,
+                run: VecDeque::new(),
             }
+        }
+
+        /// A film capture with its reads' summary.
+        pub(crate) fn film(name: &'static str, text: &str, reads: &str) -> Self {
+            Self {
+                film: Some(reads.lines().map(str::to_owned).collect()),
+                ..Self::new(name, text)
+            }
+        }
+
+        /// The bytes of the read starting at `self.at` (its `D` lines, up to the next write),
+        /// made up from the next summary line: the same decisions as the real one.
+        fn made_up_read(&mut self) -> VecDeque<u8> {
+            let total: usize = self.lines[self.at..]
+                .iter()
+                .take_while(|l| !matches!(l, Line::W(..) | Line::P(..)))
+                .filter_map(|l| match l {
+                    Line::D(n) => Some(*n),
+                    _ => None,
+                })
+                .sum();
+            let spec = self
+                .film
+                .as_mut()
+                .and_then(|f| f.pop_front())
+                .unwrap_or_default();
+            let f: Vec<&str> = spec.split(' ').collect();
+            let num = |i: usize| f[i].parse::<u64>().unwrap();
+            let mut out = vec![0u8; total];
+            match f[0] {
+                "origin" => {
+                    for (l, line) in out.chunks_exact_mut(384 * 3).enumerate().take(150) {
+                        for px in line.chunks_exact_mut(3) {
+                            px[1] = num(1 + l) as u8;
+                        }
+                    }
+                }
+                "black" => {
+                    let n = num(1) as usize;
+                    for c in 0..3 {
+                        let sum = num(2 + c);
+                        let (q, r) = (sum / n as u64, (sum % n as u64) as usize);
+                        for i in 0..n {
+                            let v = (q + u64::from(i < r)) as u16;
+                            out[6 * i + 2 * c..6 * i + 2 * c + 2].copy_from_slice(&v.to_le_bytes());
+                        }
+                    }
+                }
+                "window" => {
+                    let line = total / 4;
+                    for l in 0..4 {
+                        for c in 0..3 {
+                            out[l * line + c] = num(1 + 3 * l + c) as u8;
+                        }
+                    }
+                }
+                _ => {}
+            }
+            out.into()
         }
 
         fn fail(&self, what: String) -> Error {
@@ -1187,6 +1662,14 @@ pub(crate) mod tests {
                 Some(Line::P(cmd, answer)) if cmd == data => {
                     self.answer.extend(answer);
                     true
+                }
+                // A film's gamma tables: Epson Scan's inverted curve, ours linear.
+                Some(Line::W(want, None))
+                    if self.film.is_some()
+                        && self.last_cmd == [0x1E, 0xB3]
+                        && want.len() == 256 =>
+                {
+                    data.len() == 256
                 }
                 Some(Line::W(want, None)) => {
                     let mut want = want.clone();
@@ -1216,6 +1699,9 @@ pub(crate) mod tests {
             if data.len() == 2 && (data[0] == 0x1E || data[0] == 0x1B) {
                 self.last_cmd = [data[0], data[1]];
             }
+            if self.film.is_some() && data == [0x1E, 0x47] {
+                self.run = self.made_up_read();
+            }
             Ok(())
         }
 
@@ -1225,6 +1711,11 @@ pub(crate) mod tests {
                 self.at += 1;
                 match line {
                     Some(Line::R(b) | Line::A(b)) => self.answer.extend(b),
+                    Some(Line::D(n)) if self.film.is_some() => {
+                        let k = n.min(self.run.len());
+                        self.answer.extend(self.run.drain(..k));
+                        self.answer.extend(std::iter::repeat_n(0, n - k));
+                    }
                     // Image data: a ramp across the line, so the realigning shows.
                     Some(Line::D(n)) => self.answer.extend((0..n).map(|i| (i % 251) as u8)),
                     other_ => return Err(self.fail(format!("a read, the capture {other_:?}"))),
@@ -1561,6 +2052,88 @@ pub(crate) mod tests {
         let e = r.unwrap_err().to_string();
         assert!(at >= 59, "stopped at line {at}: {e}");
         assert!(e.contains("(after 1E A2)"), "{e}");
+    }
+
+    /// A film's calibration writes what Epson Scan wrote in capture 74, write by write, from
+    /// its lamp to the dark read (the gamma tables linear, the computed `1E 42` any), its reads
+    /// made up from what the rules take from the real ones.
+    #[test]
+    fn a_films_calibration_writes_what_epson_scan_wrote() {
+        let text = include_str!("../testdata/74_film.txt");
+        let reads = include_str!("../testdata/74_film_reads.txt");
+        let request = crate::film::tests::CAPTURED[2].1;
+        let mut g = Guarded::new(Follow::film("74", text, reads));
+        let c = calibrate_film(&mut g, &request, 10, &mut |_| {}, &mut |_| true)
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(c.offsets, [0x8C, 0x8C, 0x90]);
+        assert_eq!(c.exposures, [13_550, 9070, 5953]);
+        assert_eq!(c.gains, [0x21, 0x09, 0x16]);
+        assert_eq!(c.image_gains, [0x21, 0x14, 0x1F]);
+        let f = g.inner();
+        // Next in the capture: 1E 8B, the image's.
+        assert!(
+            matches!(&f.lines[f.at], Line::W(w, None) if w == &[0x1E, 0x8B]),
+            "{:?}",
+            f.lines.get(f.at)
+        );
+    }
+
+    /// The same for capture 77 (base 4800, a third exposure round) and 80 (a slide, Epson
+    /// Scan's image factor 15).
+    #[test]
+    #[allow(clippy::type_complexity)]
+    fn films_calibrations_at_4800_and_of_a_slide_are_epson_scans() {
+        let cases: [(
+            &str,
+            &str,
+            &str,
+            usize,
+            u32,
+            [u8; 3],
+            [u32; 3],
+            [u8; 3],
+            [u8; 3],
+        ); 2] = [
+            (
+                "77",
+                include_str!("../testdata/77_film.txt"),
+                include_str!("../testdata/77_film_reads.txt"),
+                6,
+                10,
+                [0x84, 0x80, 0x88],
+                [13_934, 9326, 6120],
+                [0x20, 0x09, 0x14],
+                [0x20, 0x14, 0x1E],
+            ),
+            (
+                "80",
+                include_str!("../testdata/80_film.txt"),
+                include_str!("../testdata/80_film_reads.txt"),
+                9,
+                15,
+                [0x88, 0x80, 0x88],
+                [16_213, 5520, 5075],
+                [0x18, 0x1B, 0x18],
+                [0x18, 0x1B, 0x18],
+            ),
+        ];
+        for (name, text, reads, i, factor, offsets, exposures, gains, image_gains) in cases {
+            let request = crate::film::tests::CAPTURED[i].1;
+            let mut g = Guarded::new(Follow::film(name, text, reads));
+            let c = calibrate_film(&mut g, &request, factor, &mut |_| {}, &mut |_| true)
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(
+                (c.offsets, c.exposures, c.gains, c.image_gains),
+                (offsets, exposures, gains, image_gains),
+                "{name}"
+            );
+            let f = g.inner();
+            assert!(
+                matches!(&f.lines[f.at], Line::W(w, None) if w == &[0x1E, 0x8B]),
+                "{name}: {:?}",
+                f.lines.get(f.at)
+            );
+        }
     }
 
     /// The lid's lamp is lit writing what Epson Scan wrote in capture 72, write by write, as far
