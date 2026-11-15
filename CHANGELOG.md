@@ -17,6 +17,12 @@ GitHub; here they are in English.
 
 ## [Unreleased]
 
+### Fixed
+- The screen showed photos scanned at 16 bits (films above all) with darker shadows than the
+  file saved: it was drawn from a small copy at 8 bits, linear, coarse in the dark tones (up to
+  20 levels darker on the Epson 4490's frames). The small copy keeps its 16 bits now, and the
+  screen is drawn as the file is; the preview too.
+
 ### Added
 - Film: a **preview** again, for negatives and slides, at the lowest resolution the adapter
   scans at (600 dpi on the HP 3770 and the Epson 4490). The frames found are outlined on it and

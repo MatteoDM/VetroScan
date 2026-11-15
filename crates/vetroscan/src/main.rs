@@ -1275,6 +1275,9 @@ fn item_name(kind: Kind, i: usize, count: usize) -> String {
 struct Raw {
     full: Arc<Image>,
     proxy: Arc<Image>,
+    /// The small copy at 16 bits, when the scan has them: what the screen
+    /// is drawn from, as the file is (8-bit linear shadows are coarse).
+    proxy16: Option<Arc<Vec<u16>>>,
     /// The tone curve of the scanner that made the samples.
     tone: Tone,
     /// Who made that scanner and its model, for the metadata of RAW files.
@@ -1287,9 +1290,20 @@ impl Raw {
         Self {
             full: Arc::new(image),
             proxy: Arc::new(proxy),
+            proxy16: None,
             tone: caps.tone,
             scanner: Arc::new((caps.manufacturer.clone(), caps.model.clone())),
         }
+    }
+
+    /// With the scan's 16-bit samples (as many as the full image's), the
+    /// small copy of them too.
+    fn with16(mut self, samples: Option<&[u16]>) -> Self {
+        let full = &self.full;
+        self.proxy16 = samples
+            .filter(|s| s.len() == full.width * full.height * 3)
+            .map(|s| Arc::new(shrink16(s, full.width, full.height, PROXY)));
+        self
     }
 
     /// The linear sample at a point of the proxy, averaged over 5 × 5
@@ -1313,6 +1327,93 @@ impl Raw {
         }
         sum.map(|s| (s / n.max(1)) as u8)
     }
+}
+
+/// 16-bit RGB samples (`width` × `height`) shrunk as [`shrink`] shrinks
+/// their image: the same blocks, the same size.
+fn shrink16(samples: &[u16], width: usize, height: usize, max: usize) -> Vec<u16> {
+    let factor = width.max(height).div_ceil(max).max(1);
+    if factor == 1 {
+        return samples.to_vec();
+    }
+    let (w, h) = (width / factor, height / factor);
+    let mut out = Vec::with_capacity(w * h * 3);
+    for y in 0..h {
+        for x in 0..w {
+            let mut sum = [0u64; 3];
+            for yy in 0..factor {
+                let row = (y * factor + yy) * width;
+                for xx in 0..factor {
+                    let i = (row + x * factor + xx) * 3;
+                    for (c, s) in sum.iter_mut().enumerate() {
+                        *s += u64::from(samples[i + c]);
+                    }
+                }
+            }
+            let n = (factor * factor) as u64;
+            out.extend(sum.map(|s| (s / n) as u16));
+        }
+    }
+    out
+}
+
+/// 16-bit RGB samples brought to another resolution as [`at_dpi`] brings
+/// their image (the same pixels picked).
+fn at_dpi16(samples: &[u16], image: &Image, dpi: u16) -> Vec<u16> {
+    if image.dpi == dpi || image.dpi == 0 || samples.len() != image.width * image.height * 3 {
+        return samples.to_vec();
+    }
+    let k = f64::from(image.dpi) / f64::from(dpi);
+    let width = ((image.width as f64) / k).round().max(1.0) as usize;
+    let height = ((image.height as f64) / k).round().max(1.0) as usize;
+    let mut out = Vec::with_capacity(width * height * 3);
+    for y in 0..height {
+        let sy = (((y as f64 + 0.5) * k) as usize).min(image.height - 1);
+        for x in 0..width {
+            let sx = (((x as f64 + 0.5) * k) as usize).min(image.width - 1);
+            let i = (sy * image.width + sx) * 3;
+            out.extend_from_slice(&samples[i..i + 3]);
+        }
+    }
+    out
+}
+
+/// The small copy of a scan with `t` and its look, as the screen shows it:
+/// from its 16-bit samples when it has them, through the same fine tables
+/// as the file (from the 8-bit linear copy the shadows of films came out
+/// up to 20 levels darker on the screen than in the file, measured on the
+/// Epson 4490's frames on 15 November 2026), else from the 8-bit ones.
+fn render_raw(raw: &Raw, settings: &Settings, adjust: &Adjustments, t: &Transform) -> Image {
+    let tone = &raw.tone;
+    let p = &raw.proxy;
+    let Some(deep) = raw.proxy16.as_deref() else {
+        return if t.is_identity() {
+            render(p, settings, adjust, tone)
+        } else {
+            render(&edited(p, t, tone), settings, adjust, tone)
+        };
+    };
+    let (data, w, h, dpi) = if t.is_identity() {
+        (Cow::Borrowed(deep.as_slice()), p.width, p.height, p.dpi)
+    } else {
+        let (d, w, h) = t.apply(deep, p.width, p.height, 3, &fill16(tone));
+        (Cow::Owned(d), w, h, t.output_dpi(p.width, p.height, p.dpi))
+    };
+    let untouched = untouched_look();
+    adjust::render_samples(
+        adjust::Samples::Sixteen(&data),
+        w,
+        h,
+        dpi,
+        settings.mode(),
+        if settings.untouched {
+            &untouched
+        } else {
+            adjust
+        },
+        false,
+        tone,
+    )
 }
 
 /// An RGB image shrunk (block averages) to at most `max` pixels a side.
@@ -1394,20 +1495,14 @@ fn edited(raw: &Image, t: &Transform, tone: &Tone) -> Image {
 /// with `t`, its picture (`size`: the full size it stands for) and a
 /// thumbnail if asked.
 fn draw_page(
-    proxy: &Image,
-    tone: &Tone,
+    raw: &Raw,
     settings: &Settings,
     adjust: &Adjustments,
     t: &Transform,
     size: Size,
     thumb: bool,
 ) -> (Image, Picture, Option<Picture>) {
-    let raw = if t.is_identity() {
-        Cow::Borrowed(proxy)
-    } else {
-        Cow::Owned(edited(proxy, t, tone))
-    };
-    let shown = render(&raw, settings, adjust, tone);
+    let shown = render_raw(raw, settings, adjust, t);
     let rgb = shown.to_rgb();
     let mut picture = Picture::from_rgb(shown.width, shown.height, &rgb);
     picture.size = size;
@@ -1484,8 +1579,7 @@ impl Page {
     fn new(raw: Raw, settings: Settings) -> Self {
         let size = Size::new(raw.full.width as f32, raw.full.height as f32);
         let (shown, picture, thumb) = draw_page(
-            &raw.proxy,
-            &raw.tone,
+            &raw,
             &settings,
             &settings.adjust,
             &Transform::default(),
@@ -1600,15 +1694,7 @@ impl Page {
             settings.adjust
         };
         let (t, size) = self.preview_geometry(&self.transform, false);
-        let (shown, picture, thumb) = draw_page(
-            &self.raw.proxy,
-            &self.raw.tone,
-            &settings,
-            &adjust,
-            &t,
-            size,
-            true,
-        );
+        let (shown, picture, thumb) = draw_page(&self.raw, &settings, &adjust, &t, size, true);
         self.shown = shown;
         self.picture = picture.replacing(&self.picture);
         if let Some(thumb) = thumb {
@@ -1649,17 +1735,7 @@ impl Page {
             dpi: None,
             ..self.transform
         };
-        let small = if t.is_identity() {
-            render(&self.raw.proxy, &settings, &settings.adjust, &self.raw.tone)
-        } else {
-            let tone = &self.raw.tone;
-            render(
-                &edited(&self.raw.proxy, &t, tone),
-                &settings,
-                &settings.adjust,
-                tone,
-            )
-        };
+        let small = render_raw(&self.raw, &settings, &settings.adjust, &t);
         let (w, h) = self.transform.output_size(full.width, full.height);
         let dpi = self.transform.output_dpi(full.width, full.height, full.dpi);
         vetroscan_export::Sample::of(&small, w, h, dpi)
@@ -3577,8 +3653,7 @@ impl App {
         Task::perform(
             async move {
                 let (shown, mut picture, thumb) = draw_page(
-                    &raw.proxy,
-                    &raw.tone,
+                    &raw,
                     &settings,
                     &adjust,
                     &transform,
@@ -3636,7 +3711,7 @@ impl App {
             settings.adjust
         };
         if let Some((raw, shown, picture)) = &mut self.preview {
-            *shown = render(&raw.proxy, &settings, &adjust, &raw.tone);
+            *shown = render_raw(raw, &settings, &adjust, &Transform::default());
             *picture =
                 Picture::from_rgb(shown.width, shown.height, &shown.to_rgb()).replacing(picture);
         }
@@ -4126,6 +4201,7 @@ impl App {
                 let mut raw = Raw::new(image, &self.caps);
                 raw.tone = tone;
                 raw.scanner = Arc::clone(&scanner);
+                let raw = raw.with16(samples.as_deref());
                 let mut part = Page::new(raw, settings);
                 part.own = own;
                 part.origin = origin;
@@ -6150,8 +6226,8 @@ impl App {
                 let film = self.filming();
                 let kind = self.film_kind();
                 let transmission = film.then(|| at_dpi(image.clone(), PREVIEW_DPI));
-                let image = if film && self.settings().untouched {
-                    Self::plain(kind, image, samples16, self.settings().keep_negative).0
+                let (image, samples16) = if film && self.settings().untouched {
+                    Self::plain(kind, image, samples16, self.settings().keep_negative)
                 } else if film {
                     let dpi = image.dpi;
                     let d = Self::develop(
@@ -6177,14 +6253,15 @@ impl App {
                     if d.gaps.is_some() {
                         self.strip_base = d.gaps;
                     }
-                    d.picture
+                    (d.picture, d.deep)
                 } else {
-                    image
+                    (image, samples16)
                 };
                 // The preview is worked in pixels of PREVIEW_DPI.
-                let raw = self.raw(at_dpi(image, PREVIEW_DPI));
+                let deep = samples16.map(|s| at_dpi16(&s, &image, PREVIEW_DPI));
+                let raw = self.raw(at_dpi(image, PREVIEW_DPI)).with16(deep.as_deref());
                 let settings = *self.settings();
-                let shown = render(&raw.proxy, &settings, &settings.adjust, &raw.tone);
+                let shown = render_raw(&raw, &settings, &settings.adjust, &Transform::default());
                 let picture = Picture::from_rgb(shown.width, shown.height, &shown.to_rgb());
                 let found = match &transmission {
                     Some(t) => film::frames(t, kind),
@@ -6321,7 +6398,8 @@ impl App {
         self.unsaved = true;
         self.pdf_rev += 1;
         let (w, h, dpi) = (image.width, image.height, image.dpi);
-        let mut page = Page::new(self.raw(image), *self.settings());
+        let raw = self.raw(image).with16(samples16.as_deref());
+        let mut page = Page::new(raw, *self.settings());
         page.whole = whole.filter(|_| origin.is_none());
         // "Solo questa pagina" from the start: every page keeps the look it
         // was scanned with, and changing one does not change the others.

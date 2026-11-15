@@ -2228,6 +2228,42 @@ fn two_strips_of_two_rolls_are_each_developed_with_their_own_measures() {
     }
 }
 #[test]
+fn the_screen_shows_a_film_as_its_file_holds_it() {
+    // A frame's shadows drawn from 8-bit linear samples came out darker on
+    // the screen than in the file (up to 20 levels on the Epson 4490's
+    // frames): the screen is drawn from the 16-bit samples, as the file.
+    let (mut ui, _) = with_adapter();
+    ui.click("Pellicola");
+    ui.click("Anteprima");
+    let preview = ui.app.preview.as_ref().expect("a preview");
+    assert!(preview.0.proxy16.is_some(), "the preview keeps its 16 bits");
+    ui.click("Scansiona 2 foto");
+    let same = |ui: &Ui| {
+        let shared = *ui.app.settings();
+        let page = &ui.app.pages[0];
+        let file = page.finished(&shared);
+        let shown = &page.shown;
+        assert_eq!((shown.width, shown.height), (file.width, file.height));
+        let worst = shown
+            .data
+            .iter()
+            .zip(&file.data)
+            .map(|(a, b)| (i32::from(*a) - i32::from(*b)).abs())
+            .max()
+            .unwrap_or(0);
+        assert!(
+            worst <= 1,
+            "the screen against the file: up to {worst} levels"
+        );
+    };
+    same(&ui);
+    // Turned: the same.
+    ui.send(Message::PageRotate(0, true));
+    ui.settle();
+    same(&ui);
+}
+
+#[test]
 fn documento_scans_each_area_drawn_as_a_page() {
     use crate::viewer::Selection;
     let scanner = FakeScanner::flatbed();

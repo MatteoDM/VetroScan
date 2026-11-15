@@ -410,8 +410,7 @@ fn scan_picture(page: &Page, shared: &crate::Settings) -> Picture {
     let full = &page.raw.full;
     let size = Size::new(full.width as f32, full.height as f32);
     let (_, picture, _) = draw_page(
-        &page.raw.proxy,
-        &page.raw.tone,
+        &page.raw,
         &settings,
         &settings.adjust,
         &Transform::default(),
