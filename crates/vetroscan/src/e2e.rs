@@ -2439,16 +2439,28 @@ fn a_scanner_without_a_lamp_and_16_bits_shows_neither() {
 
 /// A made-up Epson Perfection 4490, with the capabilities its backend
 /// declares (phase 12): a lamp the app switches off (the scanner does by
-/// itself after 15 minutes), its four buttons, 16 bits, no film until its
-/// adapter is driven.
+/// itself after 15 minutes), its four buttons, 16 bits, and films in its
+/// lid at the resolutions captured.
 #[test]
 fn the_epson_4490_shows_what_its_backend_declares() {
+    use scanner_api::Source;
     let caps = epson_gt_x750::capabilities();
     let mut ui = Ui::with_scanners(vec![FakeScanner::with(caps.clone())]);
     assert_eq!(ui.app.caps, caps);
     // The made-up scanner tells its lamp lit (the real 4490 does not say).
     assert!(ui.shows("Pronto · lampada accesa"));
-    assert!(!ui.shows("Pellicola"));
+    // Films: negatives and slides, at its film resolutions only.
+    ui.click("Pellicola");
+    ui.send(Message::Pane(crate::Pane::Scan));
+    assert!(ui.shows("Nel supporto"));
+    ui.send(Message::Dpi(200));
+    assert_eq!(ui.app.request().source, Source::Negative);
+    assert_eq!(ui.app.request().dpi, 600);
+    ui.send(Message::Dpi(4800));
+    assert_eq!(ui.app.request().dpi, 4800);
+    ui.send(Message::Slides(true));
+    assert_eq!(ui.app.request().source, Source::Slide);
+    ui.click("Foto");
     ui.send(Message::Pane(crate::Pane::Scan));
     assert!(ui.shows("Profondità"));
     assert!(ui.shows("Tasti dello scanner"));
