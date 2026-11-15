@@ -115,7 +115,7 @@ impl App {
             .as_ref()
             .is_some_and(|w| w.transmission.is_some());
         let shared = *self.settings();
-        let picture = scan_picture(page, &shared);
+        let picture = scan_picture(page, &shared, &self.screen);
         let full = &page.raw.full;
         let dpi = f32::from(full.dpi.max(1));
         self.close_editor(true);
@@ -405,7 +405,7 @@ impl App {
 
 /// The scan of a page as it was made, with its look, at the size it
 /// stands for.
-fn scan_picture(page: &Page, shared: &crate::Settings) -> Picture {
+fn scan_picture(page: &Page, shared: &crate::Settings, screen: &crate::screen::Screen) -> Picture {
     let settings = page.effective(shared);
     let full = &page.raw.full;
     let size = Size::new(full.width as f32, full.height as f32);
@@ -416,6 +416,7 @@ fn scan_picture(page: &Page, shared: &crate::Settings) -> Picture {
         &Transform::default(),
         size,
         false,
+        screen,
     );
     picture
 }

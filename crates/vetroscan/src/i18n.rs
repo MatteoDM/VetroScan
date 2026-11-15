@@ -189,6 +189,7 @@ mod tests {
             ("sheet.rs", include_str!("sheet.rs")),
             ("curve.rs", include_str!("curve.rs")),
             ("histogram.rs", include_str!("histogram.rs")),
+            ("screen.rs", include_str!("screen.rs")),
             ("i18n.rs", include_str!("i18n.rs")),
         ]
     }

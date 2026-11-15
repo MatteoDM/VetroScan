@@ -34,19 +34,27 @@ const DATE: [u16; 6] = [2026, 11, 15, 0, 0, 0];
 /// An RGB profile: sRGB primaries and white, the tone curve `gamma` on the
 /// three channels.
 pub fn rgb(gamma: f64) -> Vec<u8> {
+    matrix(
+        &format!("RGB, sRGB primaries, gamma {}", shown(gamma)),
+        SRGB_D50,
+        gamma,
+    )
+}
+
+/// An RGB profile of other primaries (red, green, blue in XYZ, adapted to
+/// D50), white D65, the tone curve `gamma`: a measured scanner's, or a
+/// wide-gamut monitor's in the tests.
+pub fn matrix(description: &str, primaries: [[f64; 3]; 3], gamma: f64) -> Vec<u8> {
     let curve = curve(gamma);
     build(
         b"RGB ",
         &[
-            (
-                b"desc",
-                desc(&format!("RGB, sRGB primaries, gamma {}", shown(gamma))),
-            ),
+            (b"desc", desc(description)),
             (b"cprt", text(COPYRIGHT)),
             (b"wtpt", xyz(D65)),
-            (b"rXYZ", xyz(SRGB_D50[0])),
-            (b"gXYZ", xyz(SRGB_D50[1])),
-            (b"bXYZ", xyz(SRGB_D50[2])),
+            (b"rXYZ", xyz(primaries[0])),
+            (b"gXYZ", xyz(primaries[1])),
+            (b"bXYZ", xyz(primaries[2])),
             (b"rTRC", curve.clone()),
             (b"gTRC", curve.clone()),
             (b"bTRC", curve),

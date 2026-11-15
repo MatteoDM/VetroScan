@@ -398,7 +398,7 @@ impl App {
                 page.set_edit(editor.start);
             }
             let changed = page.edit() != editor.start;
-            page.redraw(false, &shared);
+            page.redraw(false, &shared, &self.screen);
             // A render still running may be of the editor's view.
             self.dirty_page = true;
             self.note = match (keep, changed) {

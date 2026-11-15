@@ -2436,6 +2436,22 @@ Photos than in VetroScan, while LightCraft showed it as VetroScan does.
      wide-gamut matrix profile made in the test: no monitor file in the repo), *nessuno*
      leaving the bytes as they are, the preference and its migration, an e2e with a page at
      1.8 shown with *sRGB* (grey 128 shown 146) while its file keeps 128.
+   - **Done, the first part** (15 November 2026): `vetroscan/src/screen.rs` (qcms 0.3 with
+     `iccv4-enabled`), every picture converted in `Picture::from_rgb_max` from
+     `icc::rgb(raw.tone.gamma)` to the screen's, the conversions kept per gamma and run in
+     strips on every core; "Colori dello schermo" in Preferences (*Automatico* by default,
+     *sRGB*, *Nessuna conversione*, *Un profilo scelto…*, "In uso: …" and what went wrong),
+     saved as `monitor` (files before it: automatic, a test); on Windows the monitor of the
+     window and its profile through PowerShell (`monitor.ps1`, `MonitorFromWindow`,
+     `GetICMProfile`), asked at the start, when the window moves and when it comes to the
+     front, one at a time; elsewhere sRGB, said so. Tests: qcms against littleCMS's numbers
+     (a 1.8 page to sRGB, a 2.2 page to sRGB and to an Adobe-RGB-like matrix profile made with
+     `icc::matrix`, within a level), strips equal to one piece, *nessuno* leaving the bytes,
+     what does not load giving sRGB with a note; an e2e with a 1.8 scanner: sRGB before any
+     monitor is known, the monitor found (a made-up wide profile) and every picture redrawn,
+     *Nessuna conversione* giving the numbers, remembered, back to automatic; the page's
+     numbers unchanged throughout. **Tried** by Matteo the same evening on his two monitors
+     (the release build): "Funziona". macOS and Linux to look at (macOS may convert the window itself; colord).
    - **Found on Matteo's machine**: the AW3423DWF has the CG277's profile assigned (Windows
      and DisplayCAL both say so), so every colour-managed program converts for the wrong
      monitor there; its own `AW3423DWF.icm` is installed. To set by Matteo (Windows' colour
@@ -2590,4 +2606,4 @@ the three photos, in reading order (tried in the app); the two previews of the 3
 | 11 · precise moves from the keyboard (done) | 0.4.0 | low | yes |
 | 12 · Epson Perfection 4490 Photo, native, plug and play (milestone 1 written without the scanner; arrived 11 November 2026, the firmware upload confirmed by a capture; buttons; native glass scans at 100-1200 dpi, 8 and 16 bits, in the app with the lamp, cancelling and a scan left half-way stopped at the opening, 12-13 November; open: steps 10-18 of "What is left, in order", and "Open after the code review") | 0.5.0 (milestone 1, experimental); the glass in the app after v0.7.0, not released yet; the rest to be decided | high: protocol unknown, two carriages | no: the scanner (firmware inside the program) |
 | 13 · films done professionally, for every scanner (done: 1-3, 5.1-5.2, 6 for slides; 5.3 set aside; 4 stalled without HP's captures; open: 7, 8) | 0.6.0 (1-3, 5.1-5.2, 6); 7, 8 to be decided | low (1-3, 5.1-5.2, 6, 7 in software, 8), medium (4, 5.3: the motor) | 1-3, 5.1-5.2, 6, 7 in software, 8 yes; 4 needs the 3770's captures |
-| 14 · colour profiles in the files, then the screen managed (decided 15 November 2026; done: 1, by eye to try; open: 2-4) | to be decided | low (1, 2), medium (3) | yes |
+| 14 · colour profiles in the files, then the screen managed (decided 15 November 2026; done: 1 (the 4490's glass by eye to try), 3 on Windows; open: 2, 3 on macOS and Linux, 4) | to be decided | low (1, 2), medium (3) | yes |

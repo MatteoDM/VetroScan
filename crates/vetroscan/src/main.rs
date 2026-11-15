@@ -27,6 +27,7 @@ mod i18n;
 mod keys;
 mod prefs;
 mod ram;
+mod screen;
 mod separa;
 mod sheet;
 mod testing;
@@ -662,6 +663,30 @@ impl std::fmt::Display for ThemeChoice {
             Self::System => tr("Sistema"),
             Self::Light => tr("Chiaro"),
             Self::Dark => tr("Scuro"),
+        })
+    }
+}
+
+/// The choices of "Colori dello schermo".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MonitorPick {
+    Auto,
+    Srgb,
+    Off,
+    File,
+}
+
+impl MonitorPick {
+    const ALL: [MonitorPick; 4] = [Self::Auto, Self::Srgb, Self::Off, Self::File];
+}
+
+impl std::fmt::Display for MonitorPick {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Auto => tr("Automatico: il profilo del monitor"),
+            Self::Srgb => tr("sRGB"),
+            Self::Off => tr("Nessuna conversione"),
+            Self::File => tr("Un profilo scelto…"),
         })
     }
 }
@@ -1501,12 +1526,15 @@ fn draw_page(
     t: &Transform,
     size: Size,
     thumb: bool,
+    screen: &screen::Screen,
 ) -> (Image, Picture, Option<Picture>) {
     let shown = render_raw(raw, settings, adjust, t);
     let rgb = shown.to_rgb();
-    let mut picture = Picture::from_rgb(shown.width, shown.height, &rgb);
+    let gamma = raw.tone.gamma;
+    let mut picture = Picture::from_rgb(shown.width, shown.height, &rgb, screen, gamma);
     picture.size = size;
-    let thumb = thumb.then(|| Picture::from_rgb_max(shown.width, shown.height, &rgb, 240));
+    let thumb =
+        thumb.then(|| Picture::from_rgb_max(shown.width, shown.height, &rgb, 240, screen, gamma));
     (shown, picture, thumb)
 }
 
@@ -1576,7 +1604,7 @@ struct Page {
 }
 
 impl Page {
-    fn new(raw: Raw, settings: Settings) -> Self {
+    fn new(raw: Raw, settings: Settings, screen: &screen::Screen) -> Self {
         let size = Size::new(raw.full.width as f32, raw.full.height as f32);
         let (shown, picture, thumb) = draw_page(
             &raw,
@@ -1585,6 +1613,7 @@ impl Page {
             &Transform::default(),
             size,
             true,
+            screen,
         );
         let thumb = thumb.unwrap_or_else(|| picture.clone());
         Self {
@@ -1686,7 +1715,7 @@ impl Page {
         s
     }
 
-    fn redraw(&mut self, before: bool, shared: &Settings) {
+    fn redraw(&mut self, before: bool, shared: &Settings, screen: &screen::Screen) {
         let settings = self.effective(shared);
         let adjust = if before {
             Adjustments::default()
@@ -1694,7 +1723,8 @@ impl Page {
             settings.adjust
         };
         let (t, size) = self.preview_geometry(&self.transform, false);
-        let (shown, picture, thumb) = draw_page(&self.raw, &settings, &adjust, &t, size, true);
+        let (shown, picture, thumb) =
+            draw_page(&self.raw, &settings, &adjust, &t, size, true, screen);
         self.shown = shown;
         self.picture = picture.replacing(&self.picture);
         if let Some(thumb) = thumb {
@@ -1742,9 +1772,9 @@ impl Page {
     }
 
     /// A quarter turn, part of the page's geometry edits.
-    fn rotate(&mut self, clockwise: bool, shared: &Settings) {
+    fn rotate(&mut self, clockwise: bool, shared: &Settings, screen: &screen::Screen) {
         self.transform.rotate(clockwise);
-        self.redraw(false, shared);
+        self.redraw(false, shared, screen);
     }
 }
 
@@ -1994,6 +2024,14 @@ enum Message {
     Theme(ThemeChoice),
     /// The language of the interface.
     Language(i18n::LangChoice),
+    /// What the screen is taken to be (Preferences).
+    Monitor(MonitorPick),
+    /// A monitor profile chosen by hand, or none (the dialog closed).
+    MonitorFile(Option<PathBuf>),
+    /// The window moved or came to the front: its monitor may be another.
+    ScreenCheck,
+    /// The monitor the window is on and its profile, as the system says.
+    MonitorFound(Result<screen::Monitor, String>),
     Kind(Kind),
     /// Foto with films in the adapter ("Pellicola").
     Film,
@@ -2400,6 +2438,16 @@ struct App {
     known_usb: Vec<scanner_api::UsbId>,
     system_dark: bool,
     theme: ThemeChoice,
+    /// What the screen is taken to be, as chosen, and what it is.
+    screen_choice: screen::Choice,
+    screen: Arc<screen::Screen>,
+    /// The monitor found under the window (Automatico), once asked.
+    monitor: Option<Result<screen::Monitor, String>>,
+    /// What the screen's colours need said in Preferences ("uso sRGB"…).
+    screen_note: String,
+    /// The monitor being asked for, and asked again once that is done.
+    finding_monitor: bool,
+    find_again: bool,
     kind: Kind,
     document: Settings,
     photo: Settings,
@@ -2571,6 +2619,14 @@ impl App {
             _ => ThemeChoice::System,
         };
         let models = worker::registry().models();
+        let screen_choice = screen::Choice::from_key(&stored.monitor);
+        let (screen, screen_note) = screen::for_choice(&screen_choice, None);
+        let find_monitor = if screen_choice == screen::Choice::Auto {
+            let pid = std::process::id();
+            Task::perform(async move { screen::find(pid) }, Message::MonitorFound)
+        } else {
+            Task::none()
+        };
         (
             Self {
                 worker: None,
@@ -2585,6 +2641,12 @@ impl App {
                 access_denied: false,
                 system_dark: false,
                 theme,
+                finding_monitor: screen_choice == screen::Choice::Auto,
+                screen_choice,
+                screen: Arc::new(screen),
+                monitor: None,
+                screen_note,
+                find_again: false,
                 kind,
                 // How the scan is made and saved comes back; the look (the
                 // adjustments, the black-and-white threshold) starts clean
@@ -2674,7 +2736,10 @@ impl App {
                     choice
                 },
             },
-            iced::system::theme().map(Message::SystemTheme),
+            Task::batch([
+                iced::system::theme().map(Message::SystemTheme),
+                find_monitor,
+            ]),
         )
     }
 
@@ -2703,6 +2768,11 @@ impl App {
                 iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
                     iced::mouse::Button::Left,
                 )) => Some(Message::PageDrop),
+                // On another monitor, or back from another program (a
+                // profile changed meanwhile): the screen's colours again.
+                iced::Event::Window(
+                    iced::window::Event::Moved(_) | iced::window::Event::Focused,
+                ) => Some(Message::ScreenCheck),
                 _ => None,
             }),
         ])
@@ -3427,6 +3497,37 @@ impl App {
 
     /// Every page following the shared look, but the one shown, is to be
     /// drawn again in the background.
+    /// Asks for the monitor under the window (Automatico only; one at a
+    /// time, once more when asked meanwhile).
+    fn find_monitor(&mut self) -> Task<Message> {
+        if self.screen_choice != screen::Choice::Auto {
+            return Task::none();
+        }
+        if self.finding_monitor {
+            self.find_again = true;
+            return Task::none();
+        }
+        self.finding_monitor = true;
+        let pid = std::process::id();
+        Task::perform(async move { screen::find(pid) }, Message::MonitorFound)
+    }
+
+    /// The screen for the choice and the monitor found; every picture drawn
+    /// again when it is another.
+    fn apply_screen(&mut self) {
+        let (screen, note) = screen::for_choice(&self.screen_choice, self.monitor.as_ref());
+        self.screen_note = note;
+        if *self.screen != screen {
+            self.screen = Arc::new(screen);
+            self.dirty_page = true;
+            self.dirty_preview = self.preview.is_some();
+            let shown = self.current;
+            self.stale = (0..self.pages.len())
+                .filter(|&i| Some(i) != shown)
+                .collect();
+        }
+    }
+
     fn restale(&mut self) {
         let shown = self.current;
         self.stale = self
@@ -3562,7 +3663,7 @@ impl App {
                     self.dirty_page = true;
                 } else {
                     // Out of sight: its thumbnail now.
-                    page.redraw(false, &shared);
+                    page.redraw(false, &shared, &self.screen);
                 }
                 Some((target, current))
             }
@@ -3649,6 +3750,7 @@ impl App {
         };
         let page = self.shown_key();
         let epoch = self.epoch;
+        let screen = Arc::clone(&self.screen);
         self.rendering = true;
         Task::perform(
             async move {
@@ -3659,6 +3761,7 @@ impl App {
                     &transform,
                     size.unwrap_or_default(),
                     thumb,
+                    &screen,
                 );
                 if size.is_none() {
                     picture.size = Size::new(shown.width as f32, shown.height as f32);
@@ -3712,8 +3815,14 @@ impl App {
         };
         if let Some((raw, shown, picture)) = &mut self.preview {
             *shown = render_raw(raw, &settings, &adjust, &Transform::default());
-            *picture =
-                Picture::from_rgb(shown.width, shown.height, &shown.to_rgb()).replacing(picture);
+            *picture = Picture::from_rgb(
+                shown.width,
+                shown.height,
+                &shown.to_rgb(),
+                &self.screen,
+                raw.tone.gamma,
+            )
+            .replacing(picture);
         }
     }
 
@@ -4202,7 +4311,7 @@ impl App {
                 raw.tone = tone;
                 raw.scanner = Arc::clone(&scanner);
                 let raw = raw.with16(samples.as_deref());
-                let mut part = Page::new(raw, settings);
+                let mut part = Page::new(raw, settings, &self.screen);
                 part.own = own;
                 part.origin = origin;
                 part.raw16 = samples.filter(|s| s.len() == w * h * 3).map(Arc::new);
@@ -4310,6 +4419,7 @@ impl App {
                 ThemeChoice::Dark => "scuro",
             }
             .into(),
+            monitor: self.screen_choice.key(),
             folder: self
                 .custom_folder
                 .as_ref()
@@ -4918,6 +5028,42 @@ impl App {
             }
             Message::SystemTheme(mode) => self.system_dark = mode == iced::theme::Mode::Dark,
             Message::Theme(choice) => self.theme = choice,
+            Message::Monitor(MonitorPick::File) => {
+                return Task::perform(
+                    async move {
+                        rfd::AsyncFileDialog::new()
+                            .add_filter(tr("Profili colore"), &["icc", "icm"])
+                            .set_directory(screen::profiles_folder())
+                            .pick_file()
+                            .await
+                            .map(|f| f.path().to_path_buf())
+                    },
+                    Message::MonitorFile,
+                );
+            }
+            Message::Monitor(pick) => {
+                self.screen_choice = match pick {
+                    MonitorPick::Srgb => screen::Choice::Srgb,
+                    MonitorPick::Off => screen::Choice::Off,
+                    _ => screen::Choice::Auto,
+                };
+                self.apply_screen();
+                return self.find_monitor();
+            }
+            Message::MonitorFile(Some(path)) => {
+                self.screen_choice = screen::Choice::File(path);
+                self.apply_screen();
+            }
+            Message::MonitorFile(None) => {}
+            Message::ScreenCheck => return self.find_monitor(),
+            Message::MonitorFound(found) => {
+                self.finding_monitor = false;
+                self.monitor = Some(found);
+                self.apply_screen();
+                if std::mem::take(&mut self.find_again) {
+                    return self.find_monitor();
+                }
+            }
             Message::Language(choice) => {
                 self.language = choice;
                 let before = i18n::current();
@@ -5033,6 +5179,8 @@ impl App {
                 self.photo_name = d.photo_name;
                 self.button_actions.clear();
                 self.theme = ThemeChoice::System;
+                self.screen_choice = screen::Choice::Auto;
+                self.apply_screen();
                 self.lamp_off = d.lamp_off_minutes;
                 self.send_lamp_timer();
                 self.undo.clear();
@@ -5705,7 +5853,7 @@ impl App {
             Message::PageRotate(i, clockwise) => {
                 let shared = *self.settings();
                 if let Some(page) = self.pages.get_mut(i) {
-                    page.rotate(clockwise, &shared);
+                    page.rotate(clockwise, &shared, &self.screen);
                     self.current = Some(i);
                     self.result_view = View::default();
                 }
@@ -6283,7 +6431,13 @@ impl App {
                 let raw = self.raw(at_dpi(image, PREVIEW_DPI)).with16(deep.as_deref());
                 let settings = *self.settings();
                 let shown = render_raw(&raw, &settings, &settings.adjust, &Transform::default());
-                let picture = Picture::from_rgb(shown.width, shown.height, &shown.to_rgb());
+                let picture = Picture::from_rgb(
+                    shown.width,
+                    shown.height,
+                    &shown.to_rgb(),
+                    &self.screen,
+                    raw.tone.gamma,
+                );
                 let found = match &transmission {
                     Some(t) => film::frames(t, kind),
                     None => detect::objects(&raw.full),
@@ -6420,7 +6574,7 @@ impl App {
         self.pdf_rev += 1;
         let (w, h, dpi) = (image.width, image.height, image.dpi);
         let raw = self.raw(image).with16(samples16.as_deref());
-        let mut page = Page::new(raw, *self.settings());
+        let mut page = Page::new(raw, *self.settings(), &self.screen);
         page.whole = whole.filter(|_| origin.is_none());
         // "Solo questa pagina" from the start: every page keeps the look it
         // was scanned with, and changing one does not change the others.
@@ -8495,6 +8649,7 @@ impl App {
             )
             .width(Length::Fill)
             .text_size(13),
+            self.screen_prefs(),
             heading(tr("All'avvio")),
             labelled(
                 tr("Modo"),
@@ -8568,6 +8723,39 @@ impl App {
                 .on_press(Message::FactoryReset),
         ]
         .spacing(10)
+        .into()
+    }
+
+    /// "Colori dello schermo": what the pictures are converted for.
+    fn screen_prefs(&self) -> Element<'_, Message> {
+        let chosen = match &self.screen_choice {
+            screen::Choice::Auto => MonitorPick::Auto,
+            screen::Choice::Srgb => MonitorPick::Srgb,
+            screen::Choice::Off => MonitorPick::Off,
+            screen::Choice::File(_) => MonitorPick::File,
+        };
+        let in_use = if self.screen.converts() {
+            trf("In uso: {profile}", &[("profile", &self.screen.label)])
+        } else {
+            tr("In uso: i numeri come sono, senza conversione").into()
+        };
+        let mut pane = column![
+            heading(tr("Colori dello schermo")),
+            pick_list(MonitorPick::ALL, Some(chosen), Message::Monitor)
+                .width(Length::Fill)
+                .text_size(13),
+            text(in_use).size(12),
+        ]
+        .spacing(6);
+        if !self.screen_note.is_empty() {
+            pane = pane.push(text(self.screen_note.clone()).size(11));
+        }
+        pane.push(
+            text(tr(
+                "Le immagini sono mostrate come le mostrano i programmi che gestiscono il colore: dal profilo della pagina a quello del monitor. I file non cambiano.",
+            ))
+            .size(11),
+        )
         .into()
     }
 

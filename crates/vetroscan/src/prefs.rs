@@ -215,6 +215,10 @@ pub struct Prefs {
     /// scanner's colours in Documento and Foto: the glass had no such correction then, and its
     /// default became "on" (14 November 2026).
     pub glass_colour_default: bool,
+    /// What the screen is taken to be: "automatico" (the monitor's
+    /// profile; also when absent, files before 0.10), "srgb", "nessuno",
+    /// or the path of a profile.
+    pub monitor: String,
 }
 
 impl Default for Prefs {
@@ -252,6 +256,7 @@ impl Default for Prefs {
             language: "automatica".into(),
             stripes: BTreeMap::new(),
             glass_colour_default: false,
+            monitor: "automatico".into(),
         }
     }
 }
@@ -526,6 +531,19 @@ mod tests {
         let mut again = p.clone();
         again.document.scanner_colour = Some(false);
         assert_eq!(again.migrated().document.scanner_colour, Some(false));
+    }
+
+    #[test]
+    fn files_before_the_screens_colours_take_the_monitors_profile() {
+        // A file of v0.9: no "monitor".
+        let p = serde_json::from_str::<Prefs>(r#"{"theme": "scuro"}"#)
+            .unwrap()
+            .migrated();
+        assert_eq!(p.monitor, "automatico");
+        assert_eq!(
+            crate::screen::Choice::from_key(&p.monitor),
+            crate::screen::Choice::Auto
+        );
     }
 
     #[test]

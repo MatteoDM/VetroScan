@@ -109,15 +109,30 @@ impl Picture {
         self
     }
 
-    /// A picture from 8-bit RGB pixels, shrunk to [`MAX_TEXTURE`] if needed
-    /// (by averaging whole blocks of pixels).
-    pub fn from_rgb(width: usize, height: usize, rgb: &[u8]) -> Self {
-        Self::from_rgb_max(width, height, rgb, MAX_TEXTURE)
+    /// A picture from 8-bit RGB pixels of a page drawn at `gamma`, shrunk
+    /// to [`MAX_TEXTURE`] if needed (by averaging whole blocks of pixels)
+    /// and converted for `screen`.
+    pub fn from_rgb(
+        width: usize,
+        height: usize,
+        rgb: &[u8],
+        screen: &crate::screen::Screen,
+        gamma: f64,
+    ) -> Self {
+        Self::from_rgb_max(width, height, rgb, MAX_TEXTURE, screen, gamma)
     }
 
     /// A picture shrunk so that its longest side is at most `max` pixels
-    /// (a thumbnail).
-    pub fn from_rgb_max(width: usize, height: usize, rgb: &[u8], max: u32) -> Self {
+    /// (a thumbnail), converted for `screen`: every picture the app shows
+    /// of a page goes through here.
+    pub fn from_rgb_max(
+        width: usize,
+        height: usize,
+        rgb: &[u8],
+        max: u32,
+        screen: &crate::screen::Screen,
+        gamma: f64,
+    ) -> Self {
         let factor = (width.max(height) as u32).div_ceil(max).max(1) as usize;
         let (w, h) = (width / factor, height / factor);
         let mut rgba = Vec::with_capacity(w * h * 4);
@@ -142,6 +157,7 @@ impl Picture {
                 ]);
             }
         }
+        screen.show(&mut rgba, gamma);
         Self {
             handle: image::Handle::from_rgba(w as u32, h as u32, rgba),
             size: Size::new(width as f32, height as f32),

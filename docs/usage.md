@@ -741,10 +741,10 @@ PNG, JPEG, TIFF (every page of a multi-page one, and at 16 bits), WebP and the p
 PDF; AVIF and BMP have none. The numbers are the same as without it.
 
 Programs that manage colour (Windows Photos, Photoshop, Lightroom, web browsers) read the
-profile and show the file as it was meant on any monitor. Programs that do not, and
-VetroScan's own screen for now, show the numbers as they are: on a wide-gamut monitor the
-colours look more saturated there, and an Epson 4490 glass scan has darker midtones there
-than in Windows Photos. The RAW files keep their own description (the linear TIFF its linear
+profile and show the file as it was meant on any monitor; VetroScan shows its pages the same
+way (see **Screen colours** in [the Preferences](#the-preferences)). Programs that do not
+show the numbers as they are: on a wide-gamut monitor the colours look more saturated there,
+and an Epson 4490 glass scan has darker midtones there than in Windows Photos. The RAW files keep their own description (the linear TIFF its linear
 sRGB profile, the DNG its own colour tags).
 
 ### Several pages or photos as separate images
@@ -828,6 +828,17 @@ The fourth tab on the right. Every change is saved by itself.
 - **Language**: *Automatic (system language)* — English if the system is in English, Italian
   otherwise —, *Italiano* or *English*. The change applies at once, without restarting;
   numbers follow the language (2.5 in English, 2,5 in Italian).
+- **Screen colours**: how the pictures are shown on the monitor. *Automatic: the monitor's
+  profile* (the default) shows them as colour-managed programs do, from each page's profile
+  to the profile of the monitor the window is on: on a wide-gamut monitor the colours are no
+  longer too saturated, and an Epson 4490 glass scan has the midtones Windows Photos shows.
+  The monitor is looked for again when the window moves to another monitor or the app comes
+  back to the front. The monitor's profile is found by itself on **Windows** only, for now;
+  elsewhere, or with no profile, *sRGB* is used. *sRGB* brings each page to sRGB (for a
+  monitor set to sRGB); *No conversion* shows the numbers as they are, as before; *A profile
+  of your choice…* takes a `.icc`/`.icm` file. **In use** says which profile is used, for
+  which monitor. Only the picture on the screen changes: the files, the histogram and the
+  numbers stay the same.
 - **At start-up · Mode**: which mode the app opens with: *The last one used*, *Document* or
   *Photo*. Resolution, colour, format and PDF page of each mode are found again as you left
   them anyway; the adjustments start from zero (to find them again, save them in a preset).
@@ -862,8 +873,8 @@ The fourth tab on the right. Every change is saved by itself.
   with its own timer switches the lamp off anyway, even if the app closes badly. Only for a
   scanner with a lamp.
 - **Settings**: says which file they are saved in; **Restore factory settings** puts
-  everything back as at the first start (modes, folder, names, buttons, theme, lamp). The
-  saved presets stay.
+  everything back as at the first start (modes, folder, names, buttons, theme, lamp, screen
+  colours). The saved presets stay.
 
 The **theme** (System, Light, Dark) is chosen at the top right, in the bar.
 

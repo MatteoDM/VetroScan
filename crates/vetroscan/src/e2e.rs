@@ -44,6 +44,9 @@ impl Ui {
             events,
             closed: false,
         };
+        // The answer to what the app asks at the start (the monitor's
+        // profile; its other task, the system's theme, never answers here).
+        ui.send(Message::MonitorFound(testing::monitor()));
         ui.send(Message::Worker(Event::Ready(handle)));
         // The scanner state, asked for on Ready (however busy the machine).
         while ui.app.status.is_none() {
@@ -3784,4 +3787,77 @@ fn a_scanner_at_1_8_tags_its_glass_1_8_and_its_films_2_2() {
     assert_eq!(ui.app.pages.len(), 2);
     let name = save_as(&mut ui, Output::TiffPages);
     assert_eq!(profiles(&name, &ui), [(*b"RGB ", G22), (*b"RGB ", G22)]);
+}
+
+// ------------------------------------------------------------- screen colours
+
+/// The texture shown of page `i`, as RGB.
+fn texture(ui: &Ui, i: usize) -> Vec<u8> {
+    match &ui.app.pages[i].picture.handle {
+        iced::widget::image::Handle::Rgba { pixels, .. } => {
+            pixels.chunks(4).flat_map(|p| [p[0], p[1], p[2]]).collect()
+        }
+        other => panic!("not pixels: {other:?}"),
+    }
+}
+
+#[test]
+fn the_screen_shows_pages_through_the_monitors_profile_files_keep_their_numbers() {
+    use crate::screen::{Monitor, Screen};
+    use crate::MonitorPick;
+    // A scanner drawing at 1.8, as the Epson 4490's glass.
+    let mut ui = Ui::with_scanners(vec![FakeScanner::flatbed().with_gamma(1.8)]);
+    ui.scan(1);
+    let numbers = ui.app.pages[0].shown.to_rgb();
+    let through = |screen: &Screen| {
+        let mut p: Vec<u8> = numbers
+            .chunks(3)
+            .flat_map(|p| [p[0], p[1], p[2], 255])
+            .collect();
+        screen.show(&mut p, 1.8);
+        p.chunks(4)
+            .flat_map(|c| [c[0], c[1], c[2]])
+            .collect::<Vec<u8>>()
+    };
+    // No monitor known (yet, or on a system that does not say): sRGB.
+    assert_eq!(ui.app.screen.label, "sRGB");
+    assert_eq!(texture(&ui, 0), through(&Screen::srgb()));
+    assert_ne!(texture(&ui, 0), numbers, "1.8 brought to sRGB");
+    // The monitor under the window found, wide gamut: its profile.
+    let wide = vetroscan_export::icc::matrix(
+        "Adobe RGB-like",
+        [
+            [0.6097, 0.3111, 0.0195],
+            [0.2053, 0.6257, 0.0609],
+            [0.1492, 0.0632, 0.7446],
+        ],
+        2.2,
+    );
+    testing::set_monitor(Some(Monitor {
+        name: "DISPLAY2".into(),
+        profile_name: "wide.icc".into(),
+        profile: wide.clone(),
+    }));
+    ui.send(Message::ScreenCheck);
+    ui.settle();
+    assert_eq!(ui.app.screen.label, "wide.icc (DISPLAY2)");
+    assert_eq!(
+        texture(&ui, 0),
+        through(&Screen::profile(&wide, String::new()).unwrap())
+    );
+    ui.send(Message::Pane(crate::Pane::Prefs));
+    assert!(ui.shows("In uso: wide.icc (DISPLAY2)"));
+    // The page's numbers and its file are as they were.
+    assert_eq!(ui.app.pages[0].shown.to_rgb(), numbers);
+    // "Nessuna conversione": the numbers as they are, as before, remembered.
+    ui.send(Message::Monitor(MonitorPick::Off));
+    ui.settle();
+    assert_eq!(texture(&ui, 0), numbers);
+    assert_eq!(ui.app.prefs().monitor, "nessuno");
+    assert!(ui.shows("In uso: i numeri come sono, senza conversione"));
+    // Back to automatic: the monitor's again.
+    ui.send(Message::Monitor(MonitorPick::Auto));
+    ui.settle();
+    assert_eq!(ui.app.screen.label, "wide.icc (DISPLAY2)");
+    testing::set_monitor(None);
 }

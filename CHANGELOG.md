@@ -24,6 +24,13 @@ GitHub; here they are in English.
   screen is drawn as the file is; the preview too.
 
 ### Added
+- **Screen colours** (Preferences): the pictures are shown as colour-managed programs show
+  them, from each page's profile to the profile of the monitor the window is on, found by
+  itself on Windows (again when the window moves to another monitor). On a wide-gamut
+  monitor the colours are no longer too saturated, and the Epson 4490's glass scans show the
+  midtones Windows Photos shows. Elsewhere, or without a profile, the pages are brought to
+  sRGB; *No conversion* shows the numbers as before, and a profile file can be chosen by
+  hand. Only the screen changes, not the files.
 - Every file saved says what its colours are: an **ICC profile** made by VetroScan with sRGB's
   colours and the tone curve the scan was drawn with (gamma 1.8 for the Epson 4490's glass,
   as Epson Scan's files say; 2.2 for films and the HP 3770), grey for grey images, none for

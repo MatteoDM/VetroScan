@@ -14,6 +14,7 @@ thread_local! {
     static EFFECTS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     static SAVE_CANCELLED: RefCell<bool> = const { RefCell::new(false) };
     static RAM: RefCell<Option<u64>> = const { RefCell::new(None) };
+    static MONITOR: RefCell<Option<crate::screen::Monitor>> = const { RefCell::new(None) };
     #[cfg(test)]
     static DIR: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
 }
@@ -73,6 +74,20 @@ pub fn ram() -> Option<u64> {
 #[cfg(test)]
 pub fn set_ram(bytes: Option<u64>) {
     RAM.with(|r| *r.borrow_mut() = bytes);
+}
+
+/// The monitor a test made up ([`set_monitor`]): none, unless set.
+#[cfg(test)]
+pub fn monitor() -> Result<crate::screen::Monitor, String> {
+    MONITOR
+        .with(|m| m.borrow().clone())
+        .ok_or_else(|| "no monitor in the tests".to_string()) // not translated: tests only
+}
+
+/// Makes the app find a monitor with this profile (tests only).
+#[cfg(test)]
+pub fn set_monitor(monitor: Option<crate::screen::Monitor>) {
+    MONITOR.with(|m| *m.borrow_mut() = monitor);
 }
 
 /// Removes this test's folder (at the end of a test).
