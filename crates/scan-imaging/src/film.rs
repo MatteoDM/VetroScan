@@ -560,6 +560,16 @@ pub fn measure_slides(
     Some((slide, found))
 }
 
+/// A slide's piece wider than this both ways, millimetres, is its mount
+/// lit round by light leaking past it ([`frames`]): wider than a 35 mm
+/// picture is high (24 mm) by a quarter.
+const MOUNT_MM: f32 = 30.0;
+
+/// The rim of such a mount left out when its picture is sought inside it,
+/// millimetres: the leak (up to about 1 mm on the Epson 4490) and the blocks
+/// it lit around it.
+const RIM_MM: f32 = 3.0;
+
 /// The pictures in a preview of the holder (linear RGB, as the scanner
 /// gives it), in reading order: each slide, or each frame of the strips of
 /// 35 mm negatives. A slot left empty, or the leader of a strip never
@@ -597,20 +607,64 @@ pub fn frames(image: &Image, film: Film) -> Vec<Found> {
         }
     }
     // Close gaps of about 1 mm (a dark corner of the picture), fill holes
-    // (sprocket holes, dark parts of the picture inside its outline).
+    // (sprocket holes, dark parts of the picture inside its outline): the
+    // mask and the fits of its pieces, in blocks.
     let close = 2;
-    let mut mask = detect::dilate(&lit, bw, bh, close);
-    detect::fill_holes(&mut mask, bw, bh);
-    let mask = detect::erode(&mask, bw, bh, close);
+    // Each fit with a block of its piece.
+    let shapes = |lit: &[bool]| -> (Vec<bool>, Vec<(detect::Found, usize)>) {
+        let mut mask = detect::dilate(lit, bw, bh, close);
+        detect::fill_holes(&mut mask, bw, bh);
+        let mask = detect::erode(&mask, bw, bh, close);
+        let fits = detect::components(&mask, bw, bh)
+            .into_iter()
+            .filter_map(|outline| {
+                let [x, y] = *outline.first()?;
+                Some((detect::fit(&outline)?, y as usize * bw + x as usize))
+            })
+            .collect();
+        (mask, fits)
+    };
     let min_side = detect::MIN_SIDE_MM * mm / block as f32;
+    // Slides: light leaking past a mount's edges, between it and the holder,
+    // draws thin lines around the mount that enclose it whole once the holes
+    // are filled (the Epson 4490's holder: lines up to about 1 mm wide around
+    // opaque mounts of 51 mm, capture 102). A slide's piece wider than
+    // MOUNT_MM both ways is such a mount: its picture is sought inside it,
+    // its rim of RIM_MM left out (there: the four pictures, 35 x 23.5 mm, at
+    // 200 and at 600 dpi).
+    let mount = MOUNT_MM * mm / block as f32;
+    let rim = (RIM_MM * mm / block as f32).round() as usize;
+    let (mask, fits) = shapes(&lit);
+    let mut masks = vec![mask];
+    let mut kept: Vec<(detect::Found, usize)> = Vec::new();
+    for (f, seed) in fits {
+        if f.width < min_side || f.height < min_side {
+            continue;
+        }
+        if film != Film::Slide || f.width.min(f.height) <= mount {
+            kept.push((f, 0));
+            continue;
+        }
+        // The piece's own blocks: a ring left open is not filled, and a
+        // picture inside it found on its own is not found twice.
+        let piece = piece_at(&masks[0], bw, bh, seed);
+        let inside = detect::erode(&piece, bw, bh, rim);
+        let inner: Vec<bool> = lit.iter().zip(&inside).map(|(&l, &a)| l && a).collect();
+        let (inner_mask, inner_fits) = shapes(&inner);
+        masks.push(inner_mask);
+        let k = masks.len() - 1;
+        kept.extend(
+            inner_fits
+                .into_iter()
+                .filter(|(g, _)| g.width >= min_side && g.height >= min_side)
+                .map(|(g, _)| (g, k)),
+        );
+    }
     let scale = block as f32;
-    let pieces: Vec<Found> = detect::components(&mask, bw, bh)
+    let pieces: Vec<Found> = kept
         .into_iter()
-        .filter_map(|outline| {
-            let f = detect::fit(&outline)?;
-            if f.width < min_side || f.height < min_side {
-                return None;
-            }
+        .filter_map(|(f, k)| {
+            let mask = &masks[k];
             // A slot with nothing in it: the lamp, all clear.
             let (mut n, mut bright) = (0usize, 0usize);
             for by in 0..bh {
@@ -642,6 +696,38 @@ pub fn frames(image: &Image, film: Film) -> Vec<Found> {
     };
     detect::reading_order(&mut found);
     found
+}
+
+/// The blocks of `mask` joined to block `seed` (4-connected).
+fn piece_at(mask: &[bool], w: usize, h: usize, seed: usize) -> Vec<bool> {
+    let mut piece = vec![false; mask.len()];
+    if !mask[seed] {
+        return piece;
+    }
+    let mut stack = vec![seed];
+    piece[seed] = true;
+    while let Some(i) = stack.pop() {
+        let (x, y) = (i % w, i / w);
+        let mut push = |j: usize| {
+            if mask[j] && !piece[j] {
+                piece[j] = true;
+                stack.push(j);
+            }
+        };
+        if x > 0 {
+            push(i - 1);
+        }
+        if x + 1 < w {
+            push(i + 1);
+        }
+        if y > 0 {
+            push(i - w);
+        }
+        if y + 1 < h {
+            push(i + w);
+        }
+    }
+    piece
 }
 
 /// The frames along a strip of negatives (`strip`, in pixels; `mm`
@@ -1301,6 +1387,66 @@ mod tests {
         paint(&mut image, &window(700.0), |_, _| [255, 255, 255]);
         let found = frames(&image, Film::Slide);
         assert_eq!(found.len(), 2, "{found:?}");
+        for (f, e) in found.iter().zip(&slides) {
+            near(f, e, mm);
+        }
+    }
+
+    /// Light leaking past an opaque mount's edges (the Epson 4490's holder,
+    /// capture 102) draws a thin ring around it: the picture inside is found,
+    /// not the whole mount; with the ring left open on a side, the picture once;
+    /// a dark band across a picture does not cut it.
+    #[test]
+    fn slides_with_light_leaking_round_their_mounts() {
+        let mm = 150.0 / 25.4;
+        let mut image = holder(1300, 450);
+        let mut slides = Vec::new();
+        for (i, cx) in [220.0, 600.0, 980.0].into_iter().enumerate() {
+            let mount = |inset: f32| Found {
+                cx,
+                cy: 225.0,
+                width: (51.0 - inset) * mm,
+                height: (51.0 - inset) * mm,
+                angle: 0.0,
+            };
+            // The leak: a line about 0.7 mm wide all round, the lamp's full
+            // light; inside it the mount, opaque.
+            paint(&mut image, &mount(0.0), |_, _| [255, 255, 255]);
+            paint(&mut image, &mount(1.4), |_, _| [1, 1, 1]);
+            if i == 1 {
+                // Open on its left side.
+                let side = Found {
+                    cx: cx - 25.5 * mm,
+                    cy: 225.0,
+                    width: 2.0 * mm,
+                    height: 52.0 * mm,
+                    angle: 0.0,
+                };
+                paint(&mut image, &side, |_, _| [1, 1, 1]);
+            }
+            let window = Found {
+                cx,
+                cy: 225.0,
+                width: 35.0 * mm,
+                height: 23.5 * mm,
+                angle: 0.0,
+            };
+            paint(&mut image, &window, picture);
+            if i == 2 {
+                // A dark band 2.5 mm high across the picture (a hedge in shade).
+                let band = Found {
+                    cx,
+                    cy: 225.0 + 4.0 * mm,
+                    width: 35.0 * mm,
+                    height: 2.5 * mm,
+                    angle: 0.0,
+                };
+                paint(&mut image, &band, |_, _| [2, 2, 2]);
+            }
+            slides.push(window);
+        }
+        let found = frames(&image, Film::Slide);
+        assert_eq!(found.len(), 3, "{found:?}");
         for (f, e) in found.iter().zip(&slides) {
             near(f, e, mm);
         }

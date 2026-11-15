@@ -25,6 +25,8 @@ GitHub; here they are in English.
   infrared yet.
 
 ### Fixed
+- Film: a slide whose mount lets light past its edges (as in the Epson 4490's holder) was found
+  as the whole mount, about 51 mm square; now the picture inside it is found, 36 x 24 mm.
 - Epson Perfection 4490 on Windows: opening VetroScan while Epson Scan is scanning no longer
   stops Epson Scan's scan (it ended with "cannot communicate with the scanner"): VetroScan now
   takes the scanner from Windows before sending it anything, and says it is in use by another
