@@ -17,14 +17,7 @@ GitHub; here they are in English.
 
 ## [Unreleased]
 
-### Fixed
-- Photo: a PDF of some of the photos picked (the first and the third, say) laid out each
-  photo on the sheet of the photo at its place in the column (the third on the second's): each
-  now on its own.
-- The screen showed photos scanned at 16 bits (films above all) with darker shadows than the
-  file saved: it was drawn from a small copy at 8 bits, linear, coarse in the dark tones (up to
-  20 levels darker on the Epson 4490's frames). The small copy keeps its 16 bits now, and the
-  screen is drawn as the file is; the preview too.
+## [0.10.0] - 2026-11-15
 
 ### Added
 - **Screen colours** (Preferences): the pictures are shown as colour-managed programs show
@@ -64,7 +57,18 @@ GitHub; here they are in English.
   **Leave negatives as they are** not inverted, for programs that invert them themselves.
   Slides as the scanner reads them. It applies to the next scans; the frames are still found.
 
+### Changed
+- A frame drawn on the preview no longer takes the place of the originals found: it is added
+  to them. Turning the automatic crop off keeps only the areas drawn by hand. **Esc** lets the
+  area chosen go instead of removing it (**Delete** removes it).
+- **Redo** on a page scanned whole scans that page's own area again, not the one chosen on the
+  preview now.
+
 ### Fixed
+- The screen showed photos scanned at 16 bits (films above all) with darker shadows than the
+  file saved: it was drawn from a small copy at 8 bits, linear, coarse in the dark tones (up to
+  20 levels darker on the Epson 4490's frames). The small copy keeps its 16 bits now, and the
+  screen is drawn as the file is; the preview too.
 - Film: with two strips of negatives side by side (the Epson 4490's holder) the film was not
   measured, so the preview and a strip scanned whole stayed negative: the base was looked for
   between a frame of one strip and the next frame in reading order, on the other strip, across
@@ -82,13 +86,6 @@ GitHub; here they are in English.
 - Film: two strips side by side joined by light across the holder (a lit slot, a hole, a leak at
   an end) were taken for one wide strip, and only some frames were found, between the strips.
   Such a piece is now split into its strips.
-
-### Changed
-- A frame drawn on the preview no longer takes the place of the originals found: it is added
-  to them. Turning the automatic crop off keeps only the areas drawn by hand. **Esc** lets the
-  area chosen go instead of removing it (**Delete** removes it).
-- **Redo** on a page scanned whole scans that page's own area again, not the one chosen on the
-  preview now.
 
 ## [0.9.0] - 2026-11-15
 
@@ -584,7 +581,8 @@ First version.
 - Texts with a run of spaces in the middle (note on RAW, on 16 bits and on the buttons in
   Windows); the button of the default folder uses the system's separator.
 
-[Unreleased]: https://github.com/MatteoDM/scanner/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/MatteoDM/scanner/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/MatteoDM/scanner/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/MatteoDM/scanner/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/MatteoDM/scanner/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/MatteoDM/scanner/compare/v0.6.0...v0.7.0
