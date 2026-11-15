@@ -18,6 +18,9 @@ GitHub; here they are in English.
 ## [Unreleased]
 
 ### Fixed
+- Photo: a PDF of some of the photos picked (the first and the third, say) laid out each
+  photo on the sheet of the photo at its place in the column (the third on the second's): each
+  now on its own.
 - The screen showed photos scanned at 16 bits (films above all) with darker shadows than the
   file saved: it was drawn from a small copy at 8 bits, linear, coarse in the dark tones (up to
   20 levels darker on the Epson 4490's frames). The small copy keeps its 16 bits now, and the

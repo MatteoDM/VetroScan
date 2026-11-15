@@ -3861,3 +3861,33 @@ fn the_screen_shows_pages_through_the_monitors_profile_files_keep_their_numbers(
     assert_eq!(ui.app.screen.label, "wide.icc (DISPLAY2)");
     testing::set_monitor(None);
 }
+
+#[test]
+fn a_pdf_of_photos_picked_lays_out_each_with_its_own_sheet() {
+    use crate::{Output, PdfFit, Pick};
+    let mut ui = Ui::new();
+    ui.send(Message::Kind(Kind::Photo));
+    ui.click("Anteprima");
+    ui.click("Scansiona 3 foto");
+    assert_eq!(ui.app.pages.len(), 3);
+    // On A4. The third with its own sheet, filled (what overflows is
+    // clipped); the others as the document's, which does not fill.
+    ui.app.settings_mut().pdf_size = crate::PdfSize::A4;
+    let mut own = ui.app.settings().page_layout();
+    assert_ne!(own.fit, PdfFit::Fill);
+    own.fit = PdfFit::Fill;
+    ui.app.pages[2].layout = Some(own);
+    // The first and the third picked, saved as a PDF.
+    ui.send(Message::PageShow(0));
+    ui.send(Message::PagePick(2, Pick::Toggle));
+    let name = save_as(&mut ui, Output::Pdf);
+    let pdf = std::fs::read(ui.app.folder().join(&name)).unwrap();
+    let text = String::from_utf8_lossy(&pdf);
+    assert_eq!(text.matches("/Type /Page ").count(), 2);
+    // The second page of the PDF is the third photo, with its sheet.
+    assert_eq!(
+        text.matches(" re W n ").count(),
+        1,
+        "the third photo filled"
+    );
+}

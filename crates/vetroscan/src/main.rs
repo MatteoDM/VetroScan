@@ -4722,7 +4722,9 @@ impl App {
             };
             let laid: Vec<PdfPage> = pages
                 .iter()
-                .zip(&self.pages)
+                // Each with its own sheet: the pages saved are those
+                // `saving` gives (the photos picked), in its order.
+                .zip(self.saving())
                 .zip(&encodings)
                 .map(|((tagged, page), &encoding)| PdfPage {
                     image: tagged.image,
