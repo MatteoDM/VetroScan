@@ -1,6 +1,8 @@
 ---
 name: release
 description: Publishes a version of VetroScan — raises the workspace version, moves what is new in the CHANGELOG, checks and commits; then either the vX.Y.Z tag lets the "CI and Release" workflow build and publish the packages, or, while GitHub Actions cannot run, the Windows and Linux packages are made locally (package.ps1, WSL) and published with gh release create; also installs the new version on this PC and recovers from a failed release. Use it when asked to release, publish, tag, raise the version, build the packages or install the new version.
+disable-model-invocation: true
+model: sonnet
 ---
 
 # Releasing the scanner
