@@ -1795,6 +1795,37 @@ never run by us (step 12).
     and 4800 dpi (74-76), of frame 6 at 2400 dpi in 16 and 8 bits (77, 78) and of two slides at
     2400 (80, 81), in `captures/epson4490`, to set our film scans against once the film path
     scans; and the lid's lamp's warm-up to measure then (step 13). Not started.
+    **Measured** (15 November 2026, no new scan: our 89-93 and 96 developed as the app does, set
+    against those TIFFs; `05-catture.md`, "lo sviluppo delle nostre pellicole contro Epson Scan",
+    tools in `captures/epson4490/tools/sviluppo`):
+    - Epson Scan's TIFF is its raw read (its 74 and 77 reads, assembled, against their TIFFs: red
+      the same, green within 2.8 %, blue 1 %): its development is the `1E 84` type 02 tables it
+      loads before the image. For negatives they are **one fixed curve**, the same for the three
+      channels, both frames and every resolution (74, 75, 77, 78: 4095 up to input 10, 0 from
+      1781): no levels of its own, its colour balance only the exposures per channel (green and
+      blue at 0.669 and 0.439 of red's), which ours repeat. So its negatives come out dark and
+      green ("corrections off"), and say nothing about which colour is right: nothing to copy, no
+      colour matrix to declare for the 4490's negatives.
+    - Ours on the 4490's data: one frame found in each scan (Epson Scan's area lies inside a
+      frame, no gap: the base from `base_auto`, the unexposed band at the area's top); frame 1 at
+      600, 1200 and 4800 dpi gives the same measures (base within 3.5 %, highlights within 0.006
+      in density). The film base sits at about a quarter of full scale (15,300 / 12,600 / 11,200),
+      the holder at 100-200: the densities above the base are not affected. Highlights beyond
+      `high`: 0.4-0.9 % a channel inside the frame, as the rule means (the 3.7 % at full scale
+      in the whole image is the opaque holder at its edges, white in the positive). The scene's
+      range computed 0.79 and 0.89 decades, taken to the minimum of 1.0 (highlights 0.4-0.6
+      above the base; other rolls on the 3770 0.85-1.12): thin negatives or the lid's diffuse
+      light, not told apart without the same strip on both scanners.
+    - Slides (96 against 80, the same slide): Epson's tables differ by channel and slide (its
+      automatic levels; white 2867 / 2806 / 2836 of 4096 in 80, gamma about 1.8-2.0); ours (one
+      black and white, 67 and 29,233) clip 0.02-0.06 % in the middle against its 0.01-0.04 %,
+      midtones lighter (gamma 2.2): alike to the eye.
+    - The shading's white bytes (2-4 units off Epson's): on the film base, the column-to-column
+      structure is ours 0.79-0.82 % against Epson's 0.84-0.88 % at 600 dpi, 0.94-0.97 % against
+      0.96-0.99 % at 2400, even and odd columns alike within 0.05 %: no difference in the
+      images, the exact rule left.
+    So nothing changes in the films' development for the 4490. Left: the lid's lamp's warm-up,
+    with Matteo at the scanner (`captures/tools/lid_lamp_series_epson.sh`).
 
 **Where the films stand, in order** (14 November 2026, night):
 1. Done: captures 72-81 (82, medium format, when Matteo has a film); the film guard
