@@ -1836,6 +1836,24 @@ never run by us (step 12).
     204 let out (`guard::FILM_BACK_MOVES`, Matteo's decision: a line short of 216, the unit
     stopping at 1212, inside its travel); the same can happen in the app to a film scanned a
     minute after another. The series to be run again from a cold lamp.
+    **The lid's lamp from cold, measured** (15 November 2026, capture 105, the scanner switched
+    off and on and left 20 minutes; eleven scans of frame 1 at 600 dpi from 0 to 14 minutes after
+    the lamp was lit, `scansioni/epson_coperchio_20261115_1152`, `tools/sviluppo/riscaldamento.py`):
+    the warming flag went after 19.3 s; every scan went through (moves back 228, 216, once 204
+    at 7 minutes: the edge moves either way). The calibration follows the lamp: the red's
+    exposure 12,014 µs for the first 2.5 minutes, 12,398 to 5, 12,782 at 7, 13,166 from 10 on
+    (yesterday's warm 89 the same), the gains moving by a step now and then. Against the mean of
+    the last two (13-14 minutes; those agree within 0.03 %), each scan differs by **a scale per
+    channel**, the same in the shadows, midtones and light parts: red +2.3 to +3.9 % for the
+    first 7 minutes, green and blue -2 to +2.4 %, in the calibration's steps (at 10 minutes, the
+    lamp steady, a gain one step off still gave blue +2.4 %). Developed as the app does (each
+    scan its own base and levels), the scale goes: the pictures differ from the steady ones by
+    at most 1.0 level of 255 on average (the first scan's blue), the others 0.5 or less, below
+    the two steady scans' own difference (1.5-3.7 levels per pixel, noise). **So no wait after
+    the scanner's flag** for films (as Epson Scan); nothing changes. Assumed, not measured: a
+    roll's base locked from another scan, or a slide (one white for the three channels), keeps
+    such a scale, 0.01-0.017 in density, about the 0.6-4 % the 3770's scans differ by anyway,
+    and a warm lamp's gain steps give it too.
 
 **Where the films stand, in order** (14 November 2026, night):
 1. Done: captures 72-81 (82, medium format, when Matteo has a film); the film guard

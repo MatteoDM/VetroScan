@@ -419,8 +419,11 @@ const LID_LAMP_POLL: Duration = if cfg!(test) {
 /// lid's lamp is in use (`02`). Nothing moves. Answers how long the lamp took from `1E A2 02`.
 /// `events` hears `Event::WarmingUp` every second; `false` stops the wait (the lamp stays lit).
 ///
-/// Whether the lid's lamp needs more time than the scanner's flag before a film's calibration,
-/// as the glass's does ([`WARM_UP`]), is not measured: Epson Scan calibrates at once.
+/// The lid's lamp gets no more time than the scanner's flag before a film's calibration, unlike
+/// the glass's ([`WARM_UP`]), as Epson Scan: measured from cold (15 November 2026, capture 105,
+/// eleven scans of a negative over 14 minutes), a scan differs from the steady ones only by a
+/// scale per channel (up to 4 %, in the calibration's steps, the same within 0.03 % after about
+/// 13 minutes), which a negative developed on its own base takes out (at most a level of 255).
 pub fn light_lid_lamp<T: Transport>(
     g: &mut Guarded<T>,
     request: &FilmRequest,
