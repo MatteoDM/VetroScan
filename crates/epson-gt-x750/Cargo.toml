@@ -14,11 +14,11 @@ build = "build.rs"
 scanner-api.workspace = true
 scan-imaging.workspace = true
 nusb = "0.2"
-sha2 = "0.10"
+sha2 = "0.11"
 png = "0.18"
 
 [build-dependencies]
-sha2 = "0.10"
+sha2 = "0.11"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
