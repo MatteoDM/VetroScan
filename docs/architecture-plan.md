@@ -1775,8 +1775,21 @@ never run by us (step 12).
     `film::ADAPTER_INCHES`), the same for strips and slides, rather than 68 x 236; the
     resolutions to declare are the captured ones (`guard::FILM_COVERED`: negatives 600, 1200,
     2400, 4800; slides 2400 only, so far); Epson Scan's frames are areas the user draws on the
-    preview, no frame finding of its own was seen (`film::frames` stays the app's). Not started:
-    nothing to declare before the film path scans.
+    preview, no frame finding of its own was seen (`film::frames` stays the app's).
+    **Done** (15 November 2026): the 4490 declares its adapter (`capabilities()`: `Adapter {
+    film::AREA_INCHES, Slide and Negative, 600 1200 2400 4800 }`, slides at every resolution after
+    captures 98-101) and its status says it is there (`adapter: Some(true)`: the unit is part of the
+    lid); `Scanner::scan` turns a film request into Epson Scan's (`film::for_area`: read along at
+    5400 for 4800 dpi, enough lines for the height asked, the image cut to it; always 16 bits, the
+    8-bit samples from them) and runs `scan::scan_film` (a test: capture 74 through the contract, to
+    its last line). The window is declared less its top 6 mm (`film::TOP_SKIP_STEPS`, 576 steps): a
+    read starting higher needs a start move shorter than its ramps, never captured; only the
+    holders' edge is there (the first frame of a strip at 8.8 mm, a slide at 31.8 mm). After a film
+    the app's lamp timer sends nothing (`1E A2 00` with the lid's lamp chosen was never captured;
+    the scanner switches it off by itself), and the next glass scan switches back (`1E 77`) and
+    warms the glass's lamp. Memory: a film at 4800 dpi counts 13/8 (read along at 5400). Nothing new
+    in the contract or the app; the 6 x 12 cm holder waits for a medium-format film and its capture.
+    Not tried yet in the app on the scanner.
 16. Phase 13's films (base, levels, colour) on the 4490's scans: nothing new in the app.
     **Material** (14 November 2026): Epson Scan's TIFFs of the same negative frame at 600, 1200
     and 4800 dpi (74-76), of frame 6 at 2400 dpi in 16 and 8 bits (77, 78) and of two slides at

@@ -125,6 +125,15 @@ VetroScan scans both **negatives** and **slides** with it:
    default), finds the frames or the slides in it: one image for each, as the photos in
    Photo. **Redo** on a frame scans that frame only.
 
+The **Epson Perfection 4490** has its adapter in the lid too, with nothing to plug in: put the
+strip or the slides in the 4490's holder on the glass as Epson's manual shows (the document
+mat taken off the lid), choose **Film** and what is in the holder, and scan as above. The scan
+covers the holder's window but its top 6 mm, where only the holder's edge is. Each film scan
+lights the lid's lamp (about 20 seconds when it was off) and calibrates on its own; a frame
+took a minute at 1200 dpi and two at 4800 on the scanner, the whole strip takes several. The
+4490 has an infrared channel for dust removal (Digital ICE), not used by VetroScan yet. After a
+film, the next scan of the glass switches back to the glass's lamp and warms it up first.
+
 Slides are scanned as negatives are on the HP 3770, with the longer exposure of its negatives'
 modes: measured on real slides, it halves the noise in their dark parts (where a slide is far
 denser than a negative), for about 20 seconds more; nothing came out burnt in the light parts.
@@ -135,8 +144,8 @@ without scanning again (see [Several photos from a single scan](#several-photos-
 part of the adapter's area, type it in millimetres in the **Scan** tab.
 
 Film keeps its own settings: by default 1200 dpi, colour, 16 bits, JPEG; the resolution is
-600 or 1200 dpi only (lower ones would make the motor stall). Every scan with the
-adapter first switches its light on and waits about 30 seconds for it to warm up, then
+600 or 1200 dpi only on the HP 3770 (lower ones would make the motor stall), 600, 1200, 2400
+or 4800 dpi on the Epson 4490. On the HP 3770 every scan with the adapter first switches its light on and waits about 30 seconds for it to warm up, then
 calibrates on the empty slot at the top of the holder: a strip at 1200 dpi takes about two
 minutes. 1200 dpi gives a 35 mm frame about 2 megapixels, fine for the screen and 10 × 15
 prints; the scanner has no infrared, so no automatic dust removal: blow on the film first.

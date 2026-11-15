@@ -17,6 +17,51 @@ use scanner_api::{Error, Result};
 /// takes a strip of six frames or four slides).
 pub const ADAPTER_INCHES: (f64, f64) = (2.7, 9.33);
 
+/// The film window's top our scans leave out, steps of 1/2400 in (0.24 in, 6.1 mm): a read
+/// starting higher would need a start move shorter than its ramps, never captured
+/// ([`geometry`] refuses it; Epson Scan's own previews from the very top go another way, not
+/// read). Only the holders' edge is there: the first frame of a strip starts at 8.8 mm (capture
+/// 74), a slide's at 31.8 mm (capture 80).
+pub const TOP_SKIP_STEPS: u32 = 576;
+
+/// The window as the application sees it ([`for_area`]): [`ADAPTER_INCHES`] less
+/// [`TOP_SKIP_STEPS`] at the top, inches across and along.
+pub const AREA_INCHES: (f64, f64) = (
+    ADAPTER_INCHES.0,
+    ADAPTER_INCHES.1 - TOP_SKIP_STEPS as f64 / 2400.0,
+);
+
+/// The film request for an area of [`AREA_INCHES`] (pixels at `dpi` from its corner), read
+/// along at [`READ_ALONG`]'s resolution: its top [`TOP_SKIP_STEPS`] lower in the window, its
+/// lines enough for `height` once brought back to `dpi` (the image is then cut to `height`), and
+/// never past the window's bottom.
+pub fn for_area(
+    dpi: u32,
+    film: Film,
+    (x, y, width, height): (u32, u32, u32, u32),
+    bits: u8,
+) -> FilmRequest {
+    let ydpi = READ_ALONG
+        .iter()
+        .find(|(d, _)| *d == dpi)
+        .map_or(dpi, |(_, along)| *along);
+    let along = |v: u32| u64::from(v) * u64::from(ydpi) / u64::from(dpi);
+    let top = TOP_SKIP_STEPS * ydpi / 2400;
+    let y_read = along(y) as u32 + top;
+    let max_h = (ADAPTER_INCHES.1 * f64::from(ydpi)).round() as u32;
+    let lines = (u64::from(height) * u64::from(ydpi)).div_ceil(u64::from(dpi)) as u32;
+    FilmRequest {
+        dpi,
+        ydpi,
+        x,
+        y: y_read,
+        width,
+        height: lines.min(max_h.saturating_sub(y_read)),
+        bits,
+        film,
+    }
+}
+
 /// What is in the holder: Epson Scan's "colour negative" or "colour positive" (slides).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Film {
@@ -657,6 +702,33 @@ pub(crate) mod tests {
             assert_eq!(g.start_steps, start, "{r:?}");
             assert_eq!(g.e11, e11, "{r:?}");
             assert_eq!(g.read_ramp(t), ramp, "{r:?}");
+        }
+    }
+
+    /// An area of the application's window is the film request Epson Scan sent for it: capture
+    /// 74's frame (93, 209 in the window at 600 dpi) is (93, 65) for the application; at 4800 dpi
+    /// the lines are read at 5400, enough for the height asked; the window's whole is inside.
+    #[test]
+    fn an_area_of_the_window_is_a_film_request() {
+        let r = for_area(600, Film::Negative, (93, 65, 576, 874), 16);
+        assert_eq!(r, CAPTURED[2].1);
+        assert_eq!(
+            for_area(1200, Film::Negative, (186, 131, 1153, 1749), 16),
+            CAPTURED[3].1
+        );
+        let r = for_area(4800, Film::Negative, (745, 528, 4615, 6997), 16);
+        assert_eq!((r.ydpi, r.y, r.height), (5400, 1890, 7872));
+        assert!(r.height * 4800 / 5400 >= 6997);
+        for dpi in [600, 1200, 2400, 4800] {
+            let (w, h) = (
+                (AREA_INCHES.0 * f64::from(dpi)).round() as u32,
+                (AREA_INCHES.1 * f64::from(dpi)).round() as u32,
+            );
+            for film in [Film::Negative, Film::Positive] {
+                let r = for_area(dpi, film, (0, 0, w, h), 16);
+                crate::guard::check_film_request(&r).unwrap_or_else(|e| panic!("{dpi}: {e}"));
+                geometry(&r, XCorrection(-122)).unwrap_or_else(|e| panic!("{dpi}: {e}"));
+            }
         }
     }
 

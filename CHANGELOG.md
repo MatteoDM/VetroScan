@@ -17,6 +17,13 @@ GitHub; here they are in English.
 
 ## [Unreleased]
 
+### Added
+- Epson Perfection 4490: films. **Film** now appears for the 4490: strips of negatives and
+  slides in the transparency unit of its lid, at 600, 1200, 2400 and 4800 dpi, as Epson Scan
+  scans them (every combination tried on the scanner against Epson Scan's own scans of the same
+  frames). A scan covers the holder's window except its top 6 mm. No dust removal with the
+  infrared yet.
+
 ### Fixed
 - Epson Perfection 4490 on Windows: opening VetroScan while Epson Scan is scanning no longer
   stops Epson Scan's scan (it ended with "cannot communicate with the scanner"): VetroScan now

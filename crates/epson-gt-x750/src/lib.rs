@@ -48,9 +48,9 @@ pub use usbscan::UsbscanTransport;
 
 use protocol::FirmwareOutcome;
 use scanner_api::{
-    ButtonInfo, Capabilities, ColourCorrection, ColourMatrix, ColourMode, DeviceStatus, Error,
-    LampInfo, Progress, Result, ScanMemory, ScanRequest, ScanResult, Source, SuggestedAction, Tone,
-    UsbId,
+    Adapter, ButtonInfo, Capabilities, ColourCorrection, ColourMatrix, ColourMode, DeviceStatus,
+    Error, LampInfo, Progress, Result, ScanMemory, ScanRequest, ScanResult, Source,
+    SuggestedAction, Tone, UsbId,
 };
 use std::fmt;
 use std::path::PathBuf;
@@ -215,7 +215,7 @@ pub fn open_unlocked(location: &str) -> Result<Box<dyn Transport>> {
 }
 
 /// What the 4490 can do: what the guard lets out, as captured and tried on the scanner
-/// (11-12 November 2026). Only the glass, until films are driven.
+/// (the glass 11-14 November 2026, films 14-15 November).
 pub fn capabilities() -> Capabilities {
     let button = |id: &str, label: &str, action| ButtonInfo {
         id: id.into(),
@@ -238,9 +238,15 @@ pub fn capabilities() -> Capabilities {
         // application, as for the HP 3770.
         modes: vec![ColourMode::Colour, ColourMode::Grey, ColourMode::Lineart],
         depths: vec![8, 16],
-        // It has an adapter in its lid (slides, negatives, 6 x 12 cm), not
-        // driven yet: not declared, so the application offers no films.
-        transparency: None,
+        // The transparency unit in its lid: strips of negatives and slides, at the resolutions
+        // Epson Scan was captured scanning both (captures 74-81, 98-101) and ours tried (87-97),
+        // read at 16 bits; the window less its top 6 mm (`film::AREA_INCHES`). Its 6 x 12 cm
+        // holder waits for a capture.
+        transparency: Some(Adapter {
+            area_inches: film::AREA_INCHES,
+            sources: vec![Source::Slide, Source::Negative],
+            resolutions: FILM_RESOLUTIONS.to_vec(),
+        }),
         // Read with `1E 85` (`poll_buttons`), in this order: the scanner
         // answers 1-4 (captured on 11 November 2026).
         buttons: vec![
@@ -276,19 +282,81 @@ pub fn capabilities() -> Capabilities {
 /// holds while it is put together, against one read at its own: the data read and the image
 /// realigned from it are `along / dpi` times the image each, and the image reduced from them is
 /// held beside both (`scan::scan_glass`: `reduce_along(assemble(&raw))` while `raw` lives),
-/// where a scan at its own resolution holds the data and one image. Computed from the code, not
-/// measured.
+/// where a scan at its own resolution holds the data and one image. A film at 4800 dpi is read
+/// along at 5400 the same way (`film::READ_ALONG`); one at 2400 is read twice as wide, the data
+/// twice the image and the image once (1.5, under the glass's 2400). The larger of glass and
+/// film at each resolution. Computed from the code, not measured.
 fn scan_memory() -> Vec<ScanMemory> {
-    setup::READ_ALONG
-        .iter()
-        .map(|&(dpi, along)| {
-            let r = f64::from(along) / f64::from(dpi);
-            ScanMemory {
+    let mut out: Vec<ScanMemory> = Vec::new();
+    for &(dpi, along) in setup::READ_ALONG.iter().chain(film::READ_ALONG.iter()) {
+        let r = f64::from(along) / f64::from(dpi);
+        let times = (2.0 * r + 1.0) / 2.0;
+        match out.iter_mut().find(|m| u32::from(m.dpi) == dpi) {
+            Some(m) => m.times = m.times.max(times),
+            None => out.push(ScanMemory {
                 dpi: dpi as u16,
-                times: (2.0 * r + 1.0) / 2.0,
-            }
-        })
-        .collect()
+                times,
+            }),
+        }
+    }
+    out
+}
+
+/// The resolutions films are scanned at: those Epson Scan was captured scanning negatives and
+/// slides at, 16 bits (`guard::FILM_COVERED`).
+pub const FILM_RESOLUTIONS: [u16; 4] = [600, 1200, 2400, 4800];
+
+/// The film request for an application's request from the adapter ([`film::for_area`]): a
+/// negative or a slide, always read at 16 bits (the depth captured at every film resolution).
+fn film_request(request: &ScanRequest) -> film::FilmRequest {
+    let kind = if request.source == Source::Slide {
+        film::Film::Positive
+    } else {
+        film::Film::Negative
+    };
+    let a = request.area;
+    film::for_area(
+        u32::from(request.dpi),
+        kind,
+        (a.x, a.y, a.width, a.height),
+        16,
+    )
+}
+
+/// A film's [`ScanResult`]: its image cut to `height` lines (read along at another resolution
+/// it may have a line more, [`film::for_area`]), the 16-bit samples too when `deep`.
+pub fn film_result_of(s: scan::FilmScanned, dpi: u16, height: u32, deep: bool) -> ScanResult {
+    let im = s.image;
+    let height = im.height.min(height);
+    let wide: Vec<u16> = im.data[..height as usize * im.width as usize * 6]
+        .chunks_exact(2)
+        .map(|b| u16::from_le_bytes([b[0], b[1]]))
+        .collect();
+    let c = &s.calibration;
+    ScanResult {
+        image: scan_imaging::Image {
+            width: im.width as usize,
+            height: height as usize,
+            dpi,
+            format: scan_imaging::Format::Rgb,
+            data: wide.iter().map(|&v| (v >> 8) as u8).collect(),
+        },
+        samples16: deep.then_some(wide),
+        details: vec![
+            (
+                "columns read".into(),
+                format!(
+                    "{}-{}",
+                    c.plan.geometry.columns.0, c.plan.geometry.columns.1
+                ),
+            ),
+            (
+                "film exposures".into(),
+                format!("{:?} µs, gains {:02x?}", c.exposures, c.image_gains),
+            ),
+            ("lid unit's move back".into(), format!("{} steps", c.back)),
+        ],
+    }
 }
 
 /// Epson Scan's correction of the glass's colours: it sends the scanner no colour correction
@@ -456,6 +524,10 @@ pub struct Gt4490 {
     recovered: Vec<String>,
     /// Where a scan in progress is marked ([`mark`]).
     mark: PathBuf,
+    /// A film scan of ours chose the lid's lamp, and no glass scan has switched back since:
+    /// `1E A2 00` with it chosen was never captured, so [`scanner_api::Scanner::lamp_off`]
+    /// leaves it to the scanner (it switches off by itself after about 15 minutes).
+    lid_lamp: bool,
 }
 
 impl Gt4490 {
@@ -508,6 +580,7 @@ impl Gt4490 {
             lamp_used: None,
             recovered,
             mark,
+            lid_lamp: false,
         })
     }
 
@@ -565,6 +638,42 @@ fn settle(t: &mut guard::Guarded<Box<dyn Transport>>) -> Result<Vec<String>> {
     Ok(log)
 }
 
+impl Gt4490 {
+    /// A film's scan for the application ([`scanner_api::Scanner::scan`]): Epson Scan's
+    /// sequence ([`scan::scan_film`], a slide's image exposure as its white's).
+    fn scan_film(
+        &mut self,
+        request: &ScanRequest,
+        progress: &mut dyn FnMut(Progress) -> bool,
+    ) -> Result<ScanResult> {
+        let r = film_request(request);
+        // Marked until it ends, as a glass scan.
+        let _mark = mark::ScanMark::begin(&self.mark);
+        self.lid_lamp = true;
+        let scanned =
+            scan::scan_film(
+                &mut self.transport,
+                &r,
+                10,
+                &mut |_| {},
+                &mut |event| match event {
+                    scan::Event::WarmingUp { .. } => progress(Progress::WarmingUp),
+                    scan::Event::Calibrating => progress(Progress::Calibrating),
+                    scan::Event::Reading { done, total } => {
+                        progress(Progress::Scanning { done, total })
+                    }
+                },
+            )?;
+        progress(Progress::Finishing);
+        Ok(film_result_of(
+            scanned,
+            request.dpi,
+            request.area.height,
+            request.depth == 16,
+        ))
+    }
+}
+
 impl scanner_api::Scanner for Gt4490 {
     fn capabilities(&self) -> &Capabilities {
         &self.caps
@@ -595,29 +704,32 @@ impl scanner_api::Scanner for Gt4490 {
         }
         details.push((
             "Backend".into(),
-            "glass scans computed from the request".into(),
+            "glass and film scans computed from the request".into(),
         ));
         Ok(DeviceStatus {
             ready: state.firmware_running() && !state.busy() && !state.error(),
             lamp: None,
-            adapter: None,
+            // The transparency unit is part of the lid: always there (whether its cable is
+            // plugged in is not asked: its lamp would not light).
+            adapter: Some(true),
             details,
         })
     }
 
-    /// Scans the glass ([`scan::scan_glass`]): linear samples, 8 bits, and the 16-bit ones
-    /// too when asked. A cold lamp gets its warm-up first (`Progress::WarmingUp`).
+    /// Scans the glass ([`scan::scan_glass`]) or a film in the lid ([`scan::scan_film`]):
+    /// linear samples, 8 bits, and the 16-bit ones too when asked. A cold lamp gets its warm-up
+    /// first (`Progress::WarmingUp`); the lid's lamp is waited for as long as the scanner says.
     fn scan(
         &mut self,
         request: &ScanRequest,
         progress: &mut dyn FnMut(Progress) -> bool,
     ) -> Result<ScanResult> {
         scanner_api::check(&self.caps, request)?;
-        if request.source.is_film() {
-            return Err(Error::Unsupported("films on the Epson 4490"));
-        }
         if !progress(Progress::Starting) {
             return Err(Error::Cancelled);
+        }
+        if request.source.is_film() {
+            return self.scan_film(request, progress);
         }
         let a = request.area;
         let r = setup::Request::glass(
@@ -662,12 +774,18 @@ impl scanner_api::Scanner for Gt4490 {
             });
         }
         let s = scanned?;
+        // Back to the glass's lamp (`1E 77` at the opening when the lid's was chosen).
+        self.lid_lamp = false;
         progress(Progress::Finishing);
         Ok(result_of(s, request.dpi))
     }
 
-    /// `1E A2 00`; the next scan takes the lamp to be cold.
+    /// `1E A2 00`; the next scan takes the lamp to be cold. After a film, with the lid's lamp
+    /// chosen, nothing is sent (never captured): the scanner switches it off by itself.
     fn lamp_off(&mut self) -> Result<()> {
+        if self.lid_lamp {
+            return Ok(());
+        }
         protocol::lamp_off(&mut self.transport)?;
         self.lamp_used = None;
         Ok(())
@@ -704,14 +822,16 @@ mod tests {
     }
 
     /// 2400 dpi is read along at 3200 and reduced: the data and the image realigned from it
-    /// are 4/3 of the image each, beside the image reduced; every other resolution holds the
-    /// data and one image, as the application's estimate counts.
+    /// are 4/3 of the image each, beside the image reduced; a film at 4800 is read along at 5400
+    /// the same way (9/8); every other resolution holds the data and one image, as the
+    /// application's estimate counts.
     #[test]
     fn the_memory_declared_is_the_reduction_s() {
         let c = capabilities();
-        assert_eq!(c.scan_memory.len(), 1);
+        assert_eq!(c.scan_memory.len(), 2);
         assert!((c.scan_memory_at(2400) - 11.0 / 6.0).abs() < 1e-12);
-        for dpi in [100, 200, 300, 400, 600, 1200, 4800] {
+        assert!((c.scan_memory_at(4800) - 13.0 / 8.0).abs() < 1e-12);
+        for dpi in [100, 200, 300, 400, 600, 1200] {
             assert_eq!(c.scan_memory_at(dpi), 1.0, "{dpi}");
         }
     }
@@ -742,7 +862,63 @@ mod tests {
         let lamp = caps.lamp.expect("a lamp the host switches off");
         assert_eq!(lamp.warm_up, Duration::from_secs(150));
         assert_eq!(lamp.switches_off_after, Some(Duration::from_secs(900)));
-        assert!(!caps.offers(Source::Negative));
+        // Films in the lid: negatives and slides at the resolutions captured, the window less
+        // its top 6 mm.
+        for source in [Source::Negative, Source::Slide] {
+            assert!(caps.offers(source));
+            assert_eq!(caps.resolutions_for(source), [600, 1200, 2400, 4800]);
+            assert_eq!(caps.bed_inches(source), Some(film::AREA_INCHES));
+        }
+        assert_eq!(caps.bed_pixels(Source::Negative, 600), Some((1620, 5454)));
+    }
+
+    /// A strip's frame scanned through the application's contract writes what Epson Scan wrote
+    /// in capture 74, to its last line: capture 74's frame in the application's window (its
+    /// top 6 mm left out), the 16-bit samples and the 8-bit ones.
+    #[test]
+    fn the_application_scans_a_film() {
+        let text = format!(
+            "P 1b03 1881
+P 1b03 1881
+{}",
+            include_str!("../testdata/74_film.txt")
+        );
+        let f =
+            scan::tests::Follow::film("74", &text, include_str!("../testdata/74_film_reads.txt"));
+        let mut s = Gt4490::start(Box::new(f), || panic!("no firmware needed")).unwrap();
+        let request = ScanRequest {
+            dpi: 600,
+            source: Source::Negative,
+            area: Area {
+                x: 93,
+                y: 65,
+                width: 576,
+                height: 874,
+            },
+            depth: 16,
+        };
+        let mut seen = Vec::new();
+        let result = s
+            .scan(&request, &mut |p| {
+                if !matches!(seen.last(), Some(Progress::Scanning { .. }))
+                    || !matches!(p, Progress::Scanning { .. })
+                {
+                    seen.push(p);
+                }
+                true
+            })
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!((result.image.width, result.image.height), (576, 874));
+        assert_eq!(result.image.data.len(), 576 * 874 * 3);
+        assert_eq!(result.samples16.as_ref().map(Vec::len), Some(576 * 874 * 3));
+        assert_eq!(seen[..2], [Progress::Starting, Progress::Calibrating]);
+        assert!(matches!(seen[2], Progress::Scanning { .. }), "{seen:?}");
+        assert_eq!(seen.last(), Some(&Progress::Finishing));
+        // The lid's lamp is left to switch off by itself: nothing is sent.
+        s.lamp_off().unwrap();
+        // The whole capture was written: nothing is left to answer the next command.
+        let e = s.status().unwrap_err().to_string();
+        assert!(e.contains("the capture None"), "{e}");
     }
 
     #[test]
@@ -838,7 +1014,7 @@ mod tests {
         };
         // Not a resolution of the capabilities.
         assert!(s.scan(&request, &mut |_| true).is_err());
-        // Films: no adapter declared.
+        // Films: not at a resolution of the adapter's.
         request.dpi = 300;
         request.source = Source::Negative;
         assert!(s.scan(&request, &mut |_| true).is_err());
