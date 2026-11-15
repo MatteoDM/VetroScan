@@ -82,17 +82,17 @@ pub const COVERED: [(u32, u8); 16] = [
 ];
 
 /// The film requests a scan may send: resolution across and along, bits, the films, as Epson
-/// Scan was captured sending them (14 November 2026; captures 16-19 and 72-81): its preview of
-/// the whole window at 300 dpi, 8 bits; a negative at 600, 1200 and 2400 dpi, 16 bits, at 2400
-/// at 8 bits too, and at 4800 dpi read along at 5400 ([`film::READ_ALONG`]); a slide at 2400
-/// dpi, 16 bits. Digital ICE's second pass (capture 18) is not here.
+/// Scan was captured sending them (captures 16-19 and 72-81, 14 November 2026; 98-101, 15
+/// November): its preview of the whole window at 300 dpi, 8 bits; negatives and slides at 600,
+/// 1200, 2400 and 4800 dpi (read along at 5400, [`film::READ_ALONG`]), 16 bits; a negative at
+/// 2400 at 8 bits too. Digital ICE's second pass (capture 18) is not here.
 pub const FILM_COVERED: [(u32, u32, u8, &[Film]); 6] = [
     (300, 300, 8, &[Film::Negative, Film::Positive]),
-    (600, 600, 16, &[Film::Negative]),
-    (1200, 1200, 16, &[Film::Negative]),
+    (600, 600, 16, &[Film::Negative, Film::Positive]),
+    (1200, 1200, 16, &[Film::Negative, Film::Positive]),
     (2400, 2400, 16, &[Film::Negative, Film::Positive]),
     (2400, 2400, 8, &[Film::Negative]),
-    (4800, 5400, 16, &[Film::Negative]),
+    (4800, 5400, 16, &[Film::Negative, Film::Positive]),
 ];
 
 /// The line times (µs) each resolution was captured with: the motor's speed
@@ -290,8 +290,9 @@ enum Expect {
 }
 
 /// The line times a film's `1E 21` may carry, µs: from the origin read's 6144 to the window
-/// reads' 25,344 (captures 17, 72-81); every one a multiple of 384.
-pub const FILM_LINE_TIMES: std::ops::RangeInclusive<u32> = 6144..=25_344;
+/// reads' 27,264 (captures 17, 72-81, 98-101: a slide at 4800 dpi, 101); every one a multiple
+/// of 384.
+pub const FILM_LINE_TIMES: std::ops::RangeInclusive<u32> = 6144..=27_264;
 
 /// The moves back the lid unit may make after its origin read (`1E 8A` less 1024): those Epson
 /// Scan was seen to make (228, 240, 252) and one line of the read (12 steps) either side, 216
@@ -1376,8 +1377,11 @@ mod tests {
     #[test]
     fn film_requests_never_captured_are_refused() {
         let refused = [
-            // A slide at 600 dpi (only negatives were scanned there).
-            film_like(2, |r| r.film = Film::Positive),
+            // A slide at 8 bits (only negatives were scanned so, at 2400).
+            film_like(6, |r| {
+                r.film = Film::Positive;
+                r.bits = 8
+            }),
             // 1200 dpi at 8 bits.
             film_like(3, |r| r.bits = 8),
             // 4800 read along at 4800 (Epson Scan read 5400).
@@ -1503,7 +1507,8 @@ mod tests {
             (13_440, true),
             (13_441, false),
             (5760, false),
-            (25_728, false),
+            (27_264, true),
+            (27_648, false),
         ] {
             t.bulk_out(&[0x1E, 0x21]).unwrap();
             assert_eq!(t.bulk_out(&block(lt)).is_ok(), ok, "{lt}");

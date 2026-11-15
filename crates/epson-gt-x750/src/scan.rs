@@ -2371,8 +2371,9 @@ pub(crate) mod tests {
         );
     }
 
-    /// The same for capture 77 (base 4800, a third exposure round) and 80 (a slide, Epson
-    /// Scan's image factor 15).
+    /// The same for capture 77 (base 4800, a third exposure round), 80 (a slide, Epson Scan's
+    /// image factor 15) and slide 1 at 600, 1200 and 4800 dpi (99, 100, 101: factor 10; at 4800 a
+    /// line time of 27,264 µs).
     #[test]
     #[allow(clippy::type_complexity)]
     fn films_scans_at_4800_and_of_a_slide_are_epson_scans() {
@@ -2386,7 +2387,7 @@ pub(crate) mod tests {
             [u32; 3],
             [u8; 3],
             [u8; 3],
-        ); 2] = [
+        ); 5] = [
             (
                 "77",
                 include_str!("../testdata/77_film.txt"),
@@ -2409,6 +2410,39 @@ pub(crate) mod tests {
                 [0x18, 0x1B, 0x18],
                 [0x18, 0x1B, 0x18],
             ),
+            (
+                "99",
+                include_str!("../testdata/99_film.txt"),
+                include_str!("../testdata/99_film_reads.txt"),
+                11,
+                10,
+                [0x90, 0x8C, 0x90],
+                [18_168, 6219, 5927],
+                [0x18, 0x1B, 0x18],
+                [0x18, 0x1B, 0x18],
+            ),
+            (
+                "100",
+                include_str!("../testdata/100_film.txt"),
+                include_str!("../testdata/100_film_reads.txt"),
+                12,
+                10,
+                [0x90, 0x8C, 0x90],
+                [18_084, 6176, 5967],
+                [0x18, 0x1B, 0x18],
+                [0x18, 0x1B, 0x18],
+            ),
+            (
+                "101",
+                include_str!("../testdata/101_film.txt"),
+                include_str!("../testdata/101_film_reads.txt"),
+                13,
+                10,
+                [0x88, 0x80, 0x88],
+                [18_078, 6133, 5772],
+                [0x18, 0x1B, 0x18],
+                [0x18, 0x1B, 0x18],
+            ),
         ];
         for (name, text, reads, i, factor, offsets, exposures, gains, image_gains) in cases {
             let request = crate::film::tests::CAPTURED[i].1;
@@ -2422,9 +2456,11 @@ pub(crate) mod tests {
             );
             let geo = c.plan.geometry;
             assert_eq!(s.raw.len() as u32, geo.lines * geo.line_bytes(16), "{name}");
+            // At 4800 dpi the lines read at 5400 brought to 4800 (101: 5102 to 4535, as Epson
+            // Scan's TIFF).
             assert_eq!(
                 (s.image.width, s.image.height),
-                (request.width, request.height),
+                (request.width, request.height * request.dpi / request.ydpi),
                 "{name}"
             );
         }

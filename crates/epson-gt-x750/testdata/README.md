@@ -30,9 +30,10 @@ Windows' button polls (`1E 85`) are left out.
 lights the lid's lamp before a negative's preview, which `scan::light_lid_lamp` writes again
 line by line in a test.
 
-`74_film.txt`, `77_film.txt`, `80_film.txt` are Epson Scan's film captures 74 (a negative at 600
-dpi), 77 (at 2400) and 80 (a slide at 2400), stripped with their data lines; `*_film_reads.txt`
+`74_film.txt`, `77_film.txt`, `80_film.txt`, `99_film.txt`, `100_film.txt`, `101_film.txt` are
+Epson Scan's film captures 74 (a negative at 600 dpi), 77 (at 2400), 80 (a slide at 2400) and
+99-101 (the slide at 600, 1200 and 4800), stripped with their data lines; `*_film_reads.txt`
 sum up each of their reads with what the film's rules take from it (the origin read's line
 levels, the black pixels' sums, the window reads' line maxima: `film_testdata.py` in
 `captures/epson4490/tools`), so that a test makes up reads that give the same decisions:
-`scan::calibrate_film` writes what Epson Scan wrote, line by line, from the lamp to the dark read.
+`scan::scan_film` writes what Epson Scan wrote, line by line, from the lamp to the image read.

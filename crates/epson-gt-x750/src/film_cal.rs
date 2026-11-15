@@ -85,10 +85,11 @@ pub fn exposure_round(x: [u32; 3], level: [u32; 3], held: [bool; 3], cap: u32) -
 
 /// The longest exposure a window read may ask at `base`: its line time (the margin + the
 /// longest exposure, [`window_block21`]) kept within the longest Epson Scan was captured
-/// sending, 25,344 µs (`crate::guard::FILM_LINE_TIMES`; captures 80, 81: a slide's red at
-/// 16,213 and 16,272 µs). Our first slide (capture 94, 15 November 2026) asked more than that
-/// for its red: Epson Scan's own limit is in a table of its interpreter not read (`0x40c820`);
-/// ours keeps the scanner inside what was captured, the red a little under its level.
+/// sending (`crate::guard::FILM_LINE_TIMES`: 27,264 µs, a slide at 4800 dpi, capture 101, its
+/// red at 18,078 µs). Our first slide (capture 94) asked more than the 25,344 µs then captured
+/// and was stopped by the guard; Epson Scan's own limit is in a table of its interpreter not read
+/// (`0x40c820`): ours keeps the scanner inside what was captured, a channel at the limit a little
+/// under its level.
 pub fn exposure_cap(base: u32) -> u32 {
     crate::guard::FILM_LINE_TIMES.end() - margin(base)
 }
@@ -385,26 +386,25 @@ mod tests {
     }
 
     /// A channel that would need a line time longer than any captured stops at its limit, and
-    /// the loop ends when nothing more moves (our first slide, capture 94: red 16,355 µs, then
-    /// more asked).
+    /// the loop ends when nothing more moves.
     #[test]
     fn an_exposure_stops_at_the_longest_line_time_captured() {
         let cap = exposure_cap(4800);
-        assert_eq!(cap, 16_363);
-        assert_eq!(cap + margin(4800), 25_344);
-        assert_eq!(exposure_cap(2400) + margin(2400), 25_344);
-        let x = [16_355, 5927, 5661];
+        assert_eq!(cap, 18_283);
+        assert_eq!(cap + margin(4800), 27_264);
+        assert_eq!(exposure_cap(2400) + margin(2400), 27_264);
+        let x = [18_000, 5927, 5661];
         assert_eq!(
-            exposure_round(x, [218, 230, 228], [false; 3], cap),
-            Some([16_363, 5927, 5661])
+            exposure_round(x, [220, 230, 228], [false; 3], cap),
+            Some([18_283, 5927, 5661])
         );
         assert_eq!(
-            exposure_round([16_363, 5927, 5661], [219, 230, 228], [false; 3], cap),
+            exposure_round([18_283, 5927, 5661], [219, 230, 228], [false; 3], cap),
             None
         );
         // Its line time is the longest captured.
-        let b = window_block21(4800, [16_363, 5927, 5661], false, 2);
-        assert_eq!(u32::from_le_bytes([b[0], b[1], b[2], 0]), 25_344);
+        let b = window_block21(4800, [18_283, 5927, 5661], false, 2);
+        assert_eq!(u32::from_le_bytes([b[0], b[1], b[2], 0]), 27_264);
     }
 
     #[test]

@@ -1744,6 +1744,16 @@ never run by us (step 12).
     now stops at that limit (`film_cal::exposure_cap`) and the loop ends when nothing more moves
     (96: red 16,363). A scan stopped half-way leaves the carriages where they were; the next opening
     refuses to start from there, and the scanner then takes them home by itself (88, 95).
+    **Slides at every resolution** (15 November 2026; Matteo at Epson Scan, captures 98-101,
+    `05-catture.md`): Epson Scan's preview of slides and slide 1 at 600, 1200 and 4800 dpi, 16 bits,
+    with their TIFFs. The same sequence as capture 80 at each; the red's exposure up to 18,168 µs,
+    and at 4800 dpi window reads with a line time of 27,264 µs (the longest captured before:
+    25,344): `guard::FILM_LINE_TIMES` and `film_cal::exposure_cap` follow it. The lines read are
+    rounded up to a multiple of the motor ratio's denominator (9 at 5400: 101 read 5328, 76 8100),
+    the staggered lines being ydpi / 600 (`film::geometry`; the model's `--check` 0 differences on
+    all eleven film scans). Tests follow 99, 100 and 101 write by write to their last line (Epson
+    Scan's image factor 10 in all three); the guard now lets out slides at 600, 1200, 2400 and 4800
+    dpi, 16 bits. `film_image.py --assemble` against their TIFFs: 0.996-1.000.
     **Left of step 14**, what Epson Scan computes from its calibration reads (each in the
     captures with its reads, to rebuild the same way): N from the 150-line read; the line time T and
     the three exposures of `1E 21` (from reads of the window at T 9600 / 13,056 and exposures

@@ -22,8 +22,8 @@
 //! (Epson Scan's preview of the whole window, 68.6 x 237 mm), or with `--pixels` in pixels at
 //! DPI (along at the resolution read along: 5400 for 4800 dpi), a negative unless `--positive`,
 //! 16 bits unless `--bits 8`. The guard refuses what Epson Scan was never captured asking
-//! (negatives at 600, 1200, 2400 and 4800 dpi, slides at 2400; a frame too near the window's
-//! top). Without `--move` it prints the plan and what the guard says of it, and sends nothing.
+//! (negatives and slides at 600, 1200, 2400 and 4800 dpi, 16 bits, and negatives at 2400 at 8;
+//! a frame too near the window's top). Without `--move` it prints the plan and what the guard says of it, and sends nothing.
 //! The carriages must be home or where the scanner puts them when it lights the lid's lamp again
 //! (1994, 1078); Epson Scan closed. Killed half-way (Ctrl+C) it leaves the scanner as a killed
 //! `scan` does: `epson4490 recover` stops it with `1E 18` (never tried on films).
@@ -1253,7 +1253,9 @@ mod tests {
         assert!(show_film_plan(&px));
         let r = film_request(&args(["4800", "4", "10", "24", "37"]), 16, true, false).unwrap();
         assert_eq!((r.ydpi, r.y, r.film), (5400, 2126, Film::Positive));
-        // A slide at 4800 dpi was never captured: refused.
+        assert!(show_film_plan(&r));
+        // A slide at 8 bits was never captured: refused.
+        let r = film_request(&args(["2400", "4", "10", "24", "37"]), 8, true, false).unwrap();
         assert!(!show_film_plan(&r));
         assert!(film_request(&args(["600", "-1", "0", "1", "1"]), 16, false, false).is_err());
     }

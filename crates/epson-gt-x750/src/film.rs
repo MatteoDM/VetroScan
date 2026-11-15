@@ -126,7 +126,8 @@ pub struct Geometry {
     /// `1E 21`'s words at bytes 13-14 and 15-16 for the reads of the image's columns.
     pub words: (u16, u16),
     /// Lines read: the image's, the colours' offsets (2 x ydpi / 50) and, read at 4800 across,
-    /// the staggered columns' (4 lines at 2400 along, 12 at 5400).
+    /// the staggered columns' (ydpi / 600: 4 lines at 2400 along, 9 at 5400), rounded up to a
+    /// multiple of the motor ratio's denominator (9 at 5400).
     pub lines: u32,
     /// `1E 41`'s byte 8: the ratio of `read_dpi` to `base`, `| 1` at 8 bits.
     pub b8: u8,
@@ -200,12 +201,11 @@ pub fn geometry(r: &FilmRequest, corr: XCorrection) -> Result<Geometry> {
     let w1 = (((r8 + count + 160) >> 1) + 2 * r9) >> 1;
     let g = gcd(r.ydpi, 2400);
     let (den, num) = (r.ydpi / g, 2400 / g);
-    let stagger = match r.ydpi {
-        2400 => 4,
-        5400 => 12,
-        _ => 0,
-    };
-    let lines = r.height + 2 * (r.ydpi / 50) + stagger;
+    // The staggered columns' lines when read at 4800 across (4 at 2400 along, 9 at 5400), the
+    // lines rounded up to a multiple of the ratio's denominator (9 at 5400: 8100 in capture 76,
+    // 5328 in 101).
+    let stagger = if read_dpi == 4800 { r.ydpi / 600 } else { 0 };
+    let lines = (r.height + 2 * (r.ydpi / 50) + stagger).div_ceil(den) * den;
     let line_bytes = pixels * 3 * u32::from(r.bits) / 8;
     let ratio_code = match base / read_dpi {
         1 => 0x00,
@@ -369,7 +369,7 @@ pub(crate) mod tests {
 
     /// Every film request Epson Scan sent (its ICE pass, capture 18, aside), and the request it
     /// was made from.
-    pub(crate) const CAPTURED: [(&str, FilmRequest); 11] = {
+    pub(crate) const CAPTURED: [(&str, FilmRequest); 14] = {
         #[allow(clippy::too_many_arguments)]
         const fn r(
             dpi: u32,
@@ -442,6 +442,19 @@ pub(crate) mod tests {
             (
                 "60090000600900001906000040480000490d0000db080000131001000c04000000000000000000000000",
                 r(2400, 2400, 1561, 18496, 3401, 2267, 16, P),
+            ),
+            // 99, 100, 101: slide 1 at 600, 1200 and 4800 dpi, 16 bits.
+            (
+                "58020000580200009d010000e40200005203000036020000131001002004000000000000000000000000",
+                r(600, 600, 413, 740, 850, 566, 16, P),
+            ),
+            (
+                "b0040000b00400003b030000c9050000a40600006d040000131001001904000000000000000000000000",
+                r(1200, 1200, 827, 1481, 1700, 1133, 16, P),
+            ),
+            (
+                "c012000018150000ed0c0000091a0000931a0000ee130000131001000604000000000000000000000000",
+                r(4800, 5400, 3309, 6665, 6803, 5102, 16, P),
             ),
         ]
     };
