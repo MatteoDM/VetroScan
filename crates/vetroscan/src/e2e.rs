@@ -136,6 +136,20 @@ impl Ui {
         ui.find(label).is_ok()
     }
 
+    /// Hands the app what the scanner sent until its state says the
+    /// adapter is `plugged` (or not): on a busy machine the answer to
+    /// RefreshStatus can come later than `settle` waits.
+    fn adapter_state(&mut self, plugged: bool) {
+        while !matches!(&self.app.status, Some(Ok(s)) if s.adapter == Some(plugged)) {
+            let event = self
+                .events
+                .recv_timeout(Duration::from_secs(20))
+                .expect("the scanner state");
+            self.send(Message::Worker(event));
+        }
+        self.settle();
+    }
+
     /// Presses a key (as the keyboard subscription would deliver it).
     fn key(&mut self, key: iced::keyboard::key::Named) {
         let iced::Event::Keyboard(event) = iced_test::simulator::press_key(key, None) else {
@@ -1633,7 +1647,7 @@ fn films_need_the_adapter_and_its_cable() {
     // changes nothing.
     controls.unplug_adapter(true);
     ui.send(Message::RefreshStatus);
-    ui.settle();
+    ui.adapter_state(false);
     ui.click("Pellicola");
     assert!(!ui.app.filming());
     assert!(ui.app.note.contains("non è collegato"), "{}", ui.app.note);
@@ -1670,7 +1684,7 @@ fn frames_scanned_stay_to_see_and_save_with_the_adapter_unplugged() {
     assert!(ui.app.pages.is_empty());
     controls.unplug_adapter(true);
     ui.send(Message::RefreshStatus);
-    ui.settle();
+    ui.adapter_state(false);
     ui.click("Pellicola");
     assert!(ui.app.filming());
     assert_eq!(scans(&ui), frames);
