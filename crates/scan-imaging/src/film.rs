@@ -133,47 +133,69 @@ pub fn base_in(samples: &[u16], image_width: usize, rect: [usize; 4]) -> Option<
 }
 
 /// The film base in the gaps between frames of a strip: the median of the
-/// samples between each two consecutive `frames` (in pixels of the linear
-/// RGB `samples`, `image_width` pixels wide, as [`frames`] gives them),
-/// over the middle half of the gap along the strip and of the frames'
-/// breadth across it. The gaps are bare film, never exposed: unlike
-/// [`base_auto`], light leaking past the film's edges cannot pass for it.
-/// `None` with fewer than two frames or no gap between them.
+/// samples between each two `frames` next to each other on the same strip
+/// (in pixels of the linear RGB `samples`, `image_width` pixels wide, as
+/// [`frames`] gives them), over the middle half of the gap along the strip
+/// and of the frames' breadth across it. The gaps are bare film, never
+/// exposed: unlike [`base_auto`], light leaking past the film's edges
+/// cannot pass for it. Two frames are neighbours when one lies along the
+/// other's length, less than a frame away: with strips side by side the
+/// reading order goes from one strip to the other (the Epson 4490's holder,
+/// two strips), and what lies between them is the holder. A gap that is
+/// mostly not film (the holder's bar over it) is left out too. `None` with
+/// no gap between neighbours.
 pub fn base_between(samples: &[u16], image_width: usize, frames: &[Found]) -> Option<[f32; 3]> {
     let height = samples.len() / 3 / image_width.max(1);
     let mut channels: [Vec<u16>; 3] = Default::default();
-    for pair in frames.windows(2) {
-        let (a, b) = (pair[0], pair[1]);
-        let (dx, dy) = (b.cx - a.cx, b.cy - a.cy);
-        let distance = (dx * dx + dy * dy).sqrt();
-        if distance <= 0.0 {
-            continue;
-        }
-        let (ux, uy) = (dx / distance, dy / distance);
-        // The frames' length along the line joining them, and breadth.
-        let along_u = (ux * a.angle.to_radians().cos() + uy * a.angle.to_radians().sin()).abs();
-        let (length, breadth) = if along_u > 0.7 {
-            (a.width, a.height)
+    for (i, a) in frames.iter().enumerate() {
+        // The frame's length, as a unit vector, and its breadth.
+        let (s, c) = a.angle.to_radians().sin_cos();
+        let (u, length, breadth) = if a.width >= a.height {
+            ([c, s], a.width, a.height)
         } else {
-            (a.height, a.width)
+            ([-s, c], a.height, a.width)
         };
-        let gap = distance - length;
-        if gap < 2.0 {
-            continue;
-        }
-        let (mx, my) = ((a.cx + b.cx) / 2.0, (a.cy + b.cy) / 2.0);
-        let (half_along, half_across) = (gap / 4.0, breadth / 4.0);
-        let reach = (half_along.max(half_across) + 1.0) as i64;
-        for y in (my as i64 - reach).max(0)..=(my as i64 + reach).min(height as i64 - 1) {
-            for x in (mx as i64 - reach).max(0)..=(mx as i64 + reach).min(image_width as i64 - 1) {
-                let (px, py) = (x as f32 + 0.5 - mx, y as f32 + 0.5 - my);
-                let along = px * ux + py * uy;
-                let across = -px * uy + py * ux;
-                if along.abs() <= half_along && across.abs() <= half_across {
-                    let i = (y as usize * image_width + x as usize) * 3;
-                    for (c, values) in channels.iter_mut().enumerate() {
-                        values.push(samples[i + c]);
+        for b in &frames[i + 1..] {
+            let (dx, dy) = (b.cx - a.cx, b.cy - a.cy);
+            let along_d = dx * u[0] + dy * u[1];
+            let across_d = -dx * u[1] + dy * u[0];
+            // On the same strip, the next frame along it.
+            if across_d.abs() > breadth / 2.0 || along_d.abs() >= 2.0 * length {
+                continue;
+            }
+            let gap = along_d.abs() - length;
+            if gap < 2.0 {
+                continue;
+            }
+            let (ux, uy) = if along_d >= 0.0 {
+                (u[0], u[1])
+            } else {
+                (-u[0], -u[1])
+            };
+            let (mx, my) = ((a.cx + b.cx) / 2.0, (a.cy + b.cy) / 2.0);
+            let (half_along, half_across) = (gap / 4.0, breadth / 4.0);
+            let reach = (half_along.max(half_across) + 1.0) as i64;
+            let mut here: Vec<[u16; 3]> = Vec::new();
+            for y in (my as i64 - reach).max(0)..=(my as i64 + reach).min(height as i64 - 1) {
+                for x in
+                    (mx as i64 - reach).max(0)..=(mx as i64 + reach).min(image_width as i64 - 1)
+                {
+                    let (px, py) = (x as f32 + 0.5 - mx, y as f32 + 0.5 - my);
+                    let along = px * ux + py * uy;
+                    let across = -px * uy + py * ux;
+                    if along.abs() <= half_along && across.abs() <= half_across {
+                        let k = (y as usize * image_width + x as usize) * 3;
+                        here.push([samples[k], samples[k + 1], samples[k + 2]]);
                     }
+                }
+            }
+            let film = here.iter().filter(|p| is_film(&p[..])).count();
+            if film * 2 < here.len() {
+                continue;
+            }
+            for p in here {
+                for (c, values) in channels.iter_mut().enumerate() {
+                    values.push(p[c]);
                 }
             }
         }
@@ -337,9 +359,19 @@ impl Negative {
     /// The positive of linear RGB `samples`: linear 16-bit samples of the
     /// scene's light, black at 0, white at full scale.
     pub fn positive(&self, samples: &[u16]) -> Vec<u16> {
+        let tables = self.tables();
+        samples
+            .iter()
+            .enumerate()
+            .map(|(i, &v)| tables[i % 3][usize::from(v)])
+            .collect()
+    }
+
+    /// For each channel, the positive's sample of every sample value.
+    fn tables(&self) -> [Vec<u16>; 3] {
         let range = self.scene_range();
         let floor = 10f32.powf(-range);
-        let tables: [Vec<u16>; 3] = std::array::from_fn(|c| {
+        std::array::from_fn(|c| {
             let base_log = self.base[c].clamp(1.0 / FULL, 1.0).log10();
             (0..=u16::MAX)
                 .map(|v| {
@@ -349,12 +381,7 @@ impl Negative {
                     (light * FULL).round().clamp(0.0, FULL) as u16
                 })
                 .collect()
-        });
-        samples
-            .iter()
-            .enumerate()
-            .map(|(i, &v)| tables[i % 3][usize::from(v)])
-            .collect()
+        })
     }
 }
 
@@ -513,6 +540,186 @@ pub fn measure_strip_with(
         frames: found,
         gaps,
     })
+}
+
+/// The strips among the `frames` of negatives found in a holder: the
+/// frames lying along one line, one along another's length (any number of
+/// frames apart: a frame left blank does not split a strip). Two strips
+/// side by side (the Epson 4490's holder) are two groups; the HP 3770's
+/// holder, one strip, is one. In the order of their first frame.
+pub fn strips_of(frames: &[Found]) -> Vec<Vec<Found>> {
+    let mut group: Vec<usize> = (0..frames.len()).collect();
+    fn root(group: &mut [usize], mut i: usize) -> usize {
+        while group[i] != i {
+            group[i] = group[group[i]];
+            i = group[i];
+        }
+        i
+    }
+    for (i, a) in frames.iter().enumerate() {
+        let (s, c) = a.angle.to_radians().sin_cos();
+        let (u, breadth) = if a.width >= a.height {
+            ([c, s], a.height)
+        } else {
+            ([-s, c], a.width)
+        };
+        for (j, b) in frames.iter().enumerate().skip(i + 1) {
+            let (dx, dy) = (b.cx - a.cx, b.cy - a.cy);
+            let across = -dx * u[1] + dy * u[0];
+            if across.abs() <= breadth / 2.0 {
+                let (ri, rj) = (root(&mut group, i), root(&mut group, j));
+                group[rj] = ri;
+            }
+        }
+    }
+    let mut strips: Vec<(usize, Vec<Found>)> = Vec::new();
+    for (i, f) in frames.iter().enumerate() {
+        let r = root(&mut group, i);
+        match strips.iter_mut().find(|(k, _)| *k == r) {
+            Some((_, v)) => v.push(*f),
+            None => strips.push((r, vec![*f])),
+        }
+    }
+    strips.into_iter().map(|(_, v)| v).collect()
+}
+
+/// A strip of negatives measured on its own ([`measure_strips_with`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct StripPart {
+    /// Where it lies: the rectangle around its frames (left, top, width,
+    /// height, pixels of the image measured).
+    pub bounds: [f32; 4],
+    /// Its frames and measures.
+    pub strip: Strip,
+}
+
+/// Each strip of negatives in a scan of the holder measured on its own
+/// ([`strips_of`]): its base in its own gaps (or `base`, a roll's, when
+/// given), its highlights and black inside its own frames. Strips side by
+/// side may be of different rolls, with bases and exposures of their own:
+/// measured together the brightest of one strip would set the white of
+/// both (on the Epson 4490, 15 November 2026: two rolls, bases 0.245 /
+/// 0.191 / 0.166 and 0.214 / 0.168 / 0.153, the indoor strip came out
+/// orange). Strips with too little film are left out.
+pub fn measure_strips_with(
+    samples: &[u16],
+    width: usize,
+    height: usize,
+    dpi: u16,
+    base: Option<[f32; 3]>,
+) -> Vec<StripPart> {
+    if samples.len() != width * height * 3 {
+        return Vec::new();
+    }
+    let image = Image {
+        width,
+        height,
+        dpi,
+        format: Format::Rgb,
+        data: samples.iter().map(|&v| (v >> 8) as u8).collect(),
+    };
+    strips_of(&frames(&image, Film::Negative))
+        .into_iter()
+        .filter_map(|found| {
+            let gaps = match base {
+                Some(_) => None,
+                None => base_between(samples, width, &found),
+            };
+            let negative = Negative::measure(&inside(samples, width, &found), base.or(gaps))?;
+            let bounds = found
+                .iter()
+                .map(Found::bounds)
+                .reduce(|a, b| {
+                    let (l, t) = (a[0].min(b[0]), a[1].min(b[1]));
+                    let r = (a[0] + a[2]).max(b[0] + b[2]);
+                    let bottom = (a[1] + a[3]).max(b[1] + b[3]);
+                    [l, t, r - l, bottom - t]
+                })
+                .unwrap_or_default();
+            Some(StripPart {
+                bounds,
+                strip: Strip {
+                    negative,
+                    frames: found,
+                    gaps,
+                },
+            })
+        })
+        .collect()
+}
+
+/// Each frame of the strips measured ([`measure_strips_with`]) with its
+/// own highlights and black on its strip's base: the base is the roll's,
+/// one for the strip, but the white follows each picture, as a lab's
+/// scanner balances each frame (chosen with Matteo on 15 November 2026 on
+/// the Epson 4490's strips: one white for a strip made the frames under
+/// its brightest sky dark and flat). A frame with too little film takes
+/// its strip's measures. Where each lies (left, top, width, height in
+/// pixels of `samples`, `width` pixels wide) and its measures.
+pub fn measure_frames(
+    parts: &[StripPart],
+    samples: &[u16],
+    width: usize,
+) -> Vec<([f32; 4], Negative)> {
+    parts
+        .iter()
+        .flat_map(|part| {
+            part.strip.frames.iter().map(move |f| {
+                let own = Negative::measure(
+                    &inside(samples, width, std::slice::from_ref(f)),
+                    Some(part.strip.negative.base),
+                );
+                (f.bounds(), own.unwrap_or(part.strip.negative))
+            })
+        })
+        .collect()
+}
+
+/// The positive of linear RGB `samples` (`width` pixels wide), each pixel
+/// turned with the measures of the place it lies in, or the nearest
+/// (`strips`: frames or strips, where each lies, left, top, width and
+/// height in pixels of these samples, and its measures). With none,
+/// `whole`'s.
+pub fn positive_by_place(
+    strips: &[([f32; 4], Negative)],
+    whole: &Negative,
+    samples: &[u16],
+    width: usize,
+) -> Vec<u16> {
+    if strips.len() < 2 || width == 0 {
+        let m = strips.first().map_or(whole, |(_, m)| m);
+        return m.positive(samples);
+    }
+    let distance = |b: &[f32; 4], x: f32, y: f32| {
+        let dx = (b[0] - x).max(x - (b[0] + b[2])).max(0.0);
+        let dy = (b[1] - y).max(y - (b[1] + b[3])).max(0.0);
+        dx * dx + dy * dy
+    };
+    // One table per strip, each pixel through its strip's: no more memory
+    // than one strip's positive (a frame at 4800 dpi is 35 million pixels).
+    let tables: Vec<[Vec<u16>; 3]> = strips.iter().map(|(_, m)| m.tables()).collect();
+    samples
+        .chunks_exact(3)
+        .enumerate()
+        .flat_map(|(i, p)| {
+            let (x, y) = ((i % width) as f32 + 0.5, (i / width) as f32 + 0.5);
+            let mut k = 0;
+            let mut best = f32::MAX;
+            for (j, (b, _)) in strips.iter().enumerate() {
+                let d = distance(b, x, y);
+                if d < best {
+                    best = d;
+                    k = j;
+                }
+            }
+            let t = &tables[k];
+            [
+                t[0][usize::from(p[0])],
+                t[1][usize::from(p[1])],
+                t[2][usize::from(p[2])],
+            ]
+        })
+        .collect()
 }
 
 /// How a film becomes its picture, whichever it is: taken once (on the
@@ -691,11 +898,112 @@ pub fn frames(image: &Image, film: Film) -> Vec<Found> {
         Film::Slide => pieces,
         Film::Negative => pieces
             .iter()
-            .flat_map(|strip| strip_frames(image, strip, mm))
+            .flat_map(|piece| split_strips(image, piece, mm))
+            .flat_map(|strip| strip_frames(image, &strip, mm))
             .collect(),
     };
     detect::reading_order(&mut found);
     found
+}
+
+/// The width of a strip of 35 mm film, millimetres.
+const STRIP_MM: f32 = 35.0;
+
+/// A piece of the holder's light far wider than a strip of film (`piece`,
+/// in pixels; `mm` pixels per millimetre) split into the strips lying side
+/// by side in it: light crossing the holder between them (a slot lit at
+/// the top of the holder, a hole, a leak at an end) joins them into one
+/// piece, whose frames would be sought across both. Across the piece, over
+/// the middle of its length, the holder between the strips is mostly dark:
+/// each run of mostly lit lines at least most of a strip wide is a strip.
+/// A piece no wider than a strip and a half, or with one such run only,
+/// stays as it is.
+fn split_strips(image: &Image, piece: &Found, mm: f32) -> Vec<Found> {
+    let lengthwise = piece.width >= piece.height;
+    let (length, breadth) = if lengthwise {
+        (piece.width, piece.height)
+    } else {
+        (piece.height, piece.width)
+    };
+    if breadth <= 1.5 * STRIP_MM * mm {
+        return vec![*piece];
+    }
+    let (s, c) = piece.angle.to_radians().sin_cos();
+    let (along, across) = if lengthwise {
+        ([c, s], [-s, c])
+    } else {
+        ([-s, c], [c, s])
+    };
+    let lit = |t: f32, k: f32| -> Option<bool> {
+        let x = piece.cx + t * along[0] + k * across[0];
+        let y = piece.cy + t * along[1] + k * across[1];
+        if x < 0.0 || y < 0.0 || x >= image.width as f32 || y >= image.height as f32 {
+            return None;
+        }
+        let i = (y as usize * image.width + x as usize) * 3;
+        Some(
+            image.data[i..i + 3]
+                .iter()
+                .any(|&v| f32::from(v) / 255.0 > 0.02),
+        )
+    };
+    // Lines across every half millimetre, each sampled every half
+    // millimetre over the middle 80 % of the length (away from a slot or a
+    // leak at the ends).
+    let step = (0.5 * mm).max(1.0);
+    let lines = (breadth / step) as usize;
+    let samples = ((0.8 * length) / step).max(1.0) as usize;
+    let share: Vec<f32> = (0..lines)
+        .map(|j| {
+            let k = -breadth / 2.0 + (j as f32 + 0.5) * step;
+            let (mut on, mut n) = (0usize, 0usize);
+            for i in 0..samples {
+                let t = -0.4 * length + (i as f32 + 0.5) * step;
+                if let Some(l) = lit(t, k) {
+                    n += 1;
+                    on += usize::from(l);
+                }
+            }
+            on as f32 / n.max(1) as f32
+        })
+        .collect();
+    let mut runs: Vec<(usize, usize)> = Vec::new();
+    let mut start = None;
+    for (j, &v) in share.iter().chain([&0.0]).enumerate() {
+        match (v >= 0.5, start) {
+            (true, None) => start = Some(j),
+            (false, Some(a)) => {
+                runs.push((a, j));
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    let strips: Vec<Found> = runs
+        .into_iter()
+        .filter(|&(a, b)| (b - a) as f32 * step >= 0.6 * STRIP_MM * mm)
+        .map(|(a, b)| {
+            let mid = -breadth / 2.0 + (a + b) as f32 / 2.0 * step;
+            let wide = (b - a) as f32 * step;
+            let (width, height) = if lengthwise {
+                (length, wide)
+            } else {
+                (wide, length)
+            };
+            Found {
+                cx: piece.cx + mid * across[0],
+                cy: piece.cy + mid * across[1],
+                width,
+                height,
+                angle: piece.angle,
+            }
+        })
+        .collect();
+    if strips.len() < 2 {
+        vec![*piece]
+    } else {
+        strips
+    }
 }
 
 /// The blocks of `mask` joined to block `seed` (4-connected).
@@ -1120,6 +1428,147 @@ mod tests {
     }
 
     #[test]
+    fn the_base_between_frames_of_strips_side_by_side() {
+        // Two strips standing up, 12 pixels apart across the opaque holder:
+        // in reading order the frames go from one strip to the other, and
+        // the base is still the one between the frames of each strip.
+        let (w, h) = (40, 40);
+        let base = [30000u16, 10000, 8000];
+        let mut samples = vec![10u16; w * h * 3];
+        for y in 0..h {
+            for x in (0..10).chain(22..32) {
+                let i = (y * w + x) * 3;
+                let p = if (17..23).contains(&y) {
+                    base
+                } else {
+                    [5000, 3000, 2000]
+                };
+                samples[i..i + 3].copy_from_slice(&p);
+            }
+        }
+        let frame = |cx: f32, cy: f32| Found {
+            cx,
+            cy,
+            width: 10.0,
+            height: 16.0,
+            angle: 0.0,
+        };
+        let frames = [
+            frame(5.0, 8.0),
+            frame(27.0, 8.0),
+            frame(5.0, 32.0),
+            frame(27.0, 32.0),
+        ];
+        let got = base_between(&samples, w, &frames).unwrap();
+        assert_eq!(got.map(|t| (t * FULL).round() as u16), base);
+        // Without a gap between frames of one strip, nothing: the holder
+        // between the strips is not the base.
+        assert_eq!(base_between(&samples, w, &frames[..2]), None);
+    }
+
+    #[test]
+    fn a_gap_under_the_holder_is_not_the_base() {
+        // Two frames whose gap is covered by an opaque bar.
+        let (w, h) = (40, 10);
+        let mut samples = vec![[5000u16, 3000, 2000]; w * h];
+        for y in 0..h {
+            for x in 17..23 {
+                samples[y * w + x] = [10, 10, 10];
+            }
+        }
+        let samples: Vec<u16> = samples.into_iter().flatten().collect();
+        let frame = |cx: f32| Found {
+            cx,
+            cy: 5.0,
+            width: 16.0,
+            height: 10.0,
+            angle: 0.0,
+        };
+        assert_eq!(base_between(&samples, w, &[frame(8.0), frame(32.0)]), None);
+    }
+
+    #[test]
+    fn strips_side_by_side_are_two_and_a_strip_with_a_blank_frame_one() {
+        let frame = |cx: f32, cy: f32| Found {
+            cx,
+            cy,
+            width: 24.0,
+            height: 36.0,
+            angle: 0.0,
+        };
+        // In reading order, from one strip to the other; the left strip's
+        // second frame left blank (none found there).
+        let frames = [
+            frame(15.0, 20.0),
+            frame(52.0, 21.0),
+            frame(52.0, 59.0),
+            frame(15.0, 96.0),
+            frame(52.0, 97.0),
+        ];
+        let strips = strips_of(&frames);
+        assert_eq!(strips.len(), 2);
+        assert_eq!(strips[0].len(), 2);
+        assert_eq!(strips[1].len(), 3);
+        assert!(strips[0].iter().all(|f| f.cx == 15.0));
+        assert_eq!(strips_of(&frames[..1]).len(), 1);
+        assert!(strips_of(&[]).is_empty());
+    }
+
+    #[test]
+    fn each_pixel_is_turned_with_its_own_strips_measures() {
+        // Two columns, each of its own film: the same light comes out as each
+        // strip's own negative says.
+        let a = Negative {
+            base: [0.6, 0.4, 0.2],
+            high: [1.0; 3],
+            black: 0.0,
+        };
+        let b = Negative {
+            base: [0.3, 0.2, 0.1],
+            high: [1.0; 3],
+            black: 0.0,
+        };
+        let (w, h) = (10, 2);
+        let samples = vec![9000u16; w * h * 3];
+        let strips = [([0.0, 0.0, 4.0, 2.0], a), ([6.0, 0.0, 4.0, 2.0], b)];
+        let got = positive_by_place(&strips, &a, &samples, w);
+        let at = |x: usize| &got[x * 3..x * 3 + 3];
+        let pa = a.positive(&samples[..3]);
+        let pb = b.positive(&samples[..3]);
+        assert_eq!(at(1), &pa[..]);
+        assert_eq!(at(8), &pb[..]);
+        // Between them, the nearer one.
+        assert_eq!(at(4), &pa[..]);
+        assert_eq!(at(5), &pb[..]);
+        assert_ne!(pa, pb);
+    }
+
+    #[test]
+    fn each_frame_has_its_own_white_on_its_strips_base() {
+        let (image, expected) = strip(0.0, 3, 0.0);
+        let samples: Vec<u16> = image.data.iter().map(|&v| u16::from(v) * 257).collect();
+        let (w, h, dpi) = (image.width, image.height, image.dpi);
+        let parts = measure_strips_with(&samples, w, h, dpi, None);
+        assert_eq!(parts.len(), 1);
+        let frames = measure_frames(&parts, &samples, w);
+        assert_eq!(frames.len(), expected.len());
+        for (b, m) in &frames {
+            // The strip's base, the frame's own levels.
+            assert_eq!(m.base, parts[0].strip.negative.base);
+            let f = parts[0]
+                .strip
+                .frames
+                .iter()
+                .find(|f| f.bounds() == *b)
+                .expect("a frame's place");
+            let own =
+                Negative::measure(&inside(&samples, w, std::slice::from_ref(f)), Some(m.base))
+                    .unwrap();
+            assert_eq!(*m, own);
+        }
+    }
+
+    #[test]
     fn the_base_of_a_rectangle() {
         // 4 x 2 pixels, the base in the right half.
         let mut samples = vec![1000u16; 4 * 2 * 3];
@@ -1346,6 +1795,59 @@ mod tests {
             };
             near(f, &e, mm);
         }
+    }
+
+    #[test]
+    fn two_strips_joined_by_light_are_split() {
+        // Two strips one above the other, 5 mm of holder between them,
+        // joined at one end by a band of light (a slot of the holder lit
+        // across both): each strip's frames, not frames across both.
+        let mm = 150.0 / 25.4;
+        let (a, expected_a) = strip(0.0, 3, 0.0);
+        let (w, h) = (a.width, a.height);
+        let gap = (35.0 + 5.0) * mm;
+        let mut image = holder(w, h + gap as usize + 10);
+        let shift = |f: &Found, dy: f32| Found {
+            cy: f.cy + dy,
+            ..*f
+        };
+        for y in 0..h {
+            for x in 0..w {
+                let i = (y * w + x) * 3;
+                let p = [a.data[i], a.data[i + 1], a.data[i + 2]];
+                if p.iter().any(|&v| v > 10) {
+                    for dy in [0, gap as usize] {
+                        let j = ((y + dy) * w + x) * 3;
+                        image.data[j..j + 3].copy_from_slice(&p);
+                    }
+                }
+            }
+        }
+        // The band of light across both, at the left end.
+        let length = (3.0 * PITCH_MM + 4.0) * mm;
+        let band = Found {
+            cx: w as f32 / 2.0 - length / 2.0 + 2.0,
+            cy: h as f32 / 2.0 + gap / 2.0,
+            width: 8.0,
+            height: gap + 35.0 * mm,
+            angle: 0.0,
+        };
+        paint(&mut image, &band, |_, _| [250, 250, 250]);
+        let found = frames(&image, Film::Negative);
+        assert_eq!(found.len(), 6, "{found:?}");
+        let expected: Vec<Found> = expected_a
+            .iter()
+            .flat_map(|f| [*f, shift(f, gap)])
+            .collect();
+        for e in &expected {
+            assert!(
+                found
+                    .iter()
+                    .any(|f| (f.cx - e.cx).abs() < 1.5 * mm && (f.cy - e.cy).abs() < 1.5 * mm),
+                "{e:?} not in {found:?}"
+            );
+        }
+        assert_eq!(strips_of(&found).len(), 2);
     }
 
     #[test]

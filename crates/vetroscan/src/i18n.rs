@@ -180,6 +180,7 @@ mod tests {
             ("main.rs", include_str!("main.rs")),
             ("editor.rs", include_str!("editor.rs")),
             ("separa.rs", include_str!("separa.rs")),
+            ("areas.rs", include_str!("areas.rs")),
             ("worker.rs", include_str!("worker.rs")),
             ("wia.rs", include_str!("wia.rs")),
             ("access.rs", include_str!("access.rs")),

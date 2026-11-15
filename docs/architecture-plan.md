@@ -532,7 +532,8 @@ It needs no new hardware, only slides and negatives to put in the holder.
   1. ~~a preview at 600 dpi~~: **no preview for films** since 9 November 2026 (with Matteo:
      the adapter's area is small and full of frames, the scan finds them itself, a preview
      only added a lamp warm-up and the only resolution never tried); **a scan at 600 dpi
-     tried by Matteo** the same day, it works;
+     tried by Matteo** the same day, it works. **The preview came back on 15 November 2026**
+     (phase 13 step 9): with the Epson 4490's 2400 and 4800 dpi a whole strip is too large;
   2. **blue on a negative's base**, the lowest signal: try HP's exposure per colour again
      (`NEGATIVE_EXPOSURES`, how the chip uses `EXPT`/`MEXPT`) or a longer line for blue only;
      **still open**, now phase 13 step 4 (an exposure per channel, stalled without HP's
@@ -2215,6 +2216,93 @@ what it measures. One gap: the stripes are declared per resolution, not per sour
    "not now"): `film::inside` takes 0.9 of each frame and its densest pixels can lie on the
    dark band by the holder's edge; on `pellicola2` two scans in a row gave highlights 0.91 and
    1.12, with 0.85 0.03 apart, the other four strips unchanged (`captures/tma/misura_luci.py`).
+9. **A preview for films, and several areas on every preview** (asked by Matteo on 15 November
+   2026, done the same day in the app only, no new move of either scanner): at 2400 and
+   4800 dpi a strip scanned whole is gigabytes (the 4490's holder at 4800 dpi about
+   13,000 x 45,000 pixels, 3.5 GB of 16-bit samples) and the app refuses it, so the only way to
+   use those resolutions was a frame at a time, drawn by hand on a scan at 600 dpi. Now, as
+   Epson Scan does: the preview of the whole holder at the lowest film resolution the scanner
+   declares (`App::preview_dpi`: 600 dpi on both scanners, a resolution and source each has
+   scanned from the app), the film measured on it (`Negative`/`Slide`, kept for every frame,
+   as before 9 November), the frames found and **one scan per frame chosen**, the frame and
+   1 mm around it, cut and straightened. Without a preview Scansiona still scans the whole
+   holder and finds the frames in it.
+   The same model for the three ways of working (`areas.rs`): the single selection and the
+   originals found became one list of areas on the preview (`App::regions`, `Region { at:
+   Found, auto }`), each its own image or page. An area is chosen with a click and edited
+   with the handles, the keys and the millimetre fields, turned with **Inclinazione**; one is
+   added by dragging on an empty part (`Message::Select` adds when none is chosen) and left
+   out with Delete, **Togli area** or **Escludi**. Areas drawn by hand and upright are
+   scanned exactly as drawn (a whole page, which "Separa" can cut later); the originals found
+   are cut 0.4 mm inside and straightened as before. The automatic crop off hides the
+   originals found and keeps those drawn. Passes (`App::plan`): on films always one per area;
+   on the glass the originals found in one pass when it fits in `ONE_PASS` and none is drawn
+   by hand, else one each. "Rifai" on a page scanned whole scans its own area
+   (`Whole::area`), no longer the one chosen now. The made-up scanner records every request
+   (`Controls::requests`); five e2e check films (negatives, slides, a frame left out,
+   corrected, drawn), Foto and Documento.
+   **Not tried on the scanners yet**: a frame scanned alone at 2400/4800 dpi after the 600 dpi
+   preview on the 4490, that the frame lands where the preview showed it (the 1 mm margin
+   absorbs a small offset) and that the colours match a whole-strip scan developed with its
+   own measures (the measures of a 600 dpi preview applied at 4800 dpi; on the 3770, 600 to
+   1200 dpi worked before 9 November).
+   **Tried by Matteo the same day on the 4490** (two strips of six frames in its holder): the
+   frames scanned one by one came out right, but the preview stayed negative and showed six
+   frames of twelve. A scan of the whole window at 600 dpi (`epson4490 film-scan 600 0 6.1 68.5
+   230.8`, `scansioni/epson_anteprima_pellicole_600.png` and `.bin`) showed why it was not
+   developed: `film::base_between` took the base between consecutive frames in reading order,
+   which with two strips side by side go from one strip to the other: its median was the
+   holder between them (0.001), and the measure failed. Now only frames next to each other on
+   one strip (one along the other's length, less than a frame away), and a gap mostly not film
+   is left out; on that scan the base comes out 0.221 / 0.175 / 0.158, against 0.233 / 0.192 /
+   0.171 on single frames of the same scanner (base_auto, 15 November), and the picture is
+   right. The six frames were **not reproduced**: on that scan `film::frames` finds all twelve
+   at 600, 300 and 200 dpi (the app's nearest-pixel reduction), from 45 % to 130 % of the light,
+   and as slides it finds two pieces, not six; to see again with Matteo's next preview.
+   **Then the colours** (Matteo, the same afternoon: "the photos now have a wrong white
+   balance"): with the preview measuring, the twelve frames were developed with one measure of
+   the whole holder, where before (the measure failing) each frame scanned alone measured
+   itself. On the 600 dpi scan the two strips are of two rolls: bases 0.245 / 0.191 / 0.166 and
+   0.214 / 0.168 / 0.153, highlights 0.64 / 1.06 / 1.07 and 0.51 / 0.65 / 0.53; the whole
+   holder's (0.58 / 1.00 / 1.02) is nearly the outdoor strip's, and turned the indoor one orange
+   (`scansioni/confronto_bilanciamento_4490.png`: whole holder, each frame alone, each strip).
+   Chosen with Matteo: **each strip on its own** (a roll's base is one; frames of one roll
+   alike, single frames corrected in Regola), as on the HP 3770's one-strip holder:
+   `film::strips_of` (frames along one line), `measure_strips_with`, `positive_by_strip` (each
+   pixel with the nearest strip's measures); the app keeps the preview's strips on the bed
+   (`App::strips`) and develops a frame scanned alone with its strip's, a holder scanned whole
+   strip by strip. And a likely cause of the six frames: the made-up two-strip holder
+   (`FakeScanner::with_two_strips`) showed light across the holder (its lit slot) joining the
+   strips into one wide piece, its frames sought across both; `film::split_strips` now splits a
+   piece wider than a strip and a half where, across it, the holder is dark. Not proven to be
+   Matteo's case (his 600 dpi scan finds twelve either way).
+   **Then per frame** (Matteo, tried the same evening: "the white balance per strip is not as
+   per frame, before it came out much better"): one white per strip is set by its brightest
+   frame (the left strip's sky) and leaves the others dark and flat. Chosen with Matteo
+   (`scansioni/confronto_bilanciamento_4490_b.png`: B all per frame, D base per strip and
+   levels per frame, C all per strip): **D**, the base the strip's (a single frame measured on
+   its own took its shadows for the base: frame 5, 0.214 / 0.157 / 0.133 against its strip's
+   0.245 / 0.191 / 0.166), the white and black each frame's: `film::measure_frames`, the app's
+   `App::frames` from the preview, `positive_by_place` (each pixel with the nearest frame's
+   measures); an area drawn by hand measured on itself on the nearest strip's base (or the
+   roll's). **And a crash** at the third frame at 4800 dpi (WER: 0xc0000409, fast fail 7, an
+   abort: a failed allocation or a panic, the message lost without a console): the first
+   `positive_by_strip` held five whole-frame buffers, 1351 MB for a 4800 dpi frame against
+   408 MB (measured, a 4913 x 7181 frame); rewritten with a table per place, 408 MB. Not proven
+   to be the crash; a panic hook and every scan asked now go to `tasti.log`.
+10. **"Senza elaborazioni"** (asked by Matteo on 15 November 2026, done the same day, app
+    only): for every scanner and way of working, the equivalent of a scanner's own software
+    with every correction off, as Epson Scan's negatives were found to be (one fixed inverting
+    curve). `Settings::untouched`, saved per way of working (`StoredMode::untouched`, absent in
+    older files: off): `App::cleaned` returns the scan as it came (no stripes, no glass colour
+    matrix), `App::doubles` is off, films go through `App::plain` instead of `develop`
+    (negatives only inverted at the films' gamma, one less the negative's light shown, the
+    orange base left in; with `keep_negative` not inverted; slides as read), and pages scanned
+    so render with no adjustment and no sharpening (`untouched_look`, in `Page::effective` and
+    in the preview's `render`). The calibration and the scanner's tone (its white and gamma)
+    stay: they are how the scanner reads, not a correction. The frames are still found on the
+    preview; nothing is measured. Also picked photos (15 November): Ctrl/Shift+click and
+    Ctrl+A in the strip, `Page::picked`, "Salva" and "Applica alle foto scelte" on those only.
 
 ## Open after the code review of 13 November 2026
 

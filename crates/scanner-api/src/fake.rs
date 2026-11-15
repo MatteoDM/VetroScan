@@ -20,7 +20,7 @@ use crate::{
 };
 use scan_imaging::{Format, Image};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// The originals on the glass: left, top, width, height (inches) and the
@@ -74,6 +74,12 @@ pub fn film(x: f64, y: f64) -> [f64; 3] {
     if y < 0.33 {
         return [1.0; 3];
     }
+    strip(x, y, BASE)
+}
+
+/// The strip of [`film`] with its base `base`: the frames' scene, the bare
+/// base between them, the dark holder around it.
+fn strip(x: f64, y: f64, base: [f64; 3]) -> [f64; 3] {
     if !(0.2..1.53).contains(&x) || !(0.4..3.66).contains(&y) {
         return [0.002; 3];
     }
@@ -84,10 +90,35 @@ pub fn film(x: f64, y: f64) -> [f64; 3] {
             let stripe = if (v * 6.0) as i32 % 2 == 0 { 1.0 } else { 0.7 };
             let density = (0.15 + 1.0 * u) * stripe;
             let layer = [1.0, 0.9, 0.8];
-            return [0, 1, 2].map(|c| BASE[c] * 10f64.powf(-density * layer[c]));
+            return [0, 1, 2].map(|c| base[c] * 10f64.powf(-density * layer[c]));
         }
     }
-    BASE
+    base
+}
+
+/// The adapter's area of [`FakeScanner::with_two_strips`], inches: wide
+/// enough for two strips side by side, as the Epson 4490's holder.
+pub const TWO_STRIPS_INCHES: (f64, f64) = (3.2, 3.756);
+
+/// How far right the second strip of [`two_strips`] lies, inches.
+pub const SECOND_STRIP: f64 = 1.5;
+
+/// The base of the second strip of [`two_strips`]: another roll, less
+/// orange.
+pub const OTHER_BASE: [f64; 3] = [0.55, 0.40, 0.30];
+
+/// Two strips side by side (as [`film`]), of two rolls: the same scenes on
+/// both, the second on a base of its own ([`OTHER_BASE`]), so that each,
+/// measured on its own, comes out as the other.
+pub fn two_strips(x: f64, y: f64) -> [f64; 3] {
+    if y < 0.33 {
+        return [1.0; 3];
+    }
+    if x < SECOND_STRIP {
+        strip(x, y, BASE)
+    } else {
+        strip(x - SECOND_STRIP, y, OTHER_BASE)
+    }
 }
 
 /// The slides in the adapter's holder of [`FakeScanner::with_slides`]:
@@ -137,6 +168,8 @@ pub enum Holder {
     Strip,
     /// Two slides ([`slides`]).
     Slides,
+    /// Two strips of two rolls side by side ([`two_strips`]).
+    TwoStrips,
 }
 
 /// The linear RGB samples of an area of the glass, or of the adapter's area
@@ -154,6 +187,7 @@ pub fn samples16(request: &ScanRequest, holder: Holder) -> Vec<u16> {
                 let t = match holder {
                     Holder::Strip => film(gx, gy),
                     Holder::Slides => slides(gx, gy),
+                    Holder::TwoStrips => two_strips(gx, gy),
                 };
                 rgb.extend(t.map(|t| (t * 65535.0).round() as u16));
             } else {
@@ -184,6 +218,10 @@ pub struct Controls {
     stripes: Arc<AtomicU32>,
     /// Slides in the adapter's holder rather than the strip.
     slides: Arc<AtomicBool>,
+    /// Two strips side by side in the holder rather than one.
+    two_strips: Arc<AtomicBool>,
+    /// Every scan asked of it, in order (the scans refused too).
+    requests: Arc<Mutex<Vec<ScanRequest>>>,
 }
 
 impl Controls {
@@ -216,16 +254,20 @@ impl Controls {
         self.stripes.store(thousandths, Ordering::SeqCst);
     }
 
-    /// Puts `holder` in the adapter (the strip, or the slides).
+    /// Puts `holder` in the adapter (a strip, two strips, or the slides).
     pub fn load(&self, holder: Holder) {
         self.slides
             .store(holder == Holder::Slides, Ordering::SeqCst);
+        self.two_strips
+            .store(holder == Holder::TwoStrips, Ordering::SeqCst);
     }
 
     /// What is in the adapter's holder.
     pub fn holder(&self) -> Holder {
         if self.slides.load(Ordering::SeqCst) {
             Holder::Slides
+        } else if self.two_strips.load(Ordering::SeqCst) {
+            Holder::TwoStrips
         } else {
             Holder::Strip
         }
@@ -234,6 +276,11 @@ impl Controls {
     /// Whether the lamp is on.
     pub fn lamp_on(&self) -> bool {
         self.lamp_on.load(Ordering::SeqCst)
+    }
+
+    /// Every scan asked of the scanner so far, in order.
+    pub fn requests(&self) -> Vec<ScanRequest> {
+        self.requests.lock().map(|r| r.clone()).unwrap_or_default()
     }
 }
 
@@ -363,6 +410,19 @@ impl FakeScanner {
         s
     }
 
+    /// [`Self::with_adapter`] with a holder wide enough for two strips side
+    /// by side ([`TWO_STRIPS_INCHES`]), as the Epson 4490's, holding two
+    /// strips of two rolls ([`two_strips`]).
+    pub fn with_two_strips() -> Self {
+        let mut s = Self::with_adapter();
+        s.caps.model = "Flatbed A4 two strips".into();
+        if let Some(a) = s.caps.transparency.as_mut() {
+            a.area_inches = TWO_STRIPS_INCHES;
+        }
+        s.controls.load(Holder::TwoStrips);
+        s
+    }
+
     /// [`Self::flatbed`] declaring a correction of the glass's colours ([`GLASS_COLOUR`]), as
     /// the Epson 4490 declares Epson Scan's.
     pub fn with_glass_colour() -> Self {
@@ -449,6 +509,9 @@ impl Scanner for FakeScanner {
         request: &ScanRequest,
         progress: &mut dyn FnMut(Progress) -> bool,
     ) -> Result<ScanResult> {
+        if let Ok(mut asked) = self.controls.requests.lock() {
+            asked.push(*request);
+        }
         self.plugged()?;
         check(&self.caps, request)?;
         if request.source.is_film() && self.controls.adapter_out.load(Ordering::SeqCst) {

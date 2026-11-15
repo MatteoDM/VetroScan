@@ -173,12 +173,20 @@ impl App {
                 let w = a[2].clamp(1.0, gw - x);
                 let h = a[3].clamp(1.0, gh - y);
                 let px = |mm: f64| (mm * per_mm) as f32;
-                self.selection = Some(Selection {
+                let typed = Selection {
                     x: px(x),
                     y: px(y),
                     width: px(w),
                     height: px(h),
-                });
+                };
+                // The area chosen, or a new one drawn by hand.
+                match self.chosen_mut() {
+                    Some(r) => r.at = crate::areas::resized(r.at, typed, 1.0),
+                    None => {
+                        self.regions.push(crate::areas::Region::drawn(typed));
+                        self.chosen = Some(self.regions.len() - 1);
+                    }
+                }
             }
             MmField::Offset(i) => {
                 let Some(page) = self.current.and_then(|c| self.pages.get(c)) else {
@@ -212,7 +220,7 @@ impl App {
         if self.print_preview() {
             return self.move_page(m);
         }
-        if self.tab == Tab::Preview && self.selection.is_some() {
+        if self.moving_area() {
             return self.move_area(m);
         }
         self.pan(m)
@@ -335,7 +343,7 @@ impl App {
 
     /// The area to scan, on the preview.
     fn move_area(&self, m: Move) -> Option<Message> {
-        let s = self.selection?;
+        let s = self.chosen_rect()?;
         let glass = self.glass();
         let per_mm = f32::from(PREVIEW_DPI) / 25.4;
         let d = match m {

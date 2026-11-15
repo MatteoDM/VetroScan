@@ -1576,10 +1576,10 @@ fn the_preview_finds_the_three_originals_and_foto_scans_each() {
     ui.click("Anteprima");
     assert!(ui.app.preview.is_some());
     assert_eq!(
-        ui.app.found.len(),
+        ui.app.shown_regions().len(),
         scanner_api::fake::ORIGINALS.len(),
         "{:?}",
-        ui.app.found
+        ui.app.regions
     );
     ui.click("Scansiona 3 foto");
     assert_eq!(ui.app.pages.len(), 3);
@@ -1693,12 +1693,9 @@ fn a_strip_of_negatives_becomes_a_picture_per_frame() {
     let (mut ui, _) = with_adapter();
     ui.click("Pellicola");
     ui.send(Message::Dpi(200));
-    // No preview for films: not offered, and asked for anyway (the P key)
-    // only a note.
-    assert!(!ui.shows("Anteprima"));
-    ui.send(Message::Preview);
-    assert!(ui.app.busy.is_none() && ui.app.preview.is_none());
-    assert!(ui.app.note.contains("non serve"), "{}", ui.app.note);
+    // Films have their preview (since 15 November 2026), but a scan made
+    // without it still finds the frames itself.
+    assert!(ui.shows("Anteprima"));
     // One scan, one picture for each frame, standing up as on the strip.
     ui.click("Scansiona foto");
     assert_eq!(ui.app.pages.len(), 2, "{}", ui.app.note);
@@ -1723,7 +1720,7 @@ fn a_strip_of_negatives_becomes_a_picture_per_frame() {
     // Back to the glass: its preview again.
     ui.click("Foto");
     assert!(ui.shows("Anteprima"));
-    assert!(ui.app.found.is_empty() && ui.app.measures.is_none());
+    assert!(ui.app.regions.is_empty() && ui.app.measures.is_none());
 }
 
 /// Whether every original in `a` has one in `b` with its centre within
@@ -1740,7 +1737,7 @@ fn same_places(a: &[Found], b: &[Found], px: f32) -> bool {
 fn found_by_the_preview(ui: &mut Ui) -> Vec<Found> {
     ui.send(Message::Preview);
     ui.settle();
-    let found = ui.app.found.clone();
+    let found: Vec<Found> = ui.app.shown_regions().iter().map(|r| r.at).collect();
     assert!(!found.is_empty(), "{}", ui.app.note);
     found
 }
@@ -1763,6 +1760,516 @@ fn without_a_preview_the_frames_are_found_in_the_scan() {
     ui.send(Message::PageRedo(1));
     ui.settle();
     assert_eq!(ui.app.pages.len(), 2);
+}
+
+/// The film's picture brighter to the right, as the made-up scene is
+/// denser there: a frame developed the right way round.
+fn developed_right(page: &crate::Page) -> bool {
+    let full = &page.raw.full;
+    grey_at(full, full.width * 4 / 5) > grey_at(full, full.width / 5) + 60
+}
+
+#[test]
+fn the_preview_of_films_finds_the_frames_and_each_is_scanned_on_its_own() {
+    let (mut ui, controls) = with_adapter();
+    ui.click("Pellicola");
+    assert_eq!(ui.app.tab, crate::Tab::Preview, "the preview first");
+    ui.click("Anteprima");
+    assert!(ui.app.preview.is_some(), "{}", ui.app.note);
+    assert!(
+        ui.app.measures.is_some(),
+        "the film measured on the preview"
+    );
+    let frames = ui.app.shown_regions();
+    assert_eq!(frames.len(), 2, "{}", ui.app.note);
+    // The preview at the lowest resolution the adapter scans at, whole.
+    let asked = controls.requests();
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0].dpi, 600);
+    ui.send(Message::Dpi(1200));
+    ui.click("Scansiona 2 foto");
+    assert_eq!(ui.app.pages.len(), 2, "{}", ui.app.note);
+    // One scan for each frame: the frame and a millimetre around it, not
+    // the strip between.
+    let asked = &controls.requests()[1..];
+    assert_eq!(asked.len(), 2, "{asked:?}");
+    let k = 1200.0 / f32::from(crate::PREVIEW_DPI);
+    let margin = f32::from(crate::PREVIEW_DPI) / 25.4;
+    for (request, frame) in asked.iter().zip(&frames) {
+        assert_eq!(request.dpi, 1200);
+        assert_eq!(request.source, scanner_api::Source::Negative);
+        let [_, _, w, h] = frame.at.bounds();
+        for (got, want) in [(request.area.width, w), (request.area.height, h)] {
+            let got = got as f32;
+            assert!(
+                got >= want * k - 2.0 && got <= (want + 2.0 * margin) * k + 2.0,
+                "{got} for {want}"
+            );
+        }
+    }
+    // Each developed with what the preview measured.
+    for page in &ui.app.pages {
+        assert!(page.origin.is_some() && page.whole.is_none());
+        assert_eq!(page.raw.tone, scan_imaging::film::TONE);
+        assert!(developed_right(page));
+    }
+}
+
+#[test]
+fn on_the_preview_of_films_a_frame_is_left_out_corrected_or_drawn() {
+    use crate::areas::AreaMsg;
+    use crate::viewer::Selection;
+    use iced::keyboard::key::Named;
+    let (mut ui, controls) = with_adapter();
+    ui.click("Pellicola");
+    ui.click("Anteprima");
+    assert_eq!(ui.app.shown_regions().len(), 2, "{}", ui.app.note);
+    // The second chosen and left out with Delete.
+    ui.send(Message::Area(AreaMsg::Choose(1)));
+    arrow(&mut ui, Named::Delete, NONE);
+    assert_eq!(ui.app.shown_regions().len(), 1);
+    assert_eq!(ui.app.chosen, None);
+    // The first made smaller by hand: still cut out, at its new size.
+    ui.send(Message::Area(AreaMsg::Choose(0)));
+    let r = ui.app.chosen_rect().unwrap();
+    let smaller = Selection {
+        x: r.x + 10.0,
+        y: r.y + 10.0,
+        width: r.width - 20.0,
+        height: r.height - 20.0,
+    };
+    ui.send(Message::Select(Some(smaller)));
+    assert_eq!(ui.app.chosen_rect(), Some(smaller));
+    let edited = ui.app.shown_regions()[0];
+    assert!(edited.auto && !edited.exact());
+    // One drawn on an empty part: a click lets the first go, a drag draws.
+    ui.send(Message::Select(None));
+    let drawn = Selection {
+        x: 20.0,
+        y: 20.0,
+        width: 100.0,
+        height: 60.0,
+    };
+    ui.send(Message::Select(Some(drawn)));
+    assert_eq!(ui.app.shown_regions().len(), 2);
+    assert!(ui.app.shown_regions()[1].exact());
+    ui.send(Message::Dpi(1200));
+    ui.click("Scansiona 2 foto");
+    assert_eq!(ui.app.pages.len(), 2, "{}", ui.app.note);
+    assert_eq!(controls.requests().len(), 3, "the preview, then one each");
+    assert_eq!(ui.app.pages[0].origin, Some(edited.at));
+    // The area drawn scanned as it is, kept whole.
+    let page = &ui.app.pages[1];
+    assert!(page.origin.is_none() && page.whole.is_some());
+    let k = 1200.0 / f32::from(crate::PREVIEW_DPI);
+    let full = &page.raw.full;
+    assert!(
+        (full.width as f32 - drawn.width * k).abs() <= 2.0,
+        "{}",
+        full.width
+    );
+    assert!(
+        (full.height as f32 - drawn.height * k).abs() <= 2.0,
+        "{}",
+        full.height
+    );
+}
+
+#[test]
+fn slides_too_have_their_preview_and_a_scan_each() {
+    let (mut ui, controls) = with_slides();
+    controls.load(scanner_api::fake::Holder::Slides);
+    ui.click("Pellicola");
+    ui.send(Message::Slides(true));
+    ui.click("Anteprima");
+    let n = ui.app.shown_regions().len();
+    assert_eq!(n, 2, "{}", ui.app.note);
+    ui.click("Scansiona 2 foto");
+    assert_eq!(ui.app.pages.len(), 2, "{}", ui.app.note);
+    let asked = controls.requests();
+    assert_eq!(asked.len(), 3, "{asked:?}");
+    assert!(asked.iter().all(|r| r.source == scanner_api::Source::Slide));
+}
+
+#[test]
+fn foto_the_originals_found_are_corrected_and_one_drawn_is_added() {
+    use crate::areas::AreaMsg;
+    use crate::viewer::Selection;
+    let scanner = FakeScanner::flatbed();
+    let controls = scanner.controls();
+    let mut ui = Ui::with_scanners(vec![scanner]);
+    ui.send(Message::Kind(Kind::Photo));
+    ui.click("Anteprima");
+    assert_eq!(ui.app.shown_regions().len(), 3, "{}", ui.app.note);
+    // The first turned by a degree from the panel.
+    ui.send(Message::Area(AreaMsg::Choose(0)));
+    let before = ui.app.shown_regions()[0].at.angle;
+    ui.send(Message::Area(AreaMsg::Tilt(1.0)));
+    let turned = ui.app.shown_regions()[0].at;
+    assert!(
+        (turned.angle - before - 1.0).abs() < 0.06,
+        "{}",
+        turned.angle
+    );
+    // One drawn where nothing was found (the lid below the photos).
+    ui.send(Message::Select(None));
+    let drawn = Selection {
+        x: 200.0,
+        y: 1800.0,
+        width: 600.0,
+        height: 400.0,
+    };
+    ui.send(Message::Select(Some(drawn)));
+    assert_eq!(ui.app.chosen, Some(3));
+    // With an area drawn, one scan each; the photos found still cut out
+    // and straightened, the area drawn as it is.
+    ui.click("Scansiona 4 foto");
+    assert_eq!(ui.app.pages.len(), 4, "{}", ui.app.note);
+    assert_eq!(controls.requests().len(), 5);
+    assert_eq!(ui.app.pages[0].origin, Some(turned));
+    assert!(ui.app.pages[3].origin.is_none());
+    // Without it, the three found in one pass, as before.
+    ui.send(Message::DropFound(3));
+    ui.app.unsaved = false;
+    ui.click("Scansiona 3 foto");
+    assert_eq!(ui.app.pages.len(), 3, "{}", ui.app.note);
+    assert_eq!(controls.requests().len(), 6, "one pass for the three");
+}
+
+#[test]
+fn an_original_chosen_in_foto_is_not_moved_from_documento() {
+    use crate::viewer::Selection;
+    let mut ui = Ui::new();
+    ui.send(Message::Kind(Kind::Photo));
+    ui.click("Anteprima");
+    ui.send(Message::Area(crate::areas::AreaMsg::Choose(0)));
+    assert!(ui.app.chosen_rect().is_some());
+    // Documento shares the glass but not the automatic crop: the original
+    // is hidden, so neither chosen nor moved, and a drag draws a new area.
+    ui.send(Message::Kind(Kind::Document));
+    assert!(ui.app.shown_regions().is_empty());
+    assert_eq!(ui.app.chosen_rect(), None);
+    assert!(!ui.app.moving_area());
+    let area = Selection {
+        x: 100.0,
+        y: 100.0,
+        width: 300.0,
+        height: 200.0,
+    };
+    ui.send(Message::Select(Some(area)));
+    assert_eq!(ui.app.chosen_rect(), Some(area));
+    assert_eq!(ui.app.shown_regions().len(), 1);
+    // Back in Foto the three found and the area drawn.
+    ui.send(Message::Kind(Kind::Photo));
+    assert_eq!(ui.app.shown_regions().len(), 4);
+}
+
+#[test]
+fn photos_picked_are_saved_alone_and_the_others_stay_to_save() {
+    use crate::Pick;
+    let mut ui = Ui::new();
+    ui.send(Message::Kind(Kind::Photo));
+    ui.click("Anteprima");
+    ui.click("Scansiona 3 foto");
+    assert_eq!(ui.app.pages.len(), 3);
+    // The first shown; Ctrl+click on the third picks both.
+    ui.send(Message::PageShow(0));
+    ui.send(Message::PagePick(2, Pick::Toggle));
+    let picked = |ui: &Ui| ui.app.pages.iter().map(|p| p.picked).collect::<Vec<_>>();
+    assert_eq!(picked(&ui), [true, false, true]);
+    assert!(ui.shows("2 scelte"));
+    // Ctrl+click again lets it go; Shift+click picks from the one shown.
+    ui.send(Message::PagePick(2, Pick::Toggle));
+    assert_eq!(picked(&ui), [true, false, false]);
+    ui.send(Message::PagePick(1, Pick::Range));
+    assert_eq!(picked(&ui), [true, true, false]);
+    // Saved: only those two, one file each.
+    ui.send(Message::Output(crate::Output::Image(
+        vetroscan_export::ImageFormat::Png,
+    )));
+    ui.send(Message::Save);
+    assert_eq!(ui.saved().len(), 2, "{:?} {}", ui.saved(), ui.app.note);
+    assert!(ui.app.unsaved, "the third is still to save");
+    // Esc lets them go: Save writes all of them again.
+    ui.send(Message::Tab(crate::Tab::Result));
+    ui.key(iced::keyboard::key::Named::Escape);
+    assert_eq!(picked(&ui), [false; 3]);
+    // Ctrl+A picks them all.
+    ui.send(Message::PickAll(true));
+    assert_eq!(picked(&ui), [true; 3]);
+    // A plain click lets them go.
+    ui.send(Message::PagePress(1));
+    ui.send(Message::PageDrop);
+    assert_eq!(picked(&ui), [false; 3]);
+}
+
+#[test]
+fn the_look_of_a_photo_goes_to_the_photos_picked_only() {
+    use crate::{Field, Pick};
+    let mut ui = Ui::new();
+    ui.send(Message::Kind(Kind::Photo));
+    ui.click("Anteprima");
+    ui.click("Scansiona 3 foto");
+    ui.send(Message::PageShow(0));
+    ui.send(Message::PagePick(1, Pick::Toggle));
+    // The first made brighter in Regola: its own look.
+    ui.send(Message::Pane(crate::Pane::Adjust));
+    ui.send(Message::Adjust(Field::Brightness, 30.0));
+    let shared = *ui.app.settings();
+    let brightness = |ui: &Ui, i: usize| ui.app.pages[i].effective(&shared).adjust.brightness;
+    assert_eq!(brightness(&ui, 0), 30.0);
+    assert!(ui.shows("Applica alle foto scelte (2)"));
+    ui.click("Applica alle foto scelte (2)");
+    assert_eq!(brightness(&ui, 1), 30.0, "picked");
+    assert_eq!(brightness(&ui, 2), shared.adjust.brightness, "not picked");
+}
+#[test]
+fn senza_elaborazioni_on_the_glass_gives_the_scanners_samples_only() {
+    use crate::Field;
+    let scanner = FakeScanner::with_glass_colour();
+    let controls = scanner.controls();
+    let mut ui = Ui::with_scanners(vec![scanner]);
+    ui.send(Message::Kind(Kind::Photo));
+    ui.send(Message::AutoCrop(false));
+    ui.send(Message::Dpi(300));
+    // The scanner's own: its colour correction off, nothing else on.
+    ui.send(Message::ScannerColour(false));
+    ui.scan(1);
+    let bare = ui.app.pages[0].raw.full.data.clone();
+    // Senza elaborazioni with the correction and twice the resolution
+    // asked: neither is done.
+    ui.send(Message::ScannerColour(true));
+    ui.send(Message::Double(true));
+    ui.send(Message::Untouched(true));
+    assert!(ui.shows("Senza elaborazioni"));
+    ui.app.unsaved = false;
+    ui.scan(1);
+    assert_eq!(ui.app.pages.len(), 1, "{}", ui.app.note);
+    assert_eq!(controls.requests().last().unwrap().dpi, 300, "not doubled");
+    let page = &ui.app.pages[0];
+    assert!(
+        page.raw.full.data == bare,
+        "the scanner's samples, untouched"
+    );
+    // No sharpening, and Regola changes nothing on it.
+    let shared = *ui.app.settings();
+    assert_eq!(page.effective(&shared).adjust.sharpen, 0.0);
+    let before = page.finished(&shared).data;
+    ui.send(Message::Pane(crate::Pane::Adjust));
+    assert!(ui.shows(
+        "Senza elaborazioni: le regolazioni qui non hanno effetto (si tolgono in Scansione)."
+    ));
+    ui.send(Message::Adjust(Field::Brightness, 40.0));
+    let shared = *ui.app.settings();
+    assert!(ui.app.pages[0].finished(&shared).data == before);
+}
+
+#[test]
+fn senza_elaborazioni_inverts_a_negative_only_or_leaves_it_as_it_is() {
+    let (mut ui, _) = with_adapter();
+    ui.click("Pellicola");
+    ui.send(Message::Dpi(600));
+    ui.send(Message::Untouched(true));
+    // The choice for negatives shows only "Senza elaborazioni".
+    assert!(ui.shows("Lascia i negativi come sono"));
+    ui.send(Message::KeepNegative(true));
+    // The preview: frames found, nothing measured.
+    ui.click("Anteprima");
+    assert_eq!(ui.app.shown_regions().len(), 2, "{}", ui.app.note);
+    assert!(ui.app.measures.is_none());
+    ui.click("Scansiona 2 foto");
+    let kept: Vec<Vec<u16>> = ui
+        .app
+        .pages
+        .iter()
+        .map(|p| p.raw16.as_ref().unwrap().to_vec())
+        .collect();
+    // Left as it is: the negative, orange base and all (red the most
+    // light, blue the least, as the made-up film's base).
+    let mean = |v: &[u16], c: usize| {
+        v.iter()
+            .skip(c)
+            .step_by(3)
+            .map(|&x| f64::from(x))
+            .sum::<f64>()
+            / (v.len() / 3) as f64
+    };
+    assert!(mean(&kept[0], 0) > mean(&kept[0], 2), "an orange negative");
+    // Inverted: each sample one less the negative's at gamma 2.2 (within
+    // what straightening the frame mixes between neighbouring pixels).
+    ui.send(Message::KeepNegative(false));
+    ui.app.unsaved = false;
+    ui.click("Scansiona 2 foto");
+    let inverted = ui.app.pages[0].raw16.as_ref().unwrap().to_vec();
+    assert_eq!(inverted.len(), kept[0].len());
+    let close = inverted
+        .iter()
+        .zip(&kept[0])
+        .filter(|&(&got, &negative)| {
+            let t = f64::from(negative) / 65535.0;
+            let want = (1.0 - t.powf(1.0 / 2.2)).powf(2.2) * 65535.0;
+            (f64::from(got) - want).abs() <= 400.0
+        })
+        .count();
+    assert!(
+        close * 100 >= inverted.len() * 95,
+        "{close} of {}",
+        inverted.len()
+    );
+    assert!(
+        mean(&inverted, 2) > mean(&inverted, 0),
+        "blue now the most light"
+    );
+    // Developed as usual once it is off.
+    ui.send(Message::Untouched(false));
+    ui.click("Anteprima");
+    assert!(ui.app.measures.is_some());
+}
+/// The mean of each channel of a page's 16-bit picture.
+fn channel_means(page: &crate::Page) -> [f64; 3] {
+    let deep = page.raw16.as_ref().expect("16-bit samples");
+    let n = (deep.len() / 3) as f64;
+    std::array::from_fn(|c| {
+        deep.iter()
+            .skip(c)
+            .step_by(3)
+            .map(|&v| f64::from(v))
+            .sum::<f64>()
+            / n
+    })
+}
+
+#[test]
+fn two_strips_of_two_rolls_are_each_developed_with_their_own_measures() {
+    let scanner = FakeScanner::with_two_strips();
+    let mut ui = Ui::with_scanners(vec![scanner]);
+    ui.click("Pellicola");
+    ui.click("Anteprima");
+    // Two strips found and measured on their own: their bases as the two
+    // rolls' (the made-up film's).
+    let mm = 25.4 / f32::from(crate::PREVIEW_DPI);
+    let found: Vec<(f32, f32, f32, f32)> = ui
+        .app
+        .shown_regions()
+        .iter()
+        .map(|r| {
+            (
+                r.at.cx * mm,
+                r.at.cy * mm,
+                r.at.width * mm,
+                r.at.height * mm,
+            )
+        })
+        .collect();
+    assert_eq!(found.len(), 4, "{found:?} {}", ui.app.note);
+    assert_eq!(ui.app.strips.len(), 2);
+    let bases: Vec<[f32; 3]> = ui.app.strips.iter().map(|(_, m)| m.base).collect();
+    let near = |a: [f32; 3], b: [f64; 3]| (0..3).all(|c| (f64::from(a[c]) - b[c]).abs() < 0.02);
+    assert!(
+        bases.iter().any(|&b| near(b, scanner_api::fake::BASE))
+            && bases
+                .iter()
+                .any(|&b| near(b, scanner_api::fake::OTHER_BASE)),
+        "{bases:?}"
+    );
+    // Each frame: its strip's base, its own white.
+    assert_eq!(ui.app.frames.len(), 4);
+    for (b, m) in &ui.app.frames {
+        let (cx, cy) = (b[0] + b[2] / 2.0, b[1] + b[3] / 2.0);
+        let (sb, sm) = ui
+            .app
+            .strips
+            .iter()
+            .find(|(s, _)| cx >= s[0] && cx <= s[0] + s[2] && cy >= s[1] && cy <= s[1] + s[3])
+            .expect("a frame in a strip");
+        assert_eq!(m.base, sm.base, "{b:?} in {sb:?}");
+    }
+    // Each frame scanned on its own, with its own measures: the same
+    // scene on the two rolls comes out the same.
+    ui.click("Scansiona 4 foto");
+    assert_eq!(ui.app.pages.len(), 4, "{}", ui.app.note);
+    let left: Vec<[f64; 3]> = ui
+        .app
+        .pages
+        .iter()
+        .filter(|p| p.origin.is_some_and(|o| o.cx < ui.app.glass().width / 2.0))
+        .map(channel_means)
+        .collect();
+    let right: Vec<[f64; 3]> = ui
+        .app
+        .pages
+        .iter()
+        .filter(|p| p.origin.is_some_and(|o| o.cx >= ui.app.glass().width / 2.0))
+        .map(channel_means)
+        .collect();
+    assert_eq!((left.len(), right.len()), (2, 2));
+    for (l, r) in left.iter().zip(&right) {
+        for c in 0..3 {
+            assert!(
+                (l[c] - r[c]).abs() < 0.03 * 65535.0,
+                "channel {c}: {l:?} against {r:?}"
+            );
+        }
+    }
+    // Scanned whole without a preview: each strip measured on its own too.
+    ui.app.unsaved = false;
+    ui.send(Message::Kind(Kind::Document));
+    let mut ui2 = Ui::with_scanners(vec![FakeScanner::with_two_strips()]);
+    ui2.click("Pellicola");
+    ui2.click("Scansiona foto");
+    assert_eq!(ui2.app.pages.len(), 4, "{}", ui2.app.note);
+    let means: Vec<[f64; 3]> = ui2.app.pages.iter().map(channel_means).collect();
+    for c in 0..3 {
+        let (lo, hi) = means
+            .iter()
+            .map(|m| m[c])
+            .fold((f64::MAX, f64::MIN), |(a, b), v| (a.min(v), b.max(v)));
+        assert!(hi - lo < 0.03 * 65535.0, "channel {c}: {means:?}");
+    }
+}
+#[test]
+fn documento_scans_each_area_drawn_as_a_page() {
+    use crate::viewer::Selection;
+    let scanner = FakeScanner::flatbed();
+    let controls = scanner.controls();
+    let mut ui = Ui::with_scanners(vec![scanner]);
+    ui.send(Message::Kind(Kind::Document));
+    ui.click("Anteprima");
+    let areas = [
+        Selection {
+            x: 100.0,
+            y: 100.0,
+            width: 700.0,
+            height: 500.0,
+        },
+        Selection {
+            x: 100.0,
+            y: 1200.0,
+            width: 900.0,
+            height: 700.0,
+        },
+    ];
+    for area in areas {
+        ui.send(Message::Select(None));
+        ui.send(Message::Select(Some(area)));
+    }
+    assert_eq!(ui.app.shown_regions().len(), 2);
+    ui.click("Scansiona 2 pagine");
+    assert_eq!(ui.app.pages.len(), 2, "{}", ui.app.note);
+    let asked = controls.requests();
+    assert_eq!(asked.len(), 3, "the preview, then one each");
+    let dpi = asked[1].dpi;
+    let k = f32::from(dpi) / f32::from(crate::PREVIEW_DPI);
+    for (request, area) in asked[1..].iter().zip(areas) {
+        assert!((request.area.x as f32 - area.x * k).abs() <= 2.0);
+        assert!((request.area.width as f32 - area.width * k).abs() <= 2.0);
+    }
+    // "Rifai" scans a page's own area again, whatever is chosen now.
+    ui.send(Message::DropFound(0));
+    ui.send(Message::PageRedo(0));
+    ui.settle();
+    let last = *controls.requests().last().unwrap();
+    assert_eq!(last.area, asked[1].area);
 }
 
 #[test]
@@ -1814,12 +2321,14 @@ fn separa_finds_the_photos_of_an_area_scanned_whole() {
     let mut ui = Ui::new();
     ui.send(Message::Kind(Kind::Photo));
     let originals = found_by_the_preview(&mut ui);
-    // An area chosen by hand: no automatic crop, a single picture.
+    // An area chosen by hand, the originals found left aside: a single
+    // picture.
+    ui.send(Message::AutoCrop(false));
     for (field, mm) in [(0, "10"), (1, "10"), (2, "200"), (3, "240")] {
         ui.send(Message::MmInput(MmField::Area(field), mm.into()));
     }
     ui.send(Message::MmSubmit);
-    assert!(ui.app.selection.is_some());
+    assert!(ui.app.chosen_rect().is_some());
     ui.click("Scansiona foto");
     assert_eq!(ui.app.pages.len(), 1);
     ui.click("Separa le foto");
@@ -2826,34 +3335,34 @@ fn the_area_to_scan_moves_and_grows_from_the_keyboard() {
     // The preview is at 200 dpi: 1 mm is 7.87 pixels.
     let mm = 200.0 / 25.4;
     arrow(&mut ui, Named::ArrowRight, NONE);
-    let s = ui.app.selection.unwrap();
+    let s = ui.app.chosen_rect().unwrap();
     assert!(near(s.x, 200.0 + mm) && near(s.width, 400.0), "{s:?}");
     arrow(&mut ui, Named::ArrowDown, SHIFT);
-    assert!(near(ui.app.selection.unwrap().y, 200.0 + 10.0 * mm));
+    assert!(near(ui.app.chosen_rect().unwrap().y, 200.0 + 10.0 * mm));
     // Alt: 0.1 mm, but a pixel of the preview (0.127 mm) is more.
     arrow(&mut ui, Named::ArrowLeft, ALT);
-    assert!(near(ui.app.selection.unwrap().x, 200.0 + mm - 1.0));
+    assert!(near(ui.app.chosen_rect().unwrap().x, 200.0 + mm - 1.0));
     // Ctrl: the size, from the right and bottom edges.
     arrow(&mut ui, Named::ArrowRight, CTRL);
     arrow(&mut ui, Named::ArrowUp, CTRL | SHIFT);
-    let s = ui.app.selection.unwrap();
+    let s = ui.app.chosen_rect().unwrap();
     assert!(near(s.width, 400.0 + mm) && near(s.height, 400.0 - 10.0 * mm));
     assert!(near(s.x, 200.0 + mm - 1.0), "the left edge stays: {s:?}");
     // At the edge of the glass it stops.
     for _ in 0..10 {
         arrow(&mut ui, Named::ArrowLeft, SHIFT);
     }
-    assert_eq!(ui.app.selection.unwrap().x, 0.0);
+    assert_eq!(ui.app.chosen_rect().unwrap().x, 0.0);
     // Home: in the middle of the glass.
     arrow(&mut ui, Named::Home, NONE);
-    let (s, glass) = (ui.app.selection.unwrap(), ui.app.glass());
+    let (s, glass) = (ui.app.chosen_rect().unwrap(), ui.app.glass());
     assert!(near(s.x * 2.0 + s.width, glass.width), "{s:?} {glass:?}");
     assert!(near(s.y * 2.0 + s.height, glass.height));
     // Never smaller than a few pixels.
     for _ in 0..80 {
         arrow(&mut ui, Named::ArrowLeft, CTRL | SHIFT);
     }
-    assert!(ui.app.selection.unwrap().width >= 4.0);
+    assert!(ui.app.chosen_rect().unwrap().width >= 4.0);
 }
 
 #[test]
@@ -3088,7 +3597,7 @@ fn the_point_of_the_curve_clicked_last_moves_with_the_arrows() {
         "{p:?}"
     );
     assert_eq!(ui.app.undo.len(), steps + 1, "one step of Ctrl+Z");
-    assert_eq!(ui.app.selection, Some(area), "the area did not move");
+    assert_eq!(ui.app.chosen_rect(), Some(area), "the area did not move");
     // Tab: the next point, Shift+Tab the one before.
     arrow(&mut ui, Named::Tab, NONE);
     assert_eq!(ui.app.curve_selected, Some(2));
@@ -3104,9 +3613,9 @@ fn the_point_of_the_curve_clicked_last_moves_with_the_arrows() {
     // Esc lets the point go and keeps the area; then the arrows move it.
     arrow(&mut ui, Named::Escape, NONE);
     assert_eq!(ui.app.curve_selected, None);
-    assert_eq!(ui.app.selection, Some(area));
+    assert_eq!(ui.app.chosen_rect(), Some(area));
     arrow(&mut ui, Named::ArrowRight, NONE);
-    assert!(ui.app.selection.unwrap().x > 10.0);
+    assert!(ui.app.chosen_rect().unwrap().x > 10.0);
 }
 
 #[test]

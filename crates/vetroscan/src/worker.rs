@@ -440,9 +440,10 @@ impl Worker {
     }
 }
 
-/// Appends a line to the log of the buttons (`tasti.log` next to the
-/// settings), to tell what happened when a press seems lost.
-fn log(line: &str) {
+/// Appends a line to the log (`tasti.log` next to the settings): the
+/// buttons, to tell what happened when a press seems lost; the scans asked
+/// and a panic's message, to tell why the app closed.
+pub fn log(line: &str) {
     use std::io::Write;
     let Some(dir) = crate::prefs::config_dir() else {
         return;

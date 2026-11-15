@@ -17,6 +17,55 @@ GitHub; here they are in English.
 
 ## [Unreleased]
 
+### Added
+- Film: a **preview** again, for negatives and slides, at the lowest resolution the adapter
+  scans at (600 dpi on the HP 3770 and the Epson 4490). The frames found are outlined on it and
+  **each one chosen is scanned on its own**, only it and a millimetre around it: at 2400 and
+  4800 dpi a whole strip was too large to scan. The film is measured on the preview and every
+  frame is developed with those measures. Scanning without a preview still scans the whole
+  holder and finds the frames in it.
+- Document, Photo and Film: **several areas on the preview**, each its own page or image with
+  its own scan. The originals found by the automatic crop are areas like the others: chosen
+  with a click, they are moved and resized with the handles, typed in millimetres, turned with
+  **Tilt**; an area is added by dragging on an empty part and removed with **Delete**,
+  **Remove area** or **Leave out**.
+- Photo and Film: **several photos picked** in the column of thumbnails, with Ctrl+click
+  (Cmd+click on macOS), Shift+click or Ctrl+A. **Save** then saves only those, with the same
+  settings, and **Apply to the photos picked** gives them the look of the photo shown.
+- **No processing** (Scan panel, every scanner and way of working): the file as the scanner
+  gives it, like its own software with every correction off, only brought to a gamma to be
+  seen. No stripes removed, no colour correction of the scanner, no double resolution, no
+  development of films, no colour noise reduction, no sharpening, no adjustments (Regola has
+  no effect on such a scan). Negatives come out only inverted, orange base and all, or with
+  **Leave negatives as they are** not inverted, for programs that invert them themselves.
+  Slides as the scanner reads them. It applies to the next scans; the frames are still found.
+
+### Fixed
+- Film: with two strips of negatives side by side (the Epson 4490's holder) the film was not
+  measured, so the preview and a strip scanned whole stayed negative: the base was looked for
+  between a frame of one strip and the next frame in reading order, on the other strip, across
+  the holder. Now only between frames next to each other on the same strip, and a gap covered
+  by the holder is left out.
+- Film: negatives are developed with **the base of their strip and the white of each frame**, on
+  the preview, on the frames scanned one by one and on a holder scanned whole. Two strips side
+  by side may be of two rolls: measured together, the white of one set the colours of both (on
+  the Epson 4490 the indoor strip came out orange). The base is the roll's, one per strip; the
+  white and the black follow each picture, as a lab balances each frame. An area drawn by hand
+  is measured on itself, on the base of its strip.
+- Film at high resolutions: developing a frame took more memory than it needed (about 1.4 GB
+  for a frame at 4800 dpi, now about 0.4 GB, as before), and VetroScan closed once at the third
+  frame. The scans asked and any crash's message are now written to `tasti.log`.
+- Film: two strips side by side joined by light across the holder (a lit slot, a hole, a leak at
+  an end) were taken for one wide strip, and only some frames were found, between the strips.
+  Such a piece is now split into its strips.
+
+### Changed
+- A frame drawn on the preview no longer takes the place of the originals found: it is added
+  to them. Turning the automatic crop off keeps only the areas drawn by hand. **Esc** lets the
+  area chosen go instead of removing it (**Delete** removes it).
+- **Redo** on a page scanned whole scans that page's own area again, not the one chosen on the
+  preview now.
+
 ## [0.9.0] - 2026-11-15
 
 ### Added

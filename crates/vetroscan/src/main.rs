@@ -17,6 +17,7 @@
 #![windows_subsystem = "windows"]
 
 mod access;
+mod areas;
 mod curve;
 #[cfg(test)]
 mod e2e;
@@ -33,6 +34,7 @@ mod viewer;
 mod wia;
 mod worker;
 
+use areas::{AreaMsg, Region};
 use editor::{Edit, EditMsg, Editor, Section};
 use histogram::Histogram;
 use i18n::{tr, trf};
@@ -87,6 +89,13 @@ const PROXY: usize = 2400;
 
 fn main() -> iced::Result {
     ram::start();
+    // A window app has no console: a panic's message goes to the log, or it
+    // would be lost with the app.
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        worker::log(&format!("panic: {info}"));
+        default(info);
+    }));
     iced::application(App::new, App::update, App::view)
         .title(APP_NAME)
         .subscription(App::subscription)
@@ -694,6 +703,16 @@ struct Settings {
     /// Films: correct the picture's colours with the scanner's matrix for
     /// the film, where it declares one (`Capabilities::colour`).
     scanner_colour: bool,
+    /// "Senza elaborazioni": the scan as the scanner gives it, only brought
+    /// to a gamma to be seen, as a scanner's own software with every
+    /// correction off. No stripes taken away, no colour matrix, no double
+    /// resolution, no development of films, no noise reduction, no
+    /// sharpening, no adjustments. Applies to the next scans; a page
+    /// scanned so stays so.
+    untouched: bool,
+    /// With [`Settings::untouched`], negatives: left as they are, not
+    /// inverted (for programs that turn them into positives themselves).
+    keep_negative: bool,
 }
 
 impl Settings {
@@ -719,6 +738,8 @@ impl Settings {
             // The scanner's correction of the glass's colours, where it declares one: on, as
             // for films (Matteo, 14 November 2026).
             scanner_colour: true,
+            untouched: false,
+            keep_negative: false,
         }
     }
 
@@ -823,6 +844,8 @@ impl Settings {
             double: Some(self.double),
             colour_noise: Some(self.colour_noise),
             scanner_colour: Some(self.scanner_colour),
+            untouched: Some(self.untouched),
+            keep_negative: Some(self.keep_negative),
             roll_base: None,
             slides: false,
             adjust: prefs::StoredAdjust {
@@ -973,6 +996,8 @@ impl Settings {
             double: m.double.unwrap_or(base.double),
             colour_noise: m.colour_noise.unwrap_or(base.colour_noise),
             scanner_colour: m.scanner_colour.unwrap_or(base.scanner_colour),
+            untouched: m.untouched.unwrap_or(base.untouched),
+            keep_negative: m.keep_negative.unwrap_or(base.keep_negative),
         }
     }
 }
@@ -1326,13 +1351,18 @@ fn shrink(image: &Image, max: usize) -> Image {
 /// The adjusted image of a raw scan (on the proxy, or at full size),
 /// through the tone curve of the scanner that made it.
 fn render(raw: &Image, settings: &Settings, adjust: &Adjustments, tone: &Tone) -> Image {
+    let untouched = untouched_look();
     adjust::render(
         &raw.data,
         raw.width,
         raw.height,
         raw.dpi,
         settings.mode(),
-        adjust,
+        if settings.untouched {
+            &untouched
+        } else {
+            adjust
+        },
         false,
         tone,
     )
@@ -1383,6 +1413,15 @@ fn draw_page(
     picture.size = size;
     let thumb = thumb.then(|| Picture::from_rgb_max(shown.width, shown.height, &rgb, 240));
     (shown, picture, thumb)
+}
+
+/// The adjustments of a scan "Senza elaborazioni": none, not even the
+/// sharpening every scan has by default.
+fn untouched_look() -> Adjustments {
+    Adjustments {
+        sharpen: 0.0,
+        ..Adjustments::default()
+    }
 }
 
 /// How a scan looks: the adjustments and the black-and-white threshold.
@@ -1436,6 +1475,9 @@ struct Page {
     /// In a PDF, when it fills the sheet and overflows it: the part kept,
     /// across and down (0 to 1, 0.5 the middle).
     focus: [f32; 2],
+    /// Picked in the strip (Foto, Pellicola: Ctrl+click), to save or
+    /// adjust together with the others picked.
+    picked: bool,
 }
 
 impl Page {
@@ -1464,6 +1506,7 @@ impl Page {
             transform: Transform::default(),
             layout: None,
             focus: [0.5, 0.5],
+            picked: false,
         }
     }
 
@@ -1542,6 +1585,10 @@ impl Page {
     fn effective(&self, shared: &Settings) -> Settings {
         let mut s = self.settings;
         self.own.unwrap_or(Look::of(shared)).put(&mut s);
+        // Scanned "Senza elaborazioni": no adjustment ever reaches it.
+        if s.untouched {
+            s.adjust = untouched_look();
+        }
         s
     }
 
@@ -1958,6 +2005,10 @@ enum Message {
     Double(bool),
     /// "Riduci il rumore di colore" (films).
     ColourNoise(bool),
+    /// "Senza elaborazioni" ([`Settings::untouched`]).
+    Untouched(bool),
+    /// "Lascia i negativi come sono" ([`Settings::keep_negative`]).
+    KeepNegative(bool),
     /// "Correggi i colori dello scanner" (films it declares a matrix for).
     ScannerColour(bool),
     /// "Blocca la base": the base of the last strip becomes the roll's.
@@ -1972,8 +2023,10 @@ enum Message {
     ForgetStripes,
     /// Find the originals on the preview again.
     Detect,
-    /// Leave out one of the originals found.
+    /// Leave out the area at this place among those shown on the preview.
     DropFound(usize),
+    /// The areas on the preview: one chosen, turned or set upright.
+    Area(AreaMsg),
     Toggle(Group),
     Adjust(Field, f32),
     /// Text typed in the number of a field.
@@ -2006,8 +2059,15 @@ enum Message {
     /// "Separa" open: its areas, cutting them out or leaving the scan whole.
     Split(SplitMsg),
     /// The mouse went down on a page of the strip: shown, and maybe
-    /// dragged to another place.
+    /// dragged to another place (with Ctrl or Shift: picked).
     PagePress(usize),
+    /// Foto: a photo picked or let go (Ctrl+click), or the photos from the
+    /// one shown to it picked (Shift+click).
+    PagePick(usize, Pick),
+    /// Foto: every photo picked (Ctrl+A), or none.
+    PickAll(bool),
+    /// Foto: the look of the photo shown given to the photos picked.
+    LookApplyToPicked,
     /// A page dragged is over this one.
     PageHover(usize),
     /// The mouse went up: a page dragged goes where it was let go.
@@ -2104,6 +2164,15 @@ fn within(area: Area, (max_w, max_h): (u32, u32)) -> Area {
     }
 }
 
+/// How a photo of the strip is picked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pick {
+    /// Picked, or let go if it was (Ctrl+click).
+    Toggle,
+    /// It and every photo between it and the one shown (Shift+click).
+    Range,
+}
+
 /// One pass of the scanner: an area of the glass (pixels of the
 /// preview) and the originals in it, each cut out of the scan.
 #[derive(Debug, Clone)]
@@ -2112,6 +2181,9 @@ struct Job {
     crops: Vec<Found>,
     /// The area asked of the scanner (pixels at the resolution).
     area: Option<Area>,
+    /// A whole scan with no area chosen: the frames of a film are looked
+    /// for in it (with the automatic crop).
+    find: bool,
 }
 
 /// The highest resolution "Misura le righe" scans at: above it a strip
@@ -2173,9 +2245,8 @@ struct Bench {
 }
 
 impl Bench {
-    /// Nothing done yet: the glass's preview first, a film's scans (they
-    /// have no preview).
-    fn new(work: Work) -> Self {
+    /// Nothing done yet: the preview first.
+    fn new(_work: Work) -> Self {
         Self {
             pages: Vec::new(),
             current: None,
@@ -2183,20 +2254,33 @@ impl Bench {
             unsaved: false,
             undo: Vec::new(),
             redo_stack: Vec::new(),
-            tab: if work == Work::Film {
-                Tab::Result
-            } else {
-                Tab::Preview
-            },
+            tab: Tab::Preview,
             result_view: View::default(),
         }
     }
 }
 
-/// A scan of films developed ([`App::develop`]): the picture at 8 bits
-/// and at 16, its measures and, for negatives, the base found between its
-/// frames.
-type Developed = (Image, Option<Vec<u16>>, Option<Measures>, Option<[f32; 3]>);
+/// The measures of each strip of negatives: where it lies (left, top,
+/// width, height in pixels) and how it becomes its picture.
+type StripMeasures = Vec<([f32; 4], film::Negative)>;
+
+/// A scan of films developed ([`App::develop`]).
+struct Developed {
+    /// The picture at 8 bits.
+    picture: Image,
+    /// And at 16.
+    deep: Option<Vec<u16>>,
+    /// Its measures (negatives: of all its strips together).
+    measures: Option<Measures>,
+    /// For negatives, the base found between its frames.
+    gaps: Option<[f32; 3]>,
+    /// For negatives, each strip's own measures, in pixels of this scan:
+    /// strips side by side may be of different rolls (their bases).
+    strips: StripMeasures,
+    /// For negatives, each frame's measures, in pixels of this scan: its
+    /// strip's base, its own white and black.
+    frames: StripMeasures,
+}
 
 /// A film base read back from the preferences: a transmission per channel,
 /// above nothing and at most the lamp's.
@@ -2211,10 +2295,12 @@ fn valid_base(base: [f32; 3]) -> bool {
 struct Bed {
     preview: Option<(Raw, Image, Picture)>,
     preview_view: View,
-    selection: Option<Selection>,
-    found: Vec<Found>,
+    regions: Vec<Region>,
+    chosen: Option<usize>,
     film_preview: Option<Image>,
     measures: Option<Measures>,
+    strips: StripMeasures,
+    frames: StripMeasures,
 }
 
 // --------------------------------------------------------------------- app
@@ -2260,6 +2346,12 @@ struct App {
     /// How the films of the preview become their picture: the full scans
     /// take the same measures, for the same picture.
     measures: Option<Measures>,
+    /// Negatives: each strip's own measures on the preview (pixels of the
+    /// preview): strips side by side may be of different rolls.
+    strips: StripMeasures,
+    /// Negatives: each frame's measures on the preview (pixels of the
+    /// preview): its strip's base, its own white and black.
+    frames: StripMeasures,
     /// "Diapositive" chosen in Pellicola: slides in the holder rather than
     /// negatives (asked only of an adapter that takes both, see
     /// `film_kind`).
@@ -2299,9 +2391,13 @@ struct App {
     preview: Option<(Raw, Image, Picture)>,
     preview_view: View,
     result_view: View,
-    selection: Option<Selection>,
-    /// Originals found on the preview (pixels of the preview).
-    found: Vec<Found>,
+    /// The areas to scan on the preview (pixels of the preview): the
+    /// originals found on it and those drawn by hand ([`areas`]).
+    regions: Vec<Region>,
+    /// The area whose handles are shown, in `regions`.
+    chosen: Option<usize>,
+    /// The keyboard's modifiers held now (Ctrl/Shift+click in the strip).
+    modifiers: iced::keyboard::Modifiers,
     /// The pass running and those still to do.
     job: Option<Job>,
     jobs: std::collections::VecDeque<Job>,
@@ -2431,6 +2527,8 @@ impl App {
                 film_preview: None,
                 doubled: false,
                 measures: None,
+                strips: Vec::new(),
+                frames: Vec::new(),
                 slides: stored.film.slides,
                 roll_base: stored.film.roll_base.filter(|b| valid_base(*b)),
                 strip_base: None,
@@ -2450,8 +2548,9 @@ impl App {
                 preview: None,
                 preview_view: View::default(),
                 result_view: View::default(),
-                selection: None,
-                found: Vec::new(),
+                regions: Vec::new(),
+                chosen: None,
+                modifiers: iced::keyboard::Modifiers::empty(),
                 job: None,
                 jobs: std::collections::VecDeque::new(),
                 batch: (0, 0),
@@ -2580,11 +2679,72 @@ impl App {
         )
     }
 
+    /// How many photos are picked (Foto, Pellicola).
+    fn picked_count(&self) -> usize {
+        if self.kind != Kind::Photo {
+            return 0;
+        }
+        self.pages.iter().filter(|p| p.picked).count()
+    }
+
+    /// What "Salva" writes: the photos picked, or every page.
+    fn saving(&self) -> Vec<&Page> {
+        if self.picked_count() > 0 {
+            self.pages.iter().filter(|p| p.picked).collect()
+        } else {
+            self.pages.iter().collect()
+        }
+    }
+
+    /// No photo picked.
+    fn pick_none(&mut self) {
+        for page in &mut self.pages {
+            page.picked = false;
+        }
+    }
+
+    /// Photo `i` picked as `how` says. With nothing picked yet, the photo
+    /// shown is picked too: Ctrl+click on a second photo makes two.
+    fn pick(&mut self, i: usize, how: Pick) {
+        if self.kind != Kind::Photo || i >= self.pages.len() {
+            return;
+        }
+        let shown = self.current.filter(|&c| c < self.pages.len());
+        match how {
+            Pick::Toggle => {
+                if self.picked_count() == 0 {
+                    if let Some(c) = shown.filter(|&c| c != i) {
+                        self.pages[c].picked = true;
+                    }
+                }
+                self.pages[i].picked = !self.pages[i].picked;
+            }
+            Pick::Range => {
+                let from = shown.unwrap_or(i);
+                for page in &mut self.pages[from.min(i)..=from.max(i)] {
+                    page.picked = true;
+                }
+            }
+        }
+        self.note = self.picked_note();
+    }
+
+    /// What the note says of the photos picked.
+    fn picked_note(&self) -> String {
+        match self.picked_count() {
+            0 => tr("Nessuna foto scelta: «Salva» le salva tutte").into(),
+            n => trf(
+                "{n} foto scelte: «Salva» salva solo quelle; Esc le lascia",
+                &[("n", &n)],
+            ),
+        }
+    }
+
     /// The save dialog's file type and title: whether the pages (or
     /// photos) go into one file or one file each, so that a dialog asking
     /// for one name does not look like it saves one scan only.
     fn save_labels(&self) -> (&'static str, String) {
-        let n = self.pages.len();
+        let n = self.saving().len();
         let document = self.kind == Kind::Document;
         let one_file = matches!(self.settings().output, Output::Pdf | Output::TiffPages);
         match (n, one_file, document) {
@@ -2675,6 +2835,7 @@ impl App {
                 | Message::PageColour(_)
                 | Message::OwnLook(_)
                 | Message::LookApplyToAll
+                | Message::LookApplyToPicked
                 | Message::PresetApply(_)
                 | Message::Adjust(..)
                 | Message::Commit(_)
@@ -2801,10 +2962,12 @@ impl App {
         self.other_bed = Bed {
             preview: std::mem::replace(&mut self.preview, other.preview),
             preview_view: std::mem::replace(&mut self.preview_view, other.preview_view),
-            selection: std::mem::replace(&mut self.selection, other.selection),
-            found: std::mem::replace(&mut self.found, other.found),
+            regions: std::mem::replace(&mut self.regions, other.regions),
+            chosen: std::mem::replace(&mut self.chosen, other.chosen),
             film_preview: std::mem::replace(&mut self.film_preview, other.film_preview),
             measures: std::mem::replace(&mut self.measures, other.measures),
+            strips: std::mem::replace(&mut self.strips, other.strips),
+            frames: std::mem::replace(&mut self.frames, other.frames),
         };
         self.mm_draft = None;
     }
@@ -2844,9 +3007,9 @@ impl App {
         self.caps.offers(Source::Negative) || self.caps.offers(Source::Slide)
     }
 
-    /// "Negativi" or "Diapositive" chosen. Measures and frames found were
-    /// of the other film: they go (the photos scanned stay). Not during a
-    /// scan.
+    /// "Negativi" or "Diapositive" chosen. Measures, frames found and the
+    /// preview were of the other film: they go (the areas drawn by hand and
+    /// the photos scanned stay). Not during a scan.
     fn set_slides(&mut self, slides: bool) {
         if self.busy.is_some() || self.slides == slides {
             return;
@@ -2856,8 +3019,12 @@ impl App {
             return;
         }
         self.measures = None;
-        self.found.clear();
+        self.strips.clear();
+        self.frames.clear();
+        self.forget_found();
         self.film_preview = None;
+        // The preview showed the other film, developed as such.
+        self.preview = None;
         self.note = match self.film_kind() {
             Film::Slide => tr("Diapositive nel supporto: ognuna diventa un'immagine"),
             Film::Negative => tr("Negativi nel supporto: ogni fotogramma diventa un'immagine"),
@@ -2960,11 +3127,50 @@ impl App {
     /// (the scanner's, for this film): the picture at 8 bits and at 16, the measures and,
     /// for negatives, the base found in the gaps between its frames (none
     /// with a base given). Without film to measure, the scan as it is.
+    /// A scan of films "Senza elaborazioni": a slide as the scanner gives
+    /// it; a negative only inverted, as a scanner's software inverts it
+    /// with every correction off (the light shown is one less the
+    /// negative's at the same gamma, the orange base left in), or left as
+    /// it is (`keep`). Nothing measured: the frames are found the same.
+    fn plain(
+        film: Film,
+        image: Image,
+        samples16: Option<Vec<u16>>,
+        keep: bool,
+    ) -> (Image, Option<Vec<u16>>) {
+        let (w, h) = (image.width, image.height);
+        let mut deep: Vec<u16> = match samples16 {
+            Some(s) if s.len() == w * h * 3 => s,
+            _ => image.data.iter().map(|&v| u16::from(v) * 257).collect(),
+        };
+        if film == Film::Negative && !keep {
+            let g = film::TONE.gamma as f32;
+            for v in deep.iter_mut() {
+                let shown = (f32::from(*v) / 65535.0).powf(1.0 / g);
+                *v = ((1.0 - shown).max(0.0).powf(g) * 65535.0).round() as u16;
+            }
+        }
+        let picture = Image {
+            data: deep.iter().map(|&v| (v >> 8) as u8).collect(),
+            ..image
+        };
+        (picture, Some(deep))
+    }
+
+    /// A scan of films turned into its picture: with the measures given
+    /// (`measured`, and `frames`, each frame's in pixels of this scan, from
+    /// the preview), or measured on the scan itself (negatives: each
+    /// strip's base, each frame's white and black). `own_base`: a picture
+    /// of its own on that base (an area drawn by hand), its white and
+    /// black measured on it.
+    #[allow(clippy::too_many_arguments)]
     fn develop(
         film: Film,
         image: Image,
         samples16: Option<Vec<u16>>,
         measured: Option<Measures>,
+        frames: &[([f32; 4], film::Negative)],
+        own_base: Option<[f32; 3]>,
         roll: Option<[f32; 3]>,
         correction: Option<ColourMatrix>,
         colour_noise: bool,
@@ -2974,23 +3180,54 @@ impl App {
             Some(s) if s.len() == w * h * 3 => Cow::Borrowed(s),
             _ => Cow::Owned(image.data.iter().map(|&v| u16::from(v) * 257).collect()),
         };
-        let (measures, gaps) = match (measured, film) {
-            (Some(m), _) => (Some(m), None),
-            (None, Film::Negative) => {
+        let own = own_base
+            .filter(|_| film == Film::Negative)
+            .and_then(|b| film::Negative::measure(&deep, Some(b)));
+        let (measures, gaps, strips, frames) = match (own, measured, film) {
+            (Some(n), ..) => (Some(Measures::Negative(n)), None, Vec::new(), Vec::new()),
+            (None, Some(m), _) => (Some(m), None, Vec::new(), frames.to_vec()),
+            (None, None, Film::Negative) => {
                 match film::measure_strip_with(&deep, w, h, image.dpi, roll) {
-                    Some(s) => (Some(Measures::Negative(s.negative)), s.gaps),
-                    None => (None, None),
+                    Some(s) => {
+                        let parts = film::measure_strips_with(&deep, w, h, image.dpi, roll);
+                        let frames = film::measure_frames(&parts, &deep, w);
+                        (
+                            Some(Measures::Negative(s.negative)),
+                            s.gaps,
+                            parts
+                                .into_iter()
+                                .map(|p| (p.bounds, p.strip.negative))
+                                .collect(),
+                            frames,
+                        )
+                    }
+                    None => (None, None, Vec::new(), Vec::new()),
                 }
             }
-            (None, Film::Slide) => (
+            (None, None, Film::Slide) => (
                 film::measure_slides(&deep, w, h, image.dpi).map(|(s, _)| Measures::Slide(s)),
                 None,
+                Vec::new(),
+                Vec::new(),
             ),
         };
         let Some(m) = measures else {
-            return (image, samples16, None, None);
+            return Developed {
+                picture: image,
+                deep: samples16,
+                measures: None,
+                gaps: None,
+                strips: Vec::new(),
+                frames: Vec::new(),
+            };
         };
-        let mut positive = m.positive(&deep);
+        // Negatives: each pixel with its own frame's measures.
+        let mut positive = match m {
+            Measures::Negative(whole) if !frames.is_empty() => {
+                film::positive_by_place(&frames, &whole, &deep, w)
+            }
+            _ => m.positive(&deep),
+        };
         // Before the noise: what the matrix spreads is smoothed with it.
         if let Some(c) = correction {
             c.apply(&mut positive);
@@ -3003,7 +3240,14 @@ impl App {
             data: positive.iter().map(|&v| (v >> 8) as u8).collect(),
             ..image
         };
-        (picture, Some(positive), Some(m), gaps)
+        Developed {
+            picture,
+            deep: Some(positive),
+            measures: Some(m),
+            gaps,
+            strips,
+            frames,
+        }
     }
 
     /// Switches to `kind`, with films in the adapter or not (only Foto has
@@ -3412,10 +3656,10 @@ impl App {
             .unwrap_or_else(|| self.caps.glass_pixels(dpi))
     }
 
-    /// The area to scan in millimetres: the selection, or an A4 page.
+    /// The area to scan in millimetres: the area chosen, or an A4 page.
     fn area_mm(&self) -> (f64, f64, f64, f64) {
         let mm = |px: f32| f64::from(px) * 25.4 / f64::from(PREVIEW_DPI);
-        match self.selection {
+        match self.chosen_rect() {
             Some(s) if s.width >= 4.0 && s.height >= 4.0 => {
                 (mm(s.x), mm(s.y), mm(s.width), mm(s.height))
             }
@@ -3478,52 +3722,6 @@ impl App {
             source: self.source(),
             area,
             depth,
-        }
-    }
-
-    /// The passes for the originals found, when the automatic crop applies
-    /// (it on, something found, no selection): all in one pass, or each
-    /// on its own when one pass would take too much memory.
-    fn plan(&self) -> Vec<Job> {
-        if !self.settings().auto_crop || self.selection.is_some() || self.found.is_empty() {
-            return Vec::new();
-        }
-        let glass = self.glass();
-        let margin = f32::from(PREVIEW_DPI) / 25.4;
-        let expand = |b: [f32; 4]| {
-            let (l, t) = ((b[0] - margin).max(0.0), (b[1] - margin).max(0.0));
-            let r = (b[0] + b[2] + margin).min(glass.width);
-            let bottom = (b[1] + b[3] + margin).min(glass.height);
-            [l, t, r - l, bottom - t]
-        };
-        let union = self
-            .found
-            .iter()
-            .map(Found::bounds)
-            .reduce(|a, b| {
-                let (l, t) = (a[0].min(b[0]), a[1].min(b[1]));
-                let r = (a[0] + a[2]).max(b[0] + b[2]);
-                let bottom = (a[1] + a[3]).max(b[1] + b[3]);
-                [l, t, r - l, bottom - t]
-            })
-            .map(expand)
-            .unwrap_or_default();
-        let one = Job {
-            bounds: union,
-            crops: self.found.clone(),
-            area: None,
-        };
-        if self.found.len() == 1 || self.job_memory(&one) <= ONE_PASS {
-            vec![one]
-        } else {
-            self.found
-                .iter()
-                .map(|f| Job {
-                    bounds: expand(f.bounds()),
-                    crops: vec![*f],
-                    area: None,
-                })
-                .collect()
         }
     }
 
@@ -3621,7 +3819,10 @@ impl App {
     /// and halved: "Scansiona a ... dpi e riduci", on the glass, where the
     /// scanner offers twice it.
     fn doubles(&self) -> bool {
-        self.settings().double && !self.filming() && self.double_dpi().is_some()
+        self.settings().double
+            && !self.settings().untouched
+            && !self.filming()
+            && self.double_dpi().is_some()
     }
 
     /// Twice the resolution chosen, if the scanner offers it on the glass.
@@ -3774,6 +3975,7 @@ impl App {
                 bounds: [0.0; 4],
                 crops: Vec::new(),
                 area: Some(request.area),
+                find: self.redo.is_none(),
             });
             request
         };
@@ -3799,6 +4001,12 @@ impl App {
             }
         }
         if let (Some(worker), None) = (&self.worker, &self.busy) {
+            // What was asked, for the log: a scan too large shows there.
+            let a = request.area;
+            worker::log(&format!(
+                "scan {purpose:?}: {:?} {} dpi, {} x {} pixels, {} bits",
+                request.source, request.dpi, a.width, a.height, request.depth
+            ));
             worker.send(Command::Scan(purpose, request));
             self.busy = Some((purpose, None));
             self.eyedropper = false;
@@ -3815,24 +4023,45 @@ impl App {
             return Some(job);
         }
         if let Some(i) = self.redo {
-            let origin = self.pages.get(i).and_then(|p| p.origin)?;
-            let margin = f32::from(PREVIEW_DPI) / 25.4;
-            let b = origin.bounds();
+            let page = self.pages.get(i)?;
             self.batch = (0, 1);
+            // An original cut out: its place, a little larger.
+            if let Some(origin) = page.origin {
+                let margin = f32::from(PREVIEW_DPI) / 25.4;
+                let b = origin.bounds();
+                return Some(Job {
+                    bounds: [
+                        (b[0] - margin).max(0.0),
+                        (b[1] - margin).max(0.0),
+                        b[2] + 2.0 * margin,
+                        b[3] + 2.0 * margin,
+                    ],
+                    crops: vec![origin],
+                    area: None,
+                    find: false,
+                });
+            }
+            // A scan kept whole: the same area again, whatever is chosen
+            // on the preview now.
+            let whole = page.whole.as_ref()?;
+            let k = f32::from(PREVIEW_DPI) / f32::from(page.raw.full.dpi.max(1));
+            let a = whole.area;
             return Some(Job {
                 bounds: [
-                    (b[0] - margin).max(0.0),
-                    (b[1] - margin).max(0.0),
-                    b[2] + 2.0 * margin,
-                    b[3] + 2.0 * margin,
+                    a.x as f32 * k,
+                    a.y as f32 * k,
+                    a.width as f32 * k,
+                    a.height as f32 * k,
                 ],
-                crops: vec![origin],
+                crops: Vec::new(),
                 area: None,
+                find: false,
             });
         }
         let mut plan: std::collections::VecDeque<Job> = self.plan().into();
         let first = plan.pop_front()?;
-        self.batch = (0, self.found.len());
+        let images = |j: &Job| j.crops.len().max(1);
+        self.batch = (0, images(&first) + plan.iter().map(images).sum::<usize>());
         self.jobs = plan;
         Some(first)
     }
@@ -3880,6 +4109,7 @@ impl App {
             bounds: [0.0; 4],
             crops: Self::on_bed(found, Some(whole.area), full.dpi),
             area: Some(whole.area),
+            find: false,
         };
         let samples = page.raw16.as_ref().map(|s| s.to_vec());
         let (tone, scanner, settings, own) = (
@@ -4217,7 +4447,11 @@ impl App {
         if let Output::Deep(_) = settings.output {
             return self.write_deep(path);
         }
-        let pages: Vec<Image> = self.pages.iter().map(|p| p.finished(settings)).collect();
+        let pages: Vec<Image> = self
+            .saving()
+            .into_iter()
+            .map(|p| p.finished(settings))
+            .collect();
         if pages.is_empty() {
             return Err(tr("niente da salvare").into());
         }
@@ -4345,27 +4579,27 @@ impl App {
     /// from the 16-bit samples, or the 8-bit image widened for pages
     /// scanned at 8 bits.
     fn write_deep(&self, path: &std::path::Path) -> Result<String, String> {
-        if self.pages.is_empty() {
+        let pages = self.saving();
+        if pages.is_empty() {
             return Err(tr("niente da salvare").into());
         }
         let shared = self.settings();
         // Black and white has no 16 bits: refused before any page is
         // written, not half-way through the document.
-        if self
-            .pages
+        if pages
             .iter()
             .any(|page| page.effective(shared).colour == Colour::Lineart)
         {
             return Err(tr("bianco e nero: niente 16 bit").into());
         }
-        let n = self.pages.len();
+        let n = pages.len();
         let stem = path
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("foto")
             .to_string();
         let ext = shared.output.extension();
-        for (i, page) in self.pages.iter().enumerate() {
+        for (i, page) in pages.into_iter().enumerate() {
             let target = if n == 1 {
                 path.to_path_buf()
             } else {
@@ -4425,10 +4659,11 @@ impl App {
     /// Writes the linear samples of every page (one file each), without
     /// adjustments: the white the calibration aims at is full scale.
     fn write_raw(&self, path: &std::path::Path, format: RawFormat) -> Result<String, String> {
-        if self.pages.is_empty() {
+        let pages = self.saving();
+        if pages.is_empty() {
             return Err(tr("niente da salvare").into());
         }
-        let n = self.pages.len();
+        let n = pages.len();
         let stem = path
             .file_stem()
             .and_then(|s| s.to_str())
@@ -4436,7 +4671,7 @@ impl App {
             .to_string();
         let ext = Output::Raw(format).extension();
         let mut written = Vec::new();
-        for (i, page) in self.pages.iter().enumerate() {
+        for (i, page) in pages.into_iter().enumerate() {
             let target = if n == 1 {
                 path.to_path_buf()
             } else {
@@ -4714,7 +4949,8 @@ impl App {
                 let v = self.current_view();
                 *v = v.actual_size();
             }
-            Message::Select(selection) => self.selection = selection,
+            Message::Select(selection) => self.select_area(selection),
+            Message::Area(m) => self.on_area(m),
             Message::Dpi(dpi) => self.settings_mut().dpi = dpi,
             Message::Depth(d) => {
                 let kind = self.kind;
@@ -4818,9 +5054,18 @@ impl App {
             Message::MmInput(field, typed) => self.mm_input(field, typed),
             Message::MmSubmit => self.mm_draft = None,
             Message::AutoSave(on) => self.settings_mut().auto_save = on,
-            Message::AutoCrop(on) => self.settings_mut().auto_crop = on,
+            Message::AutoCrop(on) => {
+                self.settings_mut().auto_crop = on;
+                self.auto_crop_changed();
+            }
             Message::Destripe(on) => self.settings_mut().destripe = on,
             Message::ColourNoise(on) => self.settings_mut().colour_noise = on,
+            Message::Untouched(on) => {
+                self.settings_mut().untouched = on;
+                // The preview shows what the next scans will be.
+                self.dirty_preview = true;
+            }
+            Message::KeepNegative(on) => self.settings_mut().keep_negative = on,
             Message::ScannerColour(on) => self.settings_mut().scanner_colour = on,
             Message::LockBase => {
                 let negatives = self.filming() && self.film_kind() == Film::Negative;
@@ -4828,6 +5073,8 @@ impl App {
                     self.roll_base = Some(base);
                     // The preview's measures were from another base.
                     self.measures = None;
+                    self.strips.clear();
+                    self.frames.clear();
                     self.note =
                         tr("Base del rullino bloccata: le prossime strisce useranno questa").into();
                 }
@@ -4838,6 +5085,8 @@ impl App {
                 self.strip_base = None;
                 if self.roll_base.take().is_some() {
                     self.measures = None;
+                    self.strips.clear();
+                    self.frames.clear();
                     self.note =
                         tr("Nuovo rullino: ogni striscia misura di nuovo la sua base").into();
                 }
@@ -4875,18 +5124,16 @@ impl App {
             }
             Message::Detect => {
                 if let Some(transmission) = &self.film_preview {
-                    self.found = film::frames(transmission, self.film_kind());
-                    self.note = Self::frames_note(self.found.len());
+                    let found = film::frames(transmission, self.film_kind());
+                    self.note = Self::frames_note(found.len());
+                    self.set_found(found);
                 } else if let Some((raw, _, _)) = &self.preview {
-                    self.found = detect::objects(&raw.full);
-                    self.note = Self::found_note(self.found.len());
+                    let found = detect::objects(&raw.full);
+                    self.note = Self::found_note(found.len());
+                    self.set_found(found);
                 }
             }
-            Message::DropFound(i) => {
-                if i < self.found.len() {
-                    self.found.remove(i);
-                }
-            }
+            Message::DropFound(i) => self.drop_area(i),
             Message::Toggle(group) => {
                 if let Some(i) = self.open.iter().position(|g| *g == group) {
                     self.open.remove(i);
@@ -4961,6 +5208,8 @@ impl App {
                     new.double = self.settings().double;
                     new.colour_noise = self.settings().colour_noise;
                     new.scanner_colour = self.settings().scanner_colour;
+                    new.untouched = self.settings().untouched;
+                    new.keep_negative = self.settings().keep_negative;
                     self.change(|s| *s = new);
                     self.note = trf(
                         "Preset «{name}» applicato (Ctrl+Z per tornare indietro)",
@@ -5201,18 +5450,10 @@ impl App {
                     w.send(Command::Status);
                 }
             }
-            Message::Preview => {
-                // Films: the adapter's area is small and full of frames, and
-                // a scan finds them itself; a preview would only add a lamp
-                // warm-up (9 November 2026, with Matteo).
-                if self.filming() {
-                    self.note =
-                        tr("Per le pellicole l'anteprima non serve: Scansiona trova i fotogrammi")
-                            .into();
-                } else {
-                    self.start(Purpose::Preview);
-                }
-            }
+            // Films too since 15 November 2026: at high resolutions a whole
+            // strip is too large, so the frames are chosen on the preview
+            // and each is scanned on its own.
+            Message::Preview => self.start(Purpose::Preview),
             Message::Scan => {
                 self.redone = None;
                 self.start(Purpose::Page);
@@ -5254,7 +5495,11 @@ impl App {
                 match self.write(&path) {
                     Ok(what) => {
                         self.note = trf("Salvato: {what}", &[("what", &what)]);
-                        self.unsaved = false;
+                        // Only the photos picked: the others are still to
+                        // save.
+                        if self.saving().len() == self.pages.len() {
+                            self.unsaved = false;
+                        }
                         // "Salva…" in the question: now what was asked. Closing
                         // asks again while another way of working has work
                         // not saved.
@@ -5390,7 +5635,8 @@ impl App {
                 // Not while a new scan waits for a choice: "Rifai" knows
                 // its page by its place.
                 if self.busy.is_none() && self.redone.is_none() && i < self.pages.len() {
-                    let copy = self.pages[i].clone();
+                    let mut copy = self.pages[i].clone();
+                    copy.picked = false;
                     self.pages.insert(i + 1, copy);
                     self.current = Some(i + 1);
                     self.tab = Tab::Result;
@@ -5406,11 +5652,55 @@ impl App {
                 }
             }
             Message::PagePress(i) => {
+                // Foto: Ctrl (Cmd) or Shift + click picks.
+                if self.kind == Kind::Photo && i < self.pages.len() {
+                    let m = self.modifiers;
+                    if m.command() {
+                        return self.handle(Message::PagePick(i, Pick::Toggle));
+                    }
+                    if m.shift() {
+                        return self.handle(Message::PagePick(i, Pick::Range));
+                    }
+                }
                 if i < self.pages.len() {
+                    // A plain click lets the photos picked go.
+                    self.pick_none();
                     if self.busy.is_none() && self.redone.is_none() {
                         self.drag = Some((i, None));
                     }
                     return self.handle(Message::PageShow(i));
+                }
+            }
+            Message::PagePick(i, how) => self.pick(i, how),
+            Message::PickAll(all) => {
+                if self.kind == Kind::Photo {
+                    for page in &mut self.pages {
+                        page.picked = all;
+                    }
+                    self.note = self.picked_note();
+                }
+            }
+            Message::LookApplyToPicked => {
+                let shared = *self.settings();
+                let look = self
+                    .shown()
+                    .filter(|_| self.kind == Kind::Photo && self.editing_page())
+                    .map(|p| Look::of(&p.effective(&shared)));
+                if let Some(look) = look {
+                    let shown = self.current;
+                    let mut n = 0;
+                    for (i, page) in self.pages.iter_mut().enumerate() {
+                        if page.picked || Some(i) == shown {
+                            page.own = Some(look);
+                            n += 1;
+                        }
+                    }
+                    self.stale = (0..self.pages.len())
+                        .filter(|&i| self.pages[i].picked && Some(i) != shown)
+                        .collect();
+                    self.dirty_page = true;
+                    self.unsaved = true;
+                    self.note = trf("Regolazioni applicate a {n} foto", &[("n", &n)]);
                 }
             }
             Message::PageHover(j) => {
@@ -5512,9 +5802,14 @@ impl App {
     /// Keyboard shortcuts (only when no text field has the key).
     fn on_key(&mut self, event: iced::keyboard::Event) -> Task<Message> {
         use iced::keyboard::{key::Named, Event as K, Key};
+        if let K::ModifiersChanged(m) = event {
+            self.modifiers = m;
+            return Task::none();
+        }
         let K::KeyPressed { key, modifiers, .. } = event else {
             return Task::none();
         };
+        self.modifiers = modifiers;
         // A question on the screen: Esc leaves everything as it is, Enter
         // does not go on (it would throw scans away by a slip).
         if self.confirm.is_some() {
@@ -5558,6 +5853,11 @@ impl App {
             }
             Key::Named(Named::Escape) if curve => {
                 return self.update(Message::CurvePoint(None));
+            }
+            // The area chosen on the preview left out.
+            Key::Named(Named::Delete | Named::Backspace) if self.moving_area() => {
+                let message = self.chosen_place().map(Message::DropFound);
+                return self.keyed(message);
             }
             // The strip of pages: the page before or after; with Alt, the
             // page shown moves there.
@@ -5609,6 +5909,11 @@ impl App {
             (Key::Character("p"), true, _) => Some(Message::Preview),
             (Key::Named(Named::Enter), true, _) => Some(Message::Scan),
             (Key::Character("s"), true, _) => Some(Message::Save),
+            (Key::Character("a"), true, _)
+                if !editing && self.tab == Tab::Result && self.kind == Kind::Photo =>
+            {
+                Some(Message::PickAll(true))
+            }
             (Key::Character("o"), true, _) => Some(Message::ShowFolder),
             (Key::Character("d"), true, _) if !editing && self.tab == Tab::Result => {
                 self.current.map(Message::PageDuplicate)
@@ -5620,6 +5925,8 @@ impl App {
             (Key::Named(Named::Escape), _, _) => {
                 if self.eyedropper {
                     Some(Message::Eyedropper)
+                } else if self.tab == Tab::Result && self.picked_count() > 0 {
+                    Some(Message::PickAll(false))
                 } else {
                     Some(Message::Select(None))
                 }
@@ -5763,7 +6070,7 @@ impl App {
         mut samples16: Option<Vec<u16>>,
     ) -> (Image, Option<Vec<u16>>) {
         let doubled = std::mem::take(&mut self.doubled) && purpose == Purpose::Page;
-        if purpose == Purpose::Measure {
+        if purpose == Purpose::Measure || self.settings().untouched {
             return (image, samples16);
         }
         if self.settings().destripe {
@@ -5843,21 +6150,34 @@ impl App {
                 let film = self.filming();
                 let kind = self.film_kind();
                 let transmission = film.then(|| at_dpi(image.clone(), PREVIEW_DPI));
-                let image = if film {
-                    let (picture, _, measures, gaps) = Self::develop(
+                let image = if film && self.settings().untouched {
+                    Self::plain(kind, image, samples16, self.settings().keep_negative).0
+                } else if film {
+                    let dpi = image.dpi;
+                    let d = Self::develop(
                         kind,
                         image,
                         samples16,
+                        None,
+                        &[],
                         None,
                         self.roll_base,
                         correction,
                         colour_noise,
                     );
-                    self.measures = measures;
-                    if gaps.is_some() {
-                        self.strip_base = gaps;
+                    self.measures = d.measures;
+                    // Each strip's and frame's place on the bed (the
+                    // preview covers it from its corner).
+                    let k = f32::from(PREVIEW_DPI) / f32::from(dpi.max(1));
+                    let on_bed = |v: StripMeasures| -> StripMeasures {
+                        v.into_iter().map(|(b, m)| (b.map(|v| v * k), m)).collect()
+                    };
+                    self.strips = on_bed(d.strips);
+                    self.frames = on_bed(d.frames);
+                    if d.gaps.is_some() {
+                        self.strip_base = d.gaps;
                     }
-                    picture
+                    d.picture
                 } else {
                     image
                 };
@@ -5866,19 +6186,17 @@ impl App {
                 let settings = *self.settings();
                 let shown = render(&raw.proxy, &settings, &settings.adjust, &raw.tone);
                 let picture = Picture::from_rgb(shown.width, shown.height, &shown.to_rgb());
-                self.found = match &transmission {
+                let found = match &transmission {
                     Some(t) => film::frames(t, kind),
                     None => detect::objects(&raw.full),
                 };
+                let n = found.len();
+                self.set_found(found);
                 self.film_preview = transmission;
                 self.preview = Some((raw, shown, picture));
                 self.preview_view = View::default();
                 self.tab = Tab::Preview;
-                let n = if self.settings().auto_crop {
-                    self.found.len()
-                } else {
-                    0
-                };
+                let n = if self.settings().auto_crop { n } else { 0 };
                 self.note = match (film, self.measures) {
                     (true, None) => {
                         tr("Anteprima pronta: nessuna pellicola riconosciuta nel supporto").into()
@@ -5908,8 +6226,7 @@ impl App {
                 let transmission =
                     (film && whole).then(|| Arc::new(at_dpi(image.clone(), PREVIEW_DPI)));
                 if let (Some(j), Some(t)) = (job.as_mut(), &transmission) {
-                    if self.settings().auto_crop && self.selection.is_none() && self.redo.is_none()
-                    {
+                    if self.settings().auto_crop && j.find {
                         j.crops = Self::on_bed(film::frames(t, kind), j.area, image.dpi);
                         self.batch.1 = j.crops.len().max(1);
                     }
@@ -5923,20 +6240,57 @@ impl App {
                         transmission: transmission.clone(),
                         film: kind,
                     });
-                let (image, samples16) = if film {
-                    let (picture, deep, _, gaps) = Self::develop(
+                let (image, samples16) = if film && self.settings().untouched {
+                    Self::plain(kind, image, samples16, self.settings().keep_negative)
+                } else if film {
+                    // The preview's strips where this scan lies.
+                    let k = f32::from(image.dpi) / f32::from(PREVIEW_DPI);
+                    let (ax, ay) = job
+                        .as_ref()
+                        .and_then(|j| j.area)
+                        .map_or((0.0, 0.0), |a| (a.x as f32, a.y as f32));
+                    let here = |v: &StripMeasures| -> StripMeasures {
+                        v.iter()
+                            .map(|(b, m)| ([b[0] * k - ax, b[1] * k - ay, b[2] * k, b[3] * k], *m))
+                            .collect()
+                    };
+                    let (strips, frames) = (here(&self.strips), here(&self.frames));
+                    // An area drawn by hand is a picture of its own: its
+                    // white measured on it, on the base of the strip it
+                    // lies in (or the roll's).
+                    let drawn = job.as_ref().is_some_and(|j| j.crops.is_empty() && !j.find);
+                    let (w, h) = (image.width as f32, image.height as f32);
+                    let own_base = drawn
+                        .then(|| {
+                            self.roll_base.or_else(|| {
+                                strips
+                                    .iter()
+                                    .min_by(|a, b| {
+                                        let d = |r: &[f32; 4]| {
+                                            let (cx, cy) = (r[0] + r[2] / 2.0, r[1] + r[3] / 2.0);
+                                            (cx - w / 2.0).powi(2) + (cy - h / 2.0).powi(2)
+                                        };
+                                        d(&a.0).total_cmp(&d(&b.0))
+                                    })
+                                    .map(|(_, m)| m.base)
+                            })
+                        })
+                        .flatten();
+                    let d = Self::develop(
                         kind,
                         image,
                         samples16,
                         self.measures,
+                        &frames,
+                        own_base,
                         self.roll_base,
                         correction,
                         colour_noise,
                     );
-                    if gaps.is_some() {
-                        self.strip_base = gaps;
+                    if d.gaps.is_some() {
+                        self.strip_base = d.gaps;
                     }
-                    (picture, deep)
+                    (d.picture, d.deep)
                 } else {
                     (image, samples16)
                 };
@@ -6399,7 +6753,11 @@ impl App {
             },
             ..Default::default()
         });
-        let planned = self.plan().iter().map(|j| j.crops.len()).sum::<usize>();
+        let planned = self
+            .plan()
+            .iter()
+            .map(|j| j.crops.len().max(1))
+            .sum::<usize>();
         let next = match (self.kind, planned) {
             (Kind::Document, 0 | 1) => {
                 trf("Scansiona pagina {n}", &[("n", &(self.pages.len() + 1))])
@@ -6417,13 +6775,10 @@ impl App {
         ]
         .spacing(3)
         .align_y(Alignment::Start);
-        // Films have no preview (Message::Preview).
-        let preview = (!self.filming()).then(|| {
-            button(text(tr("Anteprima")).size(13))
-                .style(button::secondary)
-                .padding([7, 12])
-                .on_press_maybe(self.idle().then_some(Message::Preview))
-        });
+        let preview = button(text(tr("Anteprima")).size(13))
+            .style(button::secondary)
+            .padding([7, 12])
+            .on_press_maybe(self.idle().then_some(Message::Preview));
         let bar = row![
             name,
             modes,
@@ -6473,6 +6828,26 @@ impl App {
             Kind::Photo => tr("FOTO"),
         };
         let mut list = column![text(format!("{header} · {n}")).size(11)].spacing(10);
+        let picked = self.picked_count();
+        if self.kind == Kind::Photo && n > 1 {
+            list = list.push(if picked == 0 {
+                Element::from(
+                    text(tr("Ctrl+clic per sceglierne più d'una, Ctrl+A tutte"))
+                        .size(11)
+                        .style(text::secondary),
+                )
+            } else {
+                row![
+                    text(trf("{n} scelte", &[("n", &picked)]))
+                        .size(12)
+                        .width(Length::Fill),
+                    tool(tr("Tutte"), Message::PickAll(true), picked < n),
+                    tool(tr("Nessuna"), Message::PickAll(false), true),
+                ]
+                .align_y(Alignment::Center)
+                .into()
+            });
+        }
         // Where a page dragged would go: a bar before or after the page it
         // is over.
         let drop_at = match self.drag {
@@ -6494,6 +6869,7 @@ impl App {
         let dragging = self.drag.is_some_and(|(_, over)| over.is_some());
         for (i, page) in self.pages.iter().enumerate() {
             let selected = self.current == Some(i) && self.tab == Tab::Result;
+            let picked = page.picked;
             if drop_at == Some((i, true)) {
                 list = list.push(bar());
             }
@@ -6508,13 +6884,22 @@ impl App {
                 .style(move |theme: &Theme| container::Style {
                     border: iced::Border {
                         radius: 6.0.into(),
-                        width: 2.0,
+                        width: if picked { 3.0 } else { 2.0 },
                         color: if selected {
                             theme.palette().primary
+                        } else if picked {
+                            theme.extended_palette().primary.weak.color
                         } else {
                             iced::Color::TRANSPARENT
                         },
                     },
+                    background: picked.then(|| {
+                        iced::Color {
+                            a: 0.18,
+                            ..theme.palette().primary
+                        }
+                        .into()
+                    }),
                     ..Default::default()
                 }),
             )
@@ -6527,7 +6912,11 @@ impl App {
             } else {
                 iced::mouse::Interaction::Pointer
             });
-            let mut label = format!("{}", i + 1);
+            let mut label = if picked {
+                format!("✓ {}", i + 1)
+            } else {
+                format!("{}", i + 1)
+            };
             if page.own.is_some() {
                 label.push_str(tr(" · propria"));
             }
@@ -6746,19 +7135,21 @@ impl App {
                 viewer::viewer(
                     self.preview.as_ref().map(|(_, _, p)| p),
                     self.glass(),
-                    tr("Premi «Anteprima» per vedere il vetro"),
-                    self.preview_view,
-                    self.selection,
-                    // The selection has the precedence over the originals.
-                    if self.settings().auto_crop && self.selection.is_none() {
-                        self.found.iter().map(|f| f.corners()).collect()
+                    if self.filming() {
+                        tr("Premi «Anteprima» per vedere le pellicole")
                     } else {
-                        Vec::new()
+                        tr("Premi «Anteprima» per vedere il vetro")
                     },
+                    self.preview_view,
+                    self.chosen_rect(),
+                    self.shown_regions()
+                        .iter()
+                        .map(|r| r.at.corners())
+                        .collect(),
                     Message::View,
                     Some(Message::Select),
                     pick,
-                    None,
+                    Some(areas::choose_message),
                     25.4 / f32::from(PREVIEW_DPI),
                     false,
                 ),
@@ -6899,9 +7290,10 @@ impl App {
                     self.eyedropper,
                 ))
                 .push(small(
-                    tr("Togli selezione"),
-                    (self.tab == Tab::Preview && self.selection.is_some())
-                        .then_some(Message::Select(None)),
+                    tr("Togli area"),
+                    (self.tab == Tab::Preview)
+                        .then(|| self.chosen_place().map(Message::DropFound))
+                        .flatten(),
                     false,
                 )),
         );
@@ -7175,9 +7567,6 @@ impl App {
     fn scan_pane(&self) -> Element<'_, Message> {
         // How the next scans are made, whatever the viewer shows.
         let s = *self.settings();
-        let request = self.request();
-        let (w, h) = (request.area.width, request.area.height);
-        let (x, y, wmm, hmm) = self.area_mm();
         let memory = self.memory();
         let mut pane = column![
             self.access_card(),
@@ -7239,10 +7628,59 @@ impl App {
                     .size(11),
                 );
         }
+        // "Senza elaborazioni": the scan as the scanner gives it.
+        let untouched = self.settings().untouched;
+        pane = pane
+            .push(
+                checkbox(untouched)
+                    .label(tr("Senza elaborazioni"))
+                    .on_toggle(Message::Untouched)
+                    .text_size(13),
+            )
+            .push(
+                text(if untouched {
+                    tr(
+                        "Il file come lo dà lo scanner, portato solo alla gamma per vederlo: \
+                         niente righe tolte, correzione dei colori, doppia risoluzione, \
+                         sviluppo delle pellicole, riduzione del rumore, nitidezza né \
+                         regolazioni. Vale dalla prossima scansione.",
+                    )
+                } else {
+                    tr(
+                        "Come il programma dello scanner con tutte le correzioni spente: per \
+                         chi elabora le scansioni altrove.",
+                    )
+                })
+                .size(11),
+            );
+        if untouched && self.filming() && self.film_kind() == Film::Negative {
+            pane = pane
+                .push(
+                    checkbox(self.settings().keep_negative)
+                        .label(tr("Lascia i negativi come sono"))
+                        .on_toggle(Message::KeepNegative)
+                        .text_size(13),
+                )
+                .push(
+                    text(if self.settings().keep_negative {
+                        tr(
+                            "Il negativo non invertito, con la sua base arancione: per i \
+                             programmi che lo invertono da sé.",
+                        )
+                    } else {
+                        tr(
+                            "Solo invertito, con la base arancione dentro: scuro e con una \
+                             dominante, come lo dà il programma dello scanner a correzioni \
+                             spente.",
+                        )
+                    })
+                    .size(11),
+                );
+        }
         // The scanner's stripes, where it declares them (films too: the
         // same sensor), and, on the glass only, twice the resolution, where
         // it offers it.
-        {
+        if !untouched {
             let scanned = if self.doubles() {
                 self.double_dpi().unwrap_or(self.dpi())
             } else {
@@ -7336,132 +7774,8 @@ impl App {
                     );
             }
         }
-        pane = pane.push(heading(tr("Area"))).push(
-            checkbox(self.settings().auto_crop)
-                .label(tr("Ritaglio automatico"))
-                .on_toggle(Message::AutoCrop)
-                .text_size(13),
-        );
+        pane = self.area_section(pane);
         let plan = self.plan();
-        if !plan.is_empty() {
-            let n = self.found.len();
-            pane = pane.push(
-                text(match n {
-                    1 => tr("Un originale riconosciuto sul vetro: sarà ritagliato e raddrizzato.")
-                        .to_string(),
-                    n => trf(
-                        "{n} originali riconosciuti sul vetro: ognuno diventa un'immagine, \
-                         ritagliata e raddrizzata{how}.",
-                        &[
-                            ("n", &n),
-                            (
-                                "how",
-                                &if plan.len() == 1 {
-                                    tr(", in una passata sola")
-                                } else {
-                                    tr(", uno alla volta")
-                                },
-                            ),
-                        ],
-                    ),
-                })
-                .size(12),
-            );
-            let mm = 25.4 / f32::from(PREVIEW_DPI);
-            for (i, f) in self.found.iter().enumerate() {
-                let tilt = if f.angle == 0.0 {
-                    tr("dritto").to_string()
-                } else {
-                    trf(
-                        "storto di {deg}°",
-                        &[("deg", &i18n::decimal(format!("{:.1}", f.angle.abs())))],
-                    )
-                };
-                pane = pane.push(
-                    row![
-                        text(format!(
-                            "{} · {:.0} × {:.0} mm · {tilt}",
-                            i + 1,
-                            f.width * mm,
-                            f.height * mm
-                        ))
-                        .size(12)
-                        .width(Length::Fill),
-                        button(text(tr("Escludi")).size(11))
-                            .padding([1, 6])
-                            .style(button::text)
-                            .on_press(Message::DropFound(i)),
-                    ]
-                    .align_y(Alignment::Center),
-                );
-            }
-            pane = pane.push(
-                text(trf(
-                    "in memoria fino a {mb} MB",
-                    &[("mb", &format!("{:.0}", memory / 1e6))],
-                ))
-                .size(12),
-            );
-        } else {
-            if self.settings().auto_crop && self.preview.is_some() {
-                pane = pane.push(
-                    text(if self.selection.is_some() {
-                        tr("La selezione ha la precedenza sul ritaglio automatico.")
-                    } else {
-                        tr(
-                            "Nessun originale riconosciuto (un foglio bianco sul coperchio \
-                         bianco può sfuggire): trascina sull'anteprima per scegliere l'area.",
-                        )
-                    })
-                    .size(11),
-                );
-            }
-            pane = pane
-                .push(
-                    text(if self.selection.is_none() && self.filming() {
-                        tr(
-                            "Tutto il supporto della pellicola. Senza anteprima: con il ritaglio \
-                             automatico Scansiona trova i fotogrammi da sé, ognuno un'immagine.",
-                        )
-                    } else if self.selection.is_none() {
-                        tr(
-                            "Tutto il formato A4. Trascina sull'anteprima per scegliere un'area, \
-                            o scrivila qui sotto.",
-                        )
-                    } else {
-                        tr("Frecce: sposta l'area di 1 mm (Maiusc 10 mm, Alt 0,1 mm); \
-                            Ctrl + frecce: la misura; Home: al centro del vetro.")
-                    })
-                    .size(11),
-                )
-                .push(self.mm_pair(
-                    (tr("Da sinistra"), MmField::Area(0), x, true),
-                    (tr("Dall'alto"), MmField::Area(1), y, true),
-                ))
-                .push(self.mm_pair(
-                    (tr("Larghezza"), MmField::Area(2), wmm, true),
-                    (tr("Altezza"), MmField::Area(3), hmm, true),
-                ))
-                .push(
-                    text(trf(
-                        "{w} × {h} pixel · in memoria {mb} MB",
-                        &[
-                            ("w", &w),
-                            ("h", &h),
-                            ("mb", &format!("{:.0}", memory / 1e6)),
-                        ],
-                    ))
-                    .size(12),
-                );
-        }
-        if self.settings().auto_crop && self.preview.is_some() {
-            pane = pane.push(
-                button(text(tr("Riconosci di nuovo")).size(12))
-                    .padding([3, 8])
-                    .style(button::secondary)
-                    .on_press(Message::Detect),
-            );
-        }
         if let Some(ram) = self.too_large() {
             pane = pane.push(text(self.too_large_text(ram)).size(12).style(text::danger));
         } else if memory > LARGE_SCAN {
@@ -7475,7 +7789,7 @@ impl App {
                 .style(text::danger),
             );
         }
-        if self.dpi() > 1200 && self.selection.is_none() && plan.is_empty() {
+        if self.dpi() > 1200 && plan.is_empty() {
             pane = pane.push(
                 text(tr(
                     "2400 dpi servono per piccoli originali: seleziona l'area sull'anteprima.",
@@ -7581,7 +7895,29 @@ impl App {
                             .on_press(Message::LookApplyToAll),
                     );
                 }
-                scope.push(buttons).into()
+                // The photos picked, besides the one shown.
+                let others = self
+                    .pages
+                    .iter()
+                    .enumerate()
+                    .filter(|&(i, p)| p.picked && Some(i) != self.current)
+                    .count();
+                let mut scope = scope.push(buttons);
+                if others > 0 {
+                    scope = scope.push(
+                        button(
+                            text(trf(
+                                "Applica alle foto scelte ({n})",
+                                &[("n", &(others + 1))],
+                            ))
+                            .size(12),
+                        )
+                        .style(button::text)
+                        .padding([2, 6])
+                        .on_press(Message::LookApplyToPicked),
+                    );
+                }
+                scope.into()
             }
             (Kind::Photo, false) => text(tr(
                 "Le modifiche valgono per l'anteprima, per le prossime scansioni \
@@ -7591,6 +7927,16 @@ impl App {
             .into(),
         };
         let mut top = column![text(editing.to_uppercase()).size(11), scope].spacing(10);
+        if self.active().untouched {
+            top = top.push(
+                text(tr(
+                    "Senza elaborazioni: le regolazioni qui non hanno effetto (si tolgono in \
+                     Scansione).",
+                ))
+                .size(11)
+                .style(text::warning),
+            );
+        }
         // The colour mode of a page already scanned (the next scans have
         // theirs in "Scansione").
         if self.editing_page() {
@@ -8369,7 +8715,13 @@ impl App {
                 !self.pages.is_empty() && self.busy.is_none(),
             ),
             Kind::Photo => (
-                trf("Salva {output}…", &[("output", &output)]),
+                match self.picked_count() {
+                    0 => trf("Salva {output}…", &[("output", &output)]),
+                    n => trf(
+                        "Salva le {n} scelte ({output})…",
+                        &[("n", &n), ("output", &output)],
+                    ),
+                },
                 self.shown().is_some() && self.busy.is_none(),
             ),
         };

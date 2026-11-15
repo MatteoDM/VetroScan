@@ -39,8 +39,9 @@ English ones. It follows the system's language; to change it, see
    scanner, and close the lid.
 4. Press **Preview**: after a few seconds you see the whole glass. The first time the lamp
    has to warm up and it takes a little longer.
-5. If you only want a part, **drag on the preview** a frame around what you need. In Photo
-   the app finds by itself the photos lying on the glass.
+5. If you only want a part, **drag on the preview** a frame around what you need (drag again
+   on an empty part for another one: each becomes its own page or image). In Photo the app
+   finds by itself the photos lying on the glass, and you can correct them by hand.
 6. Press the blue button at the top (**Scan page 1**, **Scan photo**…).
 7. At the bottom right press **Save …** (for instance **Save PDF…**), choose the name and the
    folder, and confirm.
@@ -117,13 +118,25 @@ VetroScan scans both **negatives** and **slides** with it:
 2. choose **Film** (with the cable unplugged a message says so) and, in the **Scan** tab,
    what is **In the holder**: **Negatives** or **Slides** (the choice shows only for an
    adapter that takes both; VetroScan remembers it);
-3. **Scan photo**, straight away: Film has no preview (the adapter's area is small and full
-   of frames, and a preview would only add a lamp warm-up). The scan covers the adapter's
-   area, turns the negatives into positives with their natural colours (slides are positives
-   already: they are only stretched to the full range, one black and one white for the three
-   colours, so that their colours stay the film's) and, with the **automatic crop** on (the
-   default), finds the frames or the slides in it: one image for each, as the photos in
-   Photo. **Redo** on a frame scans that frame only.
+3. **Preview**: the whole holder at the lowest resolution the adapter scans at (600 dpi on
+   the HP 3770 and on the Epson 4490). The negatives are shown as positives with their natural
+   colours (slides are positives already: they are only stretched to the full range, one black
+   and one white for the three colours, so that their colours stay the film's), and the film
+   is measured there once for all the scans: the orange base of each strip (the Epson 4490's
+   holder takes two, maybe of two rolls), and the white and black of each frame, which is
+   balanced on itself as a lab does. With the **automatic crop** on (the
+   default) each frame or slide found is outlined and numbered: leave out the ones you do not
+   want, correct one with its handles, or drag on an empty part to add one the app missed, as
+   in [Choosing the areas](#choosing-the-areas);
+4. **Scan 2 photos** (or as many as there are): **one scan for each photo**, at the resolution
+   chosen, of that photo and a millimetre around it only. This is what makes 2400 and 4800 dpi
+   usable: the whole strip at 4800 dpi would be gigabytes, the samples of a 35 mm frame are about
+   185 MB.
+   **Redo** on a photo scans that photo only.
+
+**Scan photo** without a preview still works: the scan covers the whole holder and, with the
+automatic crop, finds the frames in it, one image each (at the resolutions where the whole
+holder fits in memory).
 
 The **Epson Perfection 4490** has its adapter in the lid too, with nothing to plug in: put the
 strip or the slides in the 4490's holder on the glass as Epson's manual shows (the document
@@ -195,45 +208,77 @@ press **New roll** and each strip measures its own again.
 
 ### The preview
 
-**Preview** acquires the whole glass at low resolution, in a few seconds. It is for seeing
-where the original is, choosing the area and trying the adjustments before the real scan. It
-is not compulsory: without a preview an A4 sheet is acquired.
+**Preview** acquires the whole glass (in Film, the whole holder) at low resolution, in a few
+seconds. It is for seeing where the originals are, choosing the areas and trying the
+adjustments before the real scan. It is not compulsory: without a preview an A4 sheet is
+acquired (in Film, the whole holder).
 
-### Choosing the area
+### Choosing the areas
 
-- **Drag** on the preview with the left button to draw a frame.
-- To correct it, take one of the **eight handles** (corners and sides) or drag it from inside
-  to move it.
-- **Clear selection** (or **Esc**) removes it.
-- With the **keyboard**: the arrows move it by 1 mm (**Shift** 10 mm, **Alt** a pixel of the
-  preview, 0.13 mm); **Ctrl** + arrows change its size, from the right and bottom edges;
-  **Home** puts it in the middle of the glass. It stops at the edges of the glass.
+The same in Document, Photo and Film: on the preview there can be **several areas**, and
+**each becomes its own page or image**, with a scan of its own.
 
-The **Scan** tab says where the area starts and how large it is, in millimetres (**From the
-left**, **From the top**, **Width**, **Height**: you can also type them, with a comma or a
-point), and how many pixels and how much memory it will take. **Without a selection** the
-**A4** format is acquired (210 × 297 mm from the corner of the glass); typing a number makes
-an area from it.
+- **Drag** on an empty part of the preview with the left button to draw an area; drag again
+  elsewhere for another one. Areas are numbered in the order they will come out.
+- **Click** an area to choose it: its **eight handles** (corners and sides) appear; take one
+  to resize it, or drag it from inside to move it. A click on an empty part lets it go
+  (**Esc** too).
+- **Remove area** (or **Delete**) removes the area chosen; **Leave out**, next to an area in
+  the list of the **Scan** tab, removes that one.
+- With the **keyboard**: the arrows move the area chosen by 1 mm (**Shift** 10 mm, **Alt** a
+  pixel of the preview, 0.13 mm); **Ctrl** + arrows change its size, from the right and bottom
+  edges; **Home** puts it in the middle of the glass. It stops at the edges of the glass.
+- **Tilt** (−1°, −0.1°, +0.1°, +1°, **Upright**), in the **Scan** tab, turns the area chosen:
+  the image is cut out at that angle and straightened.
+
+The **Scan** tab lists the areas with their size, and for the area chosen says where it starts
+and how large it is, in millimetres (**From the left**, **From the top**, **Width**,
+**Height**: you can also type them, with a comma or a point). An area drawn by hand and left
+upright is acquired exactly as drawn. **With no area** the **A4** format is acquired
+(210 × 297 mm from the corner of the glass), and the tab says how many pixels and how much
+memory it will take; typing a number makes an area from it.
 
 ### Automatic crop
 
 With **Automatic crop** on (**Scan** tab, *Area* section), after the preview the app looks
-for the originals lying on the glass: photos, postcards, cards, receipts, even several
-together and a little askew. Each one appears outlined on the preview and in a list with its
-size and how askew it is. When scanning **each one becomes an image of its own, cropped and
-straightened** (in Document, a page of its own).
+for the originals lying on the glass (in Film, the frames and the slides in the holder):
+photos, postcards, cards, receipts, even several together and a little askew. Each one appears
+as an area on the preview and in the list, with its size and how askew it is. When scanning
+**each one becomes an image of its own, cropped a little inside its edge and straightened**
+(in Document, a page of its own).
 
-- **Leave out**, next to an original in the list, leaves it out.
-- **Find again** repeats the search on the preview (for instance after leaving something out
-  by mistake).
-- A **selection drawn by hand comes first** over the automatic crop: to go back to the
-  automatic crop, clear the selection.
+- The originals found are areas like the others: correct them with the handles and the tilt,
+  leave out those you do not want, add by hand one the app missed.
+- **Find again** repeats the search on the preview, in place of the originals found and
+  corrected (the areas drawn by hand stay).
+- Turning the automatic crop off hides the originals found and keeps only the areas drawn by
+  hand; turning it on shows them again.
 - A white sheet on the white lid can escape: in that case draw the area by hand.
-- With several originals the app acquires them in a single pass, or one at a time if all
-  together would take too much memory; the button at the top says how many there will be
-  (**Scan 3 photos**).
+- On the glass, several originals found are acquired in a single pass, or one at a time if all
+  together would take too much memory or if an area drawn by hand is among them; films always
+  one at a time. The button at the top says how many there will be (**Scan 3 photos**).
 
 The automatic crop is on by default in Photo and off in Document.
+
+### No processing
+
+**No processing**, in the **Scan** tab, gives the file as the scanner gives it: the equivalent
+of the scanner's own software with every correction off, for those who process their scans
+in another program. The scanner's calibration stays (it is how the scanner reads at all);
+the only conversion is to a gamma, so that the file opens and looks right anywhere. Nothing
+else is done: no stripes removed, no colour correction of the scanner, no double resolution,
+no colour noise reduction, no sharpening, no adjustments (**Adjust** says it has no effect
+on such a scan), and films are not developed:
+
+- **negatives** come out only **inverted**, with their orange base in: dark and with a colour
+  cast, as the scanner's software gives them with its corrections off;
+- with **Leave negatives as they are**, not even inverted: the negative with its orange base,
+  for programs that make the positive themselves;
+- **slides** as the scanner reads them, not stretched.
+
+The areas and the frames are found on the preview as usual. It applies to the next scans and
+is remembered for each way of working; a scan made so stays so. For the linear samples,
+without even the gamma, there is the **RAW** format.
 
 ### Warnings about the size
 
@@ -330,7 +375,9 @@ At the top of the tab it says what you are adjusting:
     preview) until you change one: from then on the changes apply to that photo only, and the
     other photos, the preview and the next scans stay as they are. **Apply to all photos**
     makes its look the common one, which every photo follows again; **Back to the common
-    adjustments** drops its own.
+    adjustments** drops its own. With some photos [picked](#picking-several-photos),
+    **Apply to the photos picked (n)** gives the look of the photo shown to those only (each
+    then has it as its own).
 - **Mode**, below (only with a page or a photo shown): Colour, Grey or Black and white for
   that scan, even different from how it was acquired. The next scans keep the colour chosen
   in the **Scan** tab.
@@ -444,6 +491,23 @@ cropped or resized.
   The copy uses the same scan, but is cropped, turned and adjusted on its own.
 - **Delete**: removes it. If the page is not saved, the app asks first; it cannot be undone.
 - **Redo**: acquires it again (see below).
+
+#### Picking several photos
+
+In **Photo** and **Film** several photos can be picked, to save or adjust only those:
+
+- **Ctrl+click** (**Cmd+click** on macOS) on a thumbnail picks it, or lets it go if it was
+  picked; the first time the photo shown is picked too, so Ctrl+click on a second photo makes
+  two.
+- **Shift+click** picks every photo from the one shown to the one clicked.
+- **Ctrl+A** picks them all; **Esc**, **None** above the column or a plain click on a
+  thumbnail lets them go.
+
+The photos picked have a tinted frame and a **✓** by their number, and the top of the column
+says how many there are. While some are picked, **Save the n picked…** saves only those, with
+the same settings as always (one file each, a single file, ZIP, 16 bits or RAW as chosen);
+the others stay to save. In **Adjust**, **Apply to the photos picked (n)** gives them the look
+of the photo shown.
 
 Moving, duplicating, deleting and redoing are not possible during a scan.
 
@@ -806,6 +870,7 @@ text field (a name, a number).
 | **Ctrl+Z** | undo (in the editor: undo in the editor) |
 | **Ctrl+Y** or **Ctrl+Shift+Z** | redo |
 | **Ctrl+D** | duplicate the page shown |
+| **Ctrl+A** | Photo and Film: pick every photo (**Esc** lets them go) |
 | **F** | fit the image to the window |
 | **1** | zoom 1:1 |
 | **\\** | Before / After |
@@ -830,7 +895,7 @@ area on the preview; with none of them, a zoomed image.
 | **Home** | back to the middle |
 | **[** / **]** | in the editor, *Crop*: straighten by −0.1° / +0.1° (with **Shift**: 1°) |
 | **Tab** / **Shift+Tab** | on the curve: the next / the previous point |
-| **Delete** | on the curve: removes the point chosen (not the two ends) |
+| **Delete** | on the curve: removes the point chosen (not the two ends); on the preview: removes the area chosen |
 
 At an edge it stops. A series of presses within a second is one step of **Ctrl+Z**, like a
 slider dragged (where the mouse has **Ctrl+Z** too: curve and editor).
@@ -839,9 +904,10 @@ slider dragged (where the mouse has **Ctrl+Z** too: curve and editor).
 |---|---|
 | **Wheel** | zoom around the pointer |
 | **Right** or **middle button** dragged | moves the image |
-| **Left button** dragged | on the preview draws the area; in the editor, in *Crop*, the crop; elsewhere moves the image |
+| **Left button** dragged | on the preview draws an area (on an empty part) or moves the one under it; in the editor, in *Crop*, the crop; elsewhere moves the image |
 | **Double-click on a slider** | brings it back to its default |
 | **Double-click on a thumbnail** | opens the editor |
+| **Ctrl+click** / **Shift+click on a thumbnail** | Photo and Film: picks it / picks from the photo shown to it |
 
 ---
 

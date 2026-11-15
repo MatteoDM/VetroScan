@@ -133,6 +133,11 @@ pub struct StoredMode {
     /// Correct the colours with the scanner's matrix for where they come from, the glass or
     /// the film, where it declares one (absent: the default of the way of working, yes).
     pub scanner_colour: Option<bool>,
+    /// "Senza elaborazioni": the scan as the scanner gives it (absent: no).
+    pub untouched: Option<bool>,
+    /// With `untouched`, negatives left as they are, not inverted (absent:
+    /// inverted).
+    pub keep_negative: Option<bool>,
     /// Films: the base of the roll in the adapter, locked ("Blocca la base"),
     /// transmission per channel (absent: each strip measures its own).
     pub roll_base: Option<[f32; 3]>,
@@ -162,6 +167,8 @@ impl Default for StoredMode {
             double: None,
             colour_noise: None,
             scanner_colour: None,
+            untouched: None,
+            keep_negative: None,
             roll_base: None,
             slides: false,
             adjust: StoredAdjust::default(),
@@ -519,6 +526,23 @@ mod tests {
         let mut again = p.clone();
         again.document.scanner_colour = Some(false);
         assert_eq!(again.migrated().document.scanner_colour, Some(false));
+    }
+
+    #[test]
+    fn files_before_senza_elaborazioni_scan_as_before() {
+        // A file of v0.9: no "untouched" nor "keep_negative".
+        let old = r#"{"film": {"dpi": 1200, "colour": "colore", "threshold": 128,
+                        "output": "jpeg", "pdf_size": "scansione", "pdf_sheet": "auto",
+                        "pdf_fit": "reale", "auto_save": false, "slides": false,
+                        "adjust": {}}}"#;
+        let p = serde_json::from_str::<Prefs>(old).unwrap().migrated();
+        assert_eq!(p.film.untouched, None, "processed, as before");
+        assert_eq!(p.film.keep_negative, None);
+        let mut chosen = p.clone();
+        chosen.film.untouched = Some(true);
+        chosen.film.keep_negative = Some(true);
+        let text = serde_json::to_string(&chosen).unwrap();
+        assert_eq!(serde_json::from_str::<Prefs>(&text).unwrap(), chosen);
     }
 
     #[test]
