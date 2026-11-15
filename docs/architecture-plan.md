@@ -1826,6 +1826,16 @@ never run by us (step 12).
       images, the exact rule left.
     So nothing changes in the films' development for the 4490. Left: the lid's lamp's warm-up,
     with Matteo at the scanner (`captures/tools/lid_lamp_series_epson.sh`).
+    **The lid's lamp, a first series** (15 November 2026, capture 104, frame 1 at 600 dpi as 89,
+    `scansioni/epson_coperchio_20261115_1122`): the scanner's warming flag went after 19.2 s; the
+    scan calibrated then and the one a minute later, each with its own calibration, differ by
+    1.1-1.4 % in every channel and band (the first lighter), the red's exposure found 3 % shorter
+    (12,398 to 12,014 µs). The third, 90 s in, stopped before any move: the brighter lamp moved
+    the origin read's edge by a line (the 255s to line 102, the next 135 above the threshold of
+    125), a move back of 204 steps, never let out; the carriages left at 1994 / 2440. **Done**:
+    204 let out (`guard::FILM_BACK_MOVES`, Matteo's decision: a line short of 216, the unit
+    stopping at 1212, inside its travel); the same can happen in the app to a film scanned a
+    minute after another. The series to be run again from a cold lamp.
 
 **Where the films stand, in order** (14 November 2026, night):
 1. Done: captures 72-81 (82, medium format, when Matteo has a film); the film guard
