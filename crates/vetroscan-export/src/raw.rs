@@ -493,6 +493,10 @@ mod tests {
         assert_eq!(find(50706).3, [1, 4, 0, 0]);
         assert_eq!(u16::from_le_bytes([find(262).3[0], find(262).3[1]]), 34892);
         assert_eq!(find(50721).2, 9);
+        // Its colours: XYZ to linear sRGB (ColorMatrix1), measured under
+        // D65 (CalibrationIlluminant1 21), the white given as neutral.
+        assert_eq!(u16::from_le_bytes([find(50778).3[0], find(50778).3[1]]), 21);
+        assert_eq!(find(50728).2, 3);
         // The pixels: the first strip starts with the first samples.
         let offset = u32::from_le_bytes(find(273).3) as usize;
         let first = u16::from_le_bytes([file[offset + 2], file[offset + 3]]);

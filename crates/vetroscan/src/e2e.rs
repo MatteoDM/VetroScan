@@ -3891,3 +3891,31 @@ fn a_pdf_of_photos_picked_lays_out_each_with_its_own_sheet() {
         "the third photo filled"
     );
 }
+
+#[test]
+fn senza_elaborazioni_and_raw_files_say_what_their_numbers_are() {
+    use crate::{Output, RawFormat};
+    use vetroscan_export::ImageFormat;
+    // A scanner at 1.8 (as the Epson 4490's glass) with an adapter.
+    let mut ui = Ui::with_scanners(vec![FakeScanner::with_adapter().with_gamma(1.8)]);
+    ui.send(Message::Kind(Kind::Photo));
+    ui.send(Message::AutoCrop(false));
+    ui.send(Message::Untouched(true));
+    ui.scan(1);
+    // The glass without processing: the scanner's curve, as processed.
+    let name = save_as(&mut ui, Output::Image(ImageFormat::Tiff));
+    assert_eq!(profiles(&name, &ui), [(*b"RGB ", G18)]);
+    // The RAW TIFF: linear (gamma 1), whatever the scanner's curve.
+    let name = save_as(&mut ui, Output::Raw(RawFormat::Tiff16));
+    assert_eq!(profiles(&name, &ui), [(*b"RGB ", 1.0)]);
+    // Negatives left as they are, without processing: the films' curve.
+    ui.click("Pellicola");
+    ui.send(Message::Dpi(600));
+    ui.send(Message::Untouched(true));
+    ui.send(Message::KeepNegative(true));
+    ui.click("Scansiona foto");
+    let n = ui.app.pages.len();
+    assert!(n > 0, "{}", ui.app.note);
+    let name = save_as(&mut ui, Output::TiffPages);
+    assert_eq!(profiles(&name, &ui), vec![(*b"RGB ", G22); n]);
+}

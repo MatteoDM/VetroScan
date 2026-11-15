@@ -2373,6 +2373,15 @@ Photos than in VetroScan, while LightCraft showed it as VetroScan does.
    4490's glass stays at 1.8, as Epson Scan, no choice in Preferences. **To try by eye**.
 2. **"Senza elaborazioni" and RAW**: the same for the files without processing; RAW (DNG,
    linear TIFF) keeps its own linear description (to check that DNG's colour tags say so).
+   **Done** (15 November 2026, evening): nothing to change. "Senza elaborazioni" goes through
+   the page's own curve (`Raw::tone`: the scanner's on the glass, `film::TONE` for films, the
+   negative inverted or left as it is in linear light first), so its files carry the right
+   profile through step 1; the RAW TIFF keeps its linear profile (gamma 1, same bytes as
+   before), the DNG its `ColorMatrix1` (XYZ to linear sRGB) under `CalibrationIlluminant1` 21
+   (D65) with `AsShotNeutral`, which is what linear sRGB samples are. Tests: an e2e with a 1.8
+   scanner and an adapter (the glass without processing 1.8, the RAW TIFF 1.0, negatives left
+   as they are 2.2 on every page), the DNG's illuminant and neutral in `dng_has_its_tags`.
+   Opening a DNG in Lightroom is still Matteo's to try.
 3. **The screen managed** (larger, later, to decide with Matteo): VetroScan converts what it
    shows from the page's profile to the monitor's, as Windows Photos does, so that on a wide
    gamut monitor the app shows the colours as they are. Needs the monitor's profile (Windows:
@@ -2606,4 +2615,4 @@ the three photos, in reading order (tried in the app); the two previews of the 3
 | 11 · precise moves from the keyboard (done) | 0.4.0 | low | yes |
 | 12 · Epson Perfection 4490 Photo, native, plug and play (milestone 1 written without the scanner; arrived 11 November 2026, the firmware upload confirmed by a capture; buttons; native glass scans at 100-1200 dpi, 8 and 16 bits, in the app with the lamp, cancelling and a scan left half-way stopped at the opening, 12-13 November; open: steps 10-18 of "What is left, in order", and "Open after the code review") | 0.5.0 (milestone 1, experimental); the glass in the app after v0.7.0, not released yet; the rest to be decided | high: protocol unknown, two carriages | no: the scanner (firmware inside the program) |
 | 13 · films done professionally, for every scanner (done: 1-3, 5.1-5.2, 6 for slides; 5.3 set aside; 4 stalled without HP's captures; open: 7, 8) | 0.6.0 (1-3, 5.1-5.2, 6); 7, 8 to be decided | low (1-3, 5.1-5.2, 6, 7 in software, 8), medium (4, 5.3: the motor) | 1-3, 5.1-5.2, 6, 7 in software, 8 yes; 4 needs the 3770's captures |
-| 14 · colour profiles in the files, then the screen managed (decided 15 November 2026; done: 1 (the 4490's glass by eye to try), 3 on Windows; open: 2, 3 on macOS and Linux, 4) | to be decided | low (1, 2), medium (3) | yes |
+| 14 · colour profiles in the files, then the screen managed (decided 15 November 2026; done: 1 (the 4490's glass by eye to try), 2, 3 on Windows; open: 3 on macOS and Linux, 4) | to be decided | low (1, 2), medium (3) | yes |
