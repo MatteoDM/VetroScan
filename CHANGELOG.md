@@ -17,6 +17,8 @@ GitHub; here they are in English.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-15
+
 ### Added
 - Epson Perfection 4490: films. **Film** now appears for the 4490: strips of negatives and
   slides in the transparency unit of its lid, at 600, 1200, 2400 and 4800 dpi, as Epson Scan
@@ -509,7 +511,8 @@ First version.
 - Texts with a run of spaces in the middle (note on RAW, on 16 bits and on the buttons in
   Windows); the button of the default folder uses the system's separator.
 
-[Unreleased]: https://github.com/MatteoDM/scanner/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/MatteoDM/scanner/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/MatteoDM/scanner/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/MatteoDM/scanner/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/MatteoDM/scanner/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/MatteoDM/scanner/compare/v0.5.0...v0.6.0
