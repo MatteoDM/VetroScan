@@ -731,6 +731,22 @@ Quality and limit are remembered, separately for Document and Photo.
 
 If you do not know what to choose: **JPEG** for photos, **PDF** for documents.
 
+### The colours in the file
+
+Every file says what its numbers mean, with an ICC colour profile written by VetroScan: sRGB's
+colours and white, and the tone curve the scan was drawn with, which each scanner declares
+(gamma 1.8 for the Epson 4490's glass, as Epson Scan's own files say; 2.2 for films and for
+the HP 3770). Grey images have a grey profile; black and white none. The profile goes into
+PNG, JPEG, TIFF (every page of a multi-page one, and at 16 bits), WebP and the pictures of a
+PDF; AVIF and BMP have none. The numbers are the same as without it.
+
+Programs that manage colour (Windows Photos, Photoshop, Lightroom, web browsers) read the
+profile and show the file as it was meant on any monitor. Programs that do not, and
+VetroScan's own screen for now, show the numbers as they are: on a wide-gamut monitor the
+colours look more saturated there, and an Epson 4490 glass scan has darker midtones there
+than in Windows Photos. The RAW files keep their own description (the linear TIFF its linear
+sRGB profile, the DNG its own colour tags).
+
 ### Several pages or photos as separate images
 
 With PNG, JPEG, TIFF, WebP and AVIF each page becomes a file: from the name chosen, for

@@ -319,86 +319,6 @@ const XYZ_TO_SRGB: [f64; 9] = [
     0.0557, -0.2040, 1.0570,
 ];
 
-/// Linear sRGB to XYZ, adapted to D50 (Bradford), the primaries of an ICC
-/// profile.
-const SRGB_D50: [[f64; 3]; 3] = [
-    [0.4361, 0.2225, 0.0139], // red: X, Y, Z
-    [0.3851, 0.7169, 0.0971], // green
-    [0.1431, 0.0606, 0.7141], // blue
-];
-
-/// An ICC v2 display profile: sRGB primaries, tone curve gamma 1.
-fn linear_srgb_icc() -> Vec<u8> {
-    fn s15(v: f64) -> [u8; 4] {
-        ((v * 65536.0).round() as i32).to_be_bytes()
-    }
-    fn xyz(v: [f64; 3]) -> Vec<u8> {
-        let mut out = b"XYZ \0\0\0\0".to_vec();
-        for c in v {
-            out.extend_from_slice(&s15(c));
-        }
-        out
-    }
-    fn text(s: &str) -> Vec<u8> {
-        let mut out = b"text\0\0\0\0".to_vec();
-        out.extend_from_slice(s.as_bytes());
-        out.push(0);
-        out
-    }
-    fn desc(s: &str) -> Vec<u8> {
-        let mut out = b"desc\0\0\0\0".to_vec();
-        out.extend_from_slice(&(s.len() as u32 + 1).to_be_bytes());
-        out.extend_from_slice(s.as_bytes());
-        out.push(0);
-        out.extend_from_slice(&[0; 4 + 4 + 2 + 1 + 67]);
-        out
-    }
-    // Gamma 1.0 (u8Fixed8 256).
-    let curve = b"curv\0\0\0\0\0\0\0\x01\x01\x00".to_vec();
-    let elements: Vec<(&[u8; 4], Vec<u8>)> = vec![
-        (b"desc", desc("sRGB lineare")),
-        (b"cprt", text("Nessun copyright")),
-        (b"wtpt", xyz([0.9642, 1.0, 0.8249])),
-        (b"rXYZ", xyz(SRGB_D50[0])),
-        (b"gXYZ", xyz(SRGB_D50[1])),
-        (b"bXYZ", xyz(SRGB_D50[2])),
-        (b"rTRC", curve.clone()),
-        (b"gTRC", curve.clone()),
-        (b"bTRC", curve),
-    ];
-    let table_len = 4 + 12 * elements.len();
-    let mut offset = 128 + table_len;
-    let mut table = (elements.len() as u32).to_be_bytes().to_vec();
-    let mut body = Vec::new();
-    for (sig, data) in &elements {
-        while (offset + body.len()) % 4 != 0 {
-            body.push(0);
-        }
-        let at = offset + body.len();
-        table.extend_from_slice(*sig);
-        table.extend_from_slice(&(at as u32).to_be_bytes());
-        table.extend_from_slice(&(data.len() as u32).to_be_bytes());
-        body.extend_from_slice(data);
-    }
-    offset += body.len();
-    let size = offset as u32;
-    let mut header = vec![0u8; 128];
-    header[0..4].copy_from_slice(&size.to_be_bytes());
-    header[8..12].copy_from_slice(&[0x02, 0x10, 0, 0]); // version 2.1
-    header[12..16].copy_from_slice(b"mntr");
-    header[16..20].copy_from_slice(b"RGB ");
-    header[20..24].copy_from_slice(b"XYZ ");
-    header[36..40].copy_from_slice(b"acsp");
-    // Rendering intent 0, illuminant D50.
-    header[68..72].copy_from_slice(&s15(0.9642));
-    header[72..76].copy_from_slice(&s15(1.0));
-    header[76..80].copy_from_slice(&s15(0.8249));
-    let mut out = header;
-    out.extend_from_slice(&table);
-    out.extend_from_slice(&body);
-    out
-}
-
 /// Saves a 16-bit linear TIFF with the "sRGB lineare" profile: the
 /// samples untouched, nothing clipped.
 pub fn save_tiff16(path: &Path, image: &Linear16) -> Result<()> {
@@ -407,7 +327,7 @@ pub fn save_tiff16(path: &Path, image: &Linear16) -> Result<()> {
         image.into(),
         2,
         &image.software,
-        vec![(34675, Value::Undefined(linear_srgb_icc()))],
+        vec![(34675, Value::Undefined(crate::icc::linear_srgb()))],
     )
 }
 
@@ -444,8 +364,10 @@ pub fn save_dng(path: &Path, image: &Linear16) -> Result<()> {
     write_tiff(path, image.into(), 34892, &image.software, tags)
 }
 
-/// Saves a finished 16-bit image (sRGB tones, `channels` 3 or 1) as a TIFF
-/// (`.tif`/`.tiff`) or a PNG.
+/// Saves a finished 16-bit image (`channels` 3 or 1, drawn through a tone
+/// curve of `gamma`) as a TIFF (`.tif`/`.tiff`) or a PNG, with its profile
+/// ([`crate::icc`]).
+#[allow(clippy::too_many_arguments)]
 pub fn save_deep(
     path: &Path,
     width: usize,
@@ -453,8 +375,14 @@ pub fn save_deep(
     channels: usize,
     dpi: u16,
     data: &[u16],
+    gamma: f64,
     software: &str,
 ) -> Result<()> {
+    let profile = if channels == 1 {
+        crate::icc::grey(gamma)
+    } else {
+        crate::icc::rgb(gamma)
+    };
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -469,25 +397,23 @@ pub fn save_deep(
             data,
         };
         let photometric = if channels == 1 { 1 } else { 2 };
-        return write_tiff(path, image, photometric, software, Vec::new());
+        let tags = vec![(34675, Value::Undefined(profile))];
+        return write_tiff(path, image, photometric, software, tags);
     }
-    let (w, h) = (u32::try_from(width)?, u32::try_from(height)?);
+    let color = if channels == 1 {
+        png::ColorType::Grayscale
+    } else {
+        png::ColorType::Rgb
+    };
+    let info = crate::png_info(
+        width,
+        height,
+        (color, png::BitDepth::Sixteen),
+        dpi,
+        Some(profile),
+    )?;
     crate::write_file(path, |file| {
-        let mut encoder = png::Encoder::new(file, w, h);
-        encoder.set_color(if channels == 1 {
-            png::ColorType::Grayscale
-        } else {
-            png::ColorType::Rgb
-        });
-        encoder.set_depth(png::BitDepth::Sixteen);
-        let ppm = (f64::from(dpi) / 0.0254).round() as u32;
-        encoder.set_pixel_dims(Some(png::PixelDimensions {
-            xppu: ppm,
-            yppu: ppm,
-            unit: png::Unit::Meter,
-        }));
-        encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
-        let mut writer = encoder.write_header()?;
+        let mut writer = png::Encoder::with_info(file, info)?.write_header()?;
         let bytes: Vec<u8> = data.iter().flat_map(|v| v.to_be_bytes()).collect();
         writer.write_image_data(&bytes)?;
         writer.finish()?;
@@ -577,11 +503,32 @@ mod tests {
     fn deep_png_and_tiff_read_back() {
         let dir = std::env::temp_dir().join("vetroscan-raw-test");
         std::fs::create_dir_all(&dir).unwrap();
-        let data: Vec<u16> = (0..9 * 5).map(|i| (i * 1000) as u16).collect();
-        for name in ["g.png", "g.tif"] {
-            let path = dir.join(name);
-            save_deep(&path, 9, 5, 1, 300, &data, "test").unwrap();
-            assert_eq!(read_deep(&path), data, "{name}");
+        for channels in [1, 3] {
+            let data: Vec<u16> = (0..9 * 5 * channels).map(|i| (i * 500) as u16).collect();
+            for name in ["g.png", "g.tif"] {
+                let path = dir.join(name);
+                save_deep(&path, 9, 5, channels, 300, &data, 1.8, "test").unwrap();
+                assert_eq!(read_deep(&path), data, "{name}");
+                // The profile of the curve it was drawn with, and no sRGB
+                // chunk saying otherwise.
+                let profile = crate::icc::read(&deep_profile(&path)).unwrap();
+                assert_eq!(profile.gamma, 1.80078125, "{name}");
+                let space = if channels == 1 { b"GRAY" } else { b"RGB " };
+                assert_eq!(&profile.space, space, "{name}");
+            }
+        }
+    }
+
+    fn deep_profile(path: &Path) -> Vec<u8> {
+        if path.extension().unwrap() == "tif" {
+            let mut dec = tiff::decoder::Decoder::new(std::fs::File::open(path).unwrap()).unwrap();
+            dec.get_tag_u8_vec(tiff::tags::Tag::IccProfile).unwrap()
+        } else {
+            let dec =
+                png::Decoder::new(std::io::BufReader::new(std::fs::File::open(path).unwrap()));
+            let r = dec.read_info().unwrap();
+            assert!(r.info().srgb.is_none());
+            r.info().icc_profile.as_ref().unwrap().to_vec()
         }
     }
 

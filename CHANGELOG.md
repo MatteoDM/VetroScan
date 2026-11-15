@@ -24,6 +24,14 @@ GitHub; here they are in English.
   screen is drawn as the file is; the preview too.
 
 ### Added
+- Every file saved says what its colours are: an **ICC profile** made by VetroScan with sRGB's
+  colours and the tone curve the scan was drawn with (gamma 1.8 for the Epson 4490's glass,
+  as Epson Scan's files say; 2.2 for films and the HP 3770), grey for grey images, none for
+  black and white. In PNG, JPEG, TIFF (multi-page and 16 bits too), WebP and the PDF's
+  pictures; not AVIF nor BMP. The numbers do not change. Programs that manage colour (Windows
+  Photos, Photoshop, browsers) now show the Epson 4490's glass scans with the midtones meant,
+  as Epson Scan's TIFFs, where they read them darker before; the 16-bit PNG no longer claims
+  to be sRGB.
 - Film: a **preview** again, for negatives and slides, at the lowest resolution the adapter
   scans at (600 dpi on the HP 3770 and the Epson 4490). The frames found are outlined on it and
   **each one chosen is scanned on its own**, only it and a millimetre around it: at 2400 and

@@ -2354,6 +2354,23 @@ Photos than in VetroScan, while LightCraft showed it as VetroScan does.
    profile parsed (primaries, white, gamma), a 4490-like made-up scanner at 1.8 and the
    flatbed at 2.2. Then by eye with Matteo: a 4490 glass scan from VetroScan and Epson Scan's
    TIFF of the same original side by side in Windows Photos and LightCraft.
+   **Done** (15 November 2026): `vetroscan_export::icc` makes the profiles (monitor class,
+   v2.1, sRGB primaries D50-adapted, white D65, one `curv` gamma in u8Fixed8: 1.8 is written
+   1.80078125 as Epson's, 2.2 is 2.19921875; grey: `kTRC`); every writer takes a
+   `Tagged` image (the image and its page's `Raw::tone.gamma`, films `film::TONE`): PNG
+   `iCCP` (the 16-bit PNG's `sRGB` chunk gone), TIFF 34675 as UNDEFINED (8 and 16 bits, each
+   page of a multi-page one), JPEG APP2, WebP (an RGB profile for grey too: WebP stores
+   colour), the PDF's pictures `[/ICCBased n 0 R]` (one object per gamma and space, shared by
+   the pages; a picture turned grey for the PDF gets the grey one). Not AVIF nor BMP (no place
+   in their encoders), not black and white. The RAW TIFF's linear profile is the same bytes as
+   before (a test), the DNG unchanged. **Measured**: littleCMS (Pillow's `ImageCms`) converts
+   to sRGB through our 1.8 profile exactly as through Epson Scan's (`15_epsonscan_600dpi_48bit
+   .tif`): grey 64/128/192 to 81/146/203, (200, 80, 40) to (210, 99, 53), both. Tests: every
+   format read back with its profile at 1.8 and 2.2, the pixels unchanged, the PDF's shared
+   profiles; in the app (e2e) the flatbed at 2.2 and the same at 1.8 (`FakeScanner::
+   with_gamma`) in TIFF, JPEG, PDF, grey and black and white, and a 1.8 scanner with an
+   adapter: its glass at 16 bits 1.8, its frames 2.2. Decided with Matteo the same day: the
+   4490's glass stays at 1.8, as Epson Scan, no choice in Preferences. **To try by eye**.
 2. **"Senza elaborazioni" and RAW**: the same for the files without processing; RAW (DNG,
    linear TIFF) keeps its own linear description (to check that DNG's colour tags say so).
 3. **The screen managed** (larger, later, to decide with Matteo): VetroScan converts what it
@@ -2363,6 +2380,69 @@ Photos than in VetroScan, while LightCraft showed it as VetroScan does.
    one chosen by hand in Preferences as a first step, and a colour engine in pure Rust (for
    example `qcms`, to be checked: licence, 16-bit, speed on a 2400-pixel copy). Until then:
    the CG277 in its sRGB mode shows VetroScan as Windows Photos does (to try).
+
+   **Measured for the design** (15 November 2026, Matteo's machine; a probe in the
+   scratchpad, nothing in the repo): the conversion of Epson Scan's 1.8 profile to each
+   monitor profile installed, four colours (grey 64/128/192, red 200/80/40) and the time on
+   2400 x 1600 pixels at 8 bits, against littleCMS (Pillow's `ImageCms`) as the reference:
+
+   | Monitor profile | littleCMS | qcms 0.3.0 | moxcms 0.8.1 and 0.9.2 |
+   |---|---|---|---|
+   | sRGB | 146 grey, (210, 99, 53) | the same, 10 ms | the same, 10 ms |
+   | CG277 calibrated, `XYZLUT+MTX` v2.2 (1 MB, LUT) | 145 grey, (188, 104, 64) | the same, 98 ms | **wrong**: grey 128 to (104, 106, 97) |
+   | CG277 `Custom` v4.2 (matrix) | 145, (184, 106, 62) | the same, 10 ms | the same, 11 ms |
+   | AW3423DWF v2.0 (matrix) | 146, (191, 112, 63) | the same, 10 ms | the same, 11 ms |
+
+   So the engine is **qcms** (Mozilla's, Firefox's, pure Rust, MIT; 8-bit only, enough for
+   the screen); moxcms (already in the build through `image`) gets the LUT profiles wrong.
+   The grey stays grey on both monitors (calibrated to 2.2, D65): what differs is the
+   saturation, (210, 99, 53) sent as it is where (188, 104, 64) is meant on the CG277.
+   Windows' associations (`HKCU\...\ICM\ProfileAssociations\Display\{4d36e96e-...}\0000`
+   to `0009`, several profiles each, `MDM0`) do not say which key is which monitor: reading
+   them needs more than `reg query`.
+
+   **Design** (to decide with Matteo):
+   - **One place**: every picture the app shows goes through `Picture::from_rgb_max`
+     (`viewer.rs`: the page, its thumbnail, the preview, the result), after it is shrunk to
+     the texture: there each picture is converted from its page's profile (`icc::rgb(tone
+     .gamma)`, the bytes the file carries) to the screen's. The numbers of the page, the
+     histogram, the colour picker and the files stay as they are: only the texture changes.
+   - **Automatic, by default** (Matteo, 15 November 2026: "mi aspettavo che si autoadattasse
+     in base al monitor e al profilo ICC che il monitor usa in quel momento"): the profile of
+     the monitor the window is on, read again when the window moves to another monitor and
+     when the app comes back to the front (a profile changed meanwhile).
+     - Windows, **measured** the same day: PowerShell with `Add-Type` (`CreateDC("DISPLAY",
+       device)`, `GetICMProfile`) and `Screen.AllScreens` gives each monitor's device name,
+       rectangle and profile file: `DISPLAY2` (3440 x 1440 at 0,0, primary, the AW3423DWF)
+       and `DISPLAY1` (1440 x 2560 at 3440,13, the CG277), both "CG277 #1 2023-10-17 22-49
+       50cdm2 D6500 2.2 M-S XYZLUT+MTX.icm", as DisplayCAL's Profile Loader says. No
+       `unsafe` of ours (the workspace forbids it), as `ram.rs` reads the memory; one call
+       of about a second, on a thread, at the start and when the window changes monitor.
+     - macOS: to look at whether the system already matches the app's window (a Metal layer
+       with a colour space set is converted by macOS: then VetroScan converts to sRGB only),
+       or ColorSync's profile of the display.
+     - Linux: colord (`colormgr`) where it is installed; most desktops manage no colour.
+     - **Never worse than today**: whatever cannot be read (no profile, a file that does not
+       load, a system without the tool) gives *sRGB*, which only brings each page's gamma to
+       sRGB's (the 4490's glass midtones right, colours as today). An error is said in
+       Preferences, never a failure of the app.
+   - **In Preferences**, "Profilo del monitor": *Automatico* (the default, saying which
+     profile it found for which monitor), *sRGB*, *nessuno* (the numbers as they are, as
+     today), or a profile file chosen by hand. Saved preference with its migration.
+   - **The engine**: one `qcms::Transform` per (gamma, monitor profile), kept until either
+     changes; applied in strips on every core (a LUT profile took 98 ms on one: the slider's
+     redraw must not wait that), grey pictures converted as RGB.
+   - **Tests**: the conversion against littleCMS's numbers above (the profiles generated, a
+     wide-gamut matrix profile made in the test: no monitor file in the repo), *nessuno*
+     leaving the bytes as they are, the preference and its migration, an e2e with a page at
+     1.8 shown with *sRGB* (grey 128 shown 146) while its file keeps 128.
+   - **Found on Matteo's machine**: the AW3423DWF has the CG277's profile assigned (Windows
+     and DisplayCAL both say so), so every colour-managed program converts for the wrong
+     monitor there; its own `AW3423DWF.icm` is installed. To set by Matteo (Windows' colour
+     management or DisplayCAL), or measure the AW3423DWF with the colorimeter. Still to know:
+     whether Windows 11's automatic colour management for apps is on for either monitor (then
+     the system converts the sRGB itself, and VetroScan must give sRGB there, not convert
+     twice).
 4. **Later, with step 7 of phase 13**: a scanner's own measured profile (IT8 target) in place
    of "sRGB primaries" for each source.
 
@@ -2510,4 +2590,4 @@ the three photos, in reading order (tried in the app); the two previews of the 3
 | 11 · precise moves from the keyboard (done) | 0.4.0 | low | yes |
 | 12 · Epson Perfection 4490 Photo, native, plug and play (milestone 1 written without the scanner; arrived 11 November 2026, the firmware upload confirmed by a capture; buttons; native glass scans at 100-1200 dpi, 8 and 16 bits, in the app with the lamp, cancelling and a scan left half-way stopped at the opening, 12-13 November; open: steps 10-18 of "What is left, in order", and "Open after the code review") | 0.5.0 (milestone 1, experimental); the glass in the app after v0.7.0, not released yet; the rest to be decided | high: protocol unknown, two carriages | no: the scanner (firmware inside the program) |
 | 13 · films done professionally, for every scanner (done: 1-3, 5.1-5.2, 6 for slides; 5.3 set aside; 4 stalled without HP's captures; open: 7, 8) | 0.6.0 (1-3, 5.1-5.2, 6); 7, 8 to be decided | low (1-3, 5.1-5.2, 6, 7 in software, 8), medium (4, 5.3: the motor) | 1-3, 5.1-5.2, 6, 7 in software, 8 yes; 4 needs the 3770's captures |
-| 14 · colour profiles in the files, then the screen managed (decided 15 November 2026; open: 1-4) | to be decided | low (1, 2), medium (3) | yes |
+| 14 · colour profiles in the files, then the screen managed (decided 15 November 2026; done: 1, by eye to try; open: 2-4) | to be decided | low (1, 2), medium (3) | yes |

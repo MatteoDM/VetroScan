@@ -247,17 +247,23 @@ fn resize(image: &Image, w: usize, h: usize, dpi: u16) -> Result<Image> {
 }
 
 /// The picture of a page as stored in the PDF: its dictionary entries and
-/// data (after [`prepare`]).
-pub(crate) fn encode(image: &Image, quality: u8) -> Result<(String, Vec<u8>)> {
+/// data (after [`prepare`]); colour and grey in the colour space of the
+/// `profile` object if given (`/ICCBased`).
+pub(crate) fn encode(
+    image: &Image,
+    quality: u8,
+    profile: Option<usize>,
+) -> Result<(String, Vec<u8>)> {
     use image::ImageEncoder;
     let (w, h) = (image.width, image.height);
     match image.format {
         Format::Rgb | Format::Grey => {
-            let (space, color) = if image.format == Format::Rgb {
+            let (device, color) = if image.format == Format::Rgb {
                 ("/DeviceRGB", image::ExtendedColorType::Rgb8)
             } else {
                 ("/DeviceGray", image::ExtendedColorType::L8)
             };
+            let space = profile.map_or_else(|| device.into(), |id| format!("[/ICCBased {id} 0 R]"));
             let mut jpeg = Vec::new();
             image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, quality.clamp(1, 100))
                 .write_image(&image.data, u32::try_from(w)?, u32::try_from(h)?, color)?;
@@ -284,9 +290,10 @@ pub(crate) fn encode(image: &Image, quality: u8) -> Result<(String, Vec<u8>)> {
 }
 
 /// What a page costs in the PDF besides its picture (page, contents and
-/// image dictionaries), and the document besides its pages, in bytes.
+/// image dictionaries), and the document besides its pages (with a colour
+/// and a grey profile, about 560 bytes each), in bytes.
 pub const PAGE_OVERHEAD: u64 = 420;
-pub const DOCUMENT_OVERHEAD: u64 = 600;
+pub const DOCUMENT_OVERHEAD: u64 = 1700;
 
 /// Largest sample measured, pixels.
 const SAMPLE_PIXELS: usize = 3_000_000;
@@ -340,7 +347,7 @@ pub fn estimate(sample: &Sample, encoding: &Encoding) -> Result<u64> {
     let image = &sample.image;
     if image.format == Format::Lineart {
         let scale = (sample.width * sample.height) as f64 / (image.width * image.height) as f64;
-        return Ok((encode(image, encoding.quality)?.1.len() as f64 * scale) as u64);
+        return Ok((encode(image, encoding.quality, None)?.1.len() as f64 * scale) as u64);
     }
     let dpi = encoding
         .max_dpi
@@ -358,9 +365,9 @@ pub fn estimate(sample: &Sample, encoding: &Encoding) -> Result<u64> {
     let prepared = prepare(image, &encoding)?;
     if w * h <= prepared.width * prepared.height {
         let small = resize(&prepared, w, h, dpi)?;
-        return Ok(encode(&small, encoding.quality)?.1.len() as u64);
+        return Ok(encode(&small, encoding.quality, None)?.1.len() as u64);
     }
-    let bytes = encode(&prepared, encoding.quality)?.1.len() as f64;
+    let bytes = encode(&prepared, encoding.quality, None)?.1.len() as f64;
     Ok((bytes * (w * h) as f64 / (prepared.width * prepared.height) as f64) as u64)
 }
 
@@ -547,7 +554,7 @@ mod tests {
     fn the_estimate_is_close_to_the_real_size() {
         let image = page(1000, 1400, 300, true);
         for encoding in ladder(Encoding::default()) {
-            let real = encode(&prepare(&image, &encoding).unwrap(), encoding.quality)
+            let real = encode(&prepare(&image, &encoding).unwrap(), encoding.quality, None)
                 .unwrap()
                 .1
                 .len() as f64;

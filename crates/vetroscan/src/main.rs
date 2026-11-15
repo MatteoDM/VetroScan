@@ -4523,14 +4523,21 @@ impl App {
         if let Output::Deep(_) = settings.output {
             return self.write_deep(path);
         }
-        let pages: Vec<Image> = self
-            .saving()
-            .into_iter()
-            .map(|p| p.finished(settings))
-            .collect();
-        if pages.is_empty() {
+        let saving = self.saving();
+        let images: Vec<Image> = saving.iter().map(|p| p.finished(settings)).collect();
+        if images.is_empty() {
             return Err(tr("niente da salvare").into());
         }
+        // Each with the gamma of the curve it was drawn with: its file's
+        // profile.
+        let pages: Vec<vetroscan_export::Tagged> = images
+            .iter()
+            .zip(&saving)
+            .map(|(image, page)| vetroscan_export::Tagged {
+                image,
+                gamma: page.raw.tone.gamma,
+            })
+            .collect();
         let name = path
             .file_stem()
             .and_then(|s| s.to_str())
@@ -4550,7 +4557,7 @@ impl App {
             Writer::Folder => {
                 vetroscan_export::save_folder(folder, &name, &pages, format).map(|_| ())
             }
-            Writer::One => vetroscan_export::save_as(path, &pages[0], format),
+            Writer::One => vetroscan_export::save_as(path, pages[0], format),
         }
         .map_err(|e| e.to_string())?;
         Ok(match writer(settings.output, path, n) {
@@ -4578,13 +4585,17 @@ impl App {
     /// page until the file fits (measured on the file written, and done
     /// again tighter if the estimate fell short). Says how large it is and
     /// what was lightened.
-    fn write_pdf(&self, path: &std::path::Path, pages: &[Image]) -> Result<String, String> {
+    fn write_pdf(
+        &self,
+        path: &std::path::Path,
+        pages: &[vetroscan_export::Tagged],
+    ) -> Result<String, String> {
         use vetroscan_export::{compress, Encoding, PdfPage, Sample};
         let settings = self.settings();
         let base = Encoding::from_percent(settings.pdf_quality);
         let limit = settings.pdf_limit_kb.map(|kb| u64::from(kb) * 1024);
         let samples: Vec<Sample> = match limit {
-            Some(_) => pages.iter().map(Sample::new).collect(),
+            Some(_) => pages.iter().map(|p| Sample::new(p.image)).collect(),
             None => Vec::new(),
         };
         let mut budget = limit;
@@ -4603,8 +4614,9 @@ impl App {
                 .iter()
                 .zip(&self.pages)
                 .zip(&encodings)
-                .map(|((image, page), &encoding)| PdfPage {
-                    image,
+                .map(|((tagged, page), &encoding)| PdfPage {
+                    image: tagged.image,
+                    gamma: tagged.gamma,
                     layout: settings.layout(page.layout, page.focus),
                     encoding,
                 })
@@ -4719,8 +4731,17 @@ impl App {
                     (data, channels, image.width, image.height, image.dpi)
                 }
             };
-            vetroscan_export::save_deep(&target, w, h, channels, dpi, &data, &software())
-                .map_err(|e| e.to_string())?;
+            vetroscan_export::save_deep(
+                &target,
+                w,
+                h,
+                channels,
+                dpi,
+                &data,
+                page.raw.tone.gamma,
+                &software(),
+            )
+            .map_err(|e| e.to_string())?;
         }
         Ok(if n == 1 {
             path.display().to_string()
@@ -6629,11 +6650,16 @@ impl App {
     /// Prints the photo shown on the default printer (the photocopy).
     fn print_shown(&mut self) {
         let shared = *self.settings();
-        let Some(image) = self.shown().map(|p| p.finished(&shared)) else {
+        let Some(page) = self.shown() else {
             return;
         };
+        let image = page.finished(&shared);
+        let tagged = vetroscan_export::Tagged {
+            image: &image,
+            gamma: page.raw.tone.gamma,
+        };
         let path = std::env::temp_dir().join(Self::stamped("fotocopia", "png"));
-        match vetroscan_export::save(&path, &image) {
+        match vetroscan_export::save(&path, tagged) {
             Ok(()) => match print_file(&path) {
                 Ok(()) => {
                     self.note = tr("Fotocopia inviata alla stampante predefinita").into();

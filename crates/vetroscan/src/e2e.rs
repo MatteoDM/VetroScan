@@ -3696,3 +3696,92 @@ fn the_zoomed_view_pans_with_the_arrows() {
     assert_eq!(ui.app.result_view.center, None);
     assert_eq!(ui.app.result_view.scale, Some(1.0), "the zoom stays");
 }
+
+// ------------------------------------------------------------- colour profiles
+
+/// The ICC profiles in a file the app saved, in order: colour space and
+/// gamma. TIFF, JPEG and PDF keep them as they are, so they are found by
+/// their signature.
+fn profiles(name: &str, ui: &Ui) -> Vec<([u8; 4], f64)> {
+    let bytes = std::fs::read(ui.app.folder().join(name)).unwrap();
+    let mut found = Vec::new();
+    let mut at = 36;
+    while let Some(i) = bytes[at..].windows(4).position(|w| w == b"acsp") {
+        let start = at + i - 36;
+        let size = u32::from_be_bytes(bytes[start..start + 4].try_into().unwrap()) as usize;
+        let profile = vetroscan_export::icc::read(&bytes[start..start + size])
+            .unwrap_or_else(|| panic!("{name}: a profile not understood"));
+        found.push((profile.space, profile.gamma));
+        at = start + size + 36;
+    }
+    found
+}
+
+/// Saves what the app holds as `output`: the one file written.
+fn save_as(ui: &mut Ui, output: crate::Output) -> String {
+    let before = ui.saved();
+    ui.send(Message::Output(output));
+    ui.send(Message::Save);
+    let new: Vec<String> = ui
+        .saved()
+        .into_iter()
+        .filter(|n| !before.contains(n))
+        .collect();
+    assert_eq!(new.len(), 1, "{output:?}: {new:?} {}", ui.app.note);
+    new.into_iter().next().unwrap()
+}
+
+/// 1.8 and 2.2 as an ICC curve holds them (n / 256).
+const G18: f64 = 1.80078125;
+const G22: f64 = 2.19921875;
+
+#[test]
+fn saved_files_say_the_gamma_their_scanner_draws_with() {
+    use crate::{Colour, Output};
+    use vetroscan_export::ImageFormat;
+    // The flatbed at 2.2, the same at 1.8 (as the Epson 4490's glass).
+    for (scanner, gamma) in [
+        (FakeScanner::flatbed(), G22),
+        (FakeScanner::flatbed().with_gamma(1.8), G18),
+    ] {
+        let mut ui = Ui::with_scanners(vec![scanner]);
+        ui.send(Message::Kind(Kind::Document));
+        ui.scan(1);
+        for output in [
+            Output::Image(ImageFormat::Tiff),
+            Output::Image(ImageFormat::Jpeg { quality: 90 }),
+            Output::Pdf,
+        ] {
+            let name = save_as(&mut ui, output);
+            assert_eq!(profiles(&name, &ui), [(*b"RGB ", gamma)], "{output:?}");
+        }
+        // Grey says grey; black and white says nothing.
+        ui.send(Message::PageShow(0));
+        ui.send(Message::PageColour(Colour::Grey));
+        let name = save_as(&mut ui, Output::Image(ImageFormat::Tiff));
+        assert_eq!(profiles(&name, &ui), [(*b"GRAY", gamma)]);
+        ui.send(Message::PageColour(Colour::Lineart));
+        let name = save_as(&mut ui, Output::Image(ImageFormat::Tiff));
+        assert_eq!(profiles(&name, &ui), []);
+    }
+}
+
+#[test]
+fn a_scanner_at_1_8_tags_its_glass_1_8_and_its_films_2_2() {
+    use crate::{DeepFormat, Output};
+    let mut ui = Ui::with_scanners(vec![FakeScanner::with_adapter().with_gamma(1.8)]);
+    // A photo on the glass at 16 bits, saved at 16 bits: the scanner's curve.
+    ui.send(Message::Kind(Kind::Photo));
+    ui.send(Message::Depth(crate::Depth(16)));
+    ui.scan(1);
+    let name = save_as(&mut ui, Output::Deep(DeepFormat::Tiff));
+    assert_eq!(profiles(&name, &ui), [(*b"RGB ", G18)]);
+    // Films: the positives' own curve, whatever the scanner's; each page
+    // of a multi-page TIFF with its profile.
+    ui.click("Pellicola");
+    ui.send(Message::Dpi(200));
+    ui.click("Scansiona foto");
+    assert_eq!(ui.app.pages.len(), 2);
+    let name = save_as(&mut ui, Output::TiffPages);
+    assert_eq!(profiles(&name, &ui), [(*b"RGB ", G22), (*b"RGB ", G22)]);
+}

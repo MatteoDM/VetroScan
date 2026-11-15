@@ -448,6 +448,13 @@ impl FakeScanner {
         }
     }
 
+    /// Drawing its pages through a tone curve of `gamma` (the Epson 4490's
+    /// glass declares 1.8).
+    pub fn with_gamma(mut self, gamma: f64) -> Self {
+        self.caps.tone.gamma = gamma;
+        self
+    }
+
     /// Each stage of a scan takes `pace`.
     pub fn paced(mut self, pace: Duration) -> Self {
         self.pace = pace;

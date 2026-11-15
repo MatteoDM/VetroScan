@@ -8,10 +8,12 @@
 //! sheet of paper ([`Layout`]): A4, Letter, a photo size…, turned the way
 //! the scan is, with the scan at its real size, fitted to the sheet or
 //! filling it, inside a margin, centred or moved anywhere inside it.
+//! Colour and grey pictures carry their profile (`/ICCBased`, see
+//! [`crate::icc`]), written once for all the pages that share it.
 
 use crate::compress::{encode, prepare, Encoding};
-use crate::Result;
-use scan_imaging::Image;
+use crate::{icc, Result, Tagged};
+use scan_imaging::{Format, Image};
 use std::io::Write;
 
 /// Size of the pages.
@@ -228,7 +230,7 @@ impl Layout {
 /// pictures stored as JPEG of `jpeg_quality` (black and white: lossless).
 pub fn write<W: Write>(
     out: &mut W,
-    pages: &[Image],
+    pages: &[Tagged<'_>],
     layout: impl Into<Layout>,
     jpeg_quality: u8,
 ) -> Result<()> {
@@ -239,8 +241,9 @@ pub fn write<W: Write>(
     };
     let pages: Vec<PdfPage> = pages
         .iter()
-        .map(|image| PdfPage {
-            image,
+        .map(|page| PdfPage {
+            image: page.image,
+            gamma: page.gamma,
             layout,
             encoding,
         })
@@ -248,11 +251,12 @@ pub fn write<W: Write>(
     write_pages(out, &pages)
 }
 
-/// A page of a PDF: the finished scan, its sheet and how its picture is
-/// stored.
+/// A page of a PDF: the finished scan, the gamma of the tone curve it was
+/// drawn with (its profile), its sheet and how its picture is stored.
 #[derive(Debug, Clone, Copy)]
 pub struct PdfPage<'a> {
     pub image: &'a Image,
+    pub gamma: f64,
     pub layout: Layout,
     pub encoding: Encoding,
 }
@@ -291,9 +295,9 @@ pub fn write_pages<W: Write>(out: &mut W, pages: &[PdfPage]) -> Result<()> {
     };
     let mut offsets = Vec::new();
     pdf.put(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")?;
-    // Objects: 1 catalog, 2 page tree, then 3 per page (page, contents,
-    // image).
-    let page_id = |i: usize| 3 + 3 * i;
+    // Objects: 1 catalog, 2 page tree (written last, when the pages'
+    // numbers are known), then 3 per page (page, contents, image), each
+    // profile before the first picture that uses it.
     // An object: its number, then its parts as they come.
     let mut object = |pdf: &mut Counting<&mut W>, id: usize, parts: &[&[u8]]| {
         offsets.push((id, pdf.written));
@@ -304,22 +308,43 @@ pub fn write_pages<W: Write>(out: &mut W, pages: &[PdfPage]) -> Result<()> {
         pdf.put(b"\nendobj\n")
     };
     object(&mut pdf, 1, &[b"<< /Type /Catalog /Pages 2 0 R >>"])?;
-    let kids: Vec<String> = (0..pages.len())
-        .map(|i| format!("{} 0 R", page_id(i)))
-        .collect();
-    object(
-        &mut pdf,
-        2,
-        &[format!(
-            "<< /Type /Pages /Kids [{}] /Count {} >>",
-            kids.join(" "),
-            pages.len()
-        )
-        .as_bytes()],
-    )?;
-    for (i, page) in pages.iter().enumerate() {
+    let mut next = 3;
+    let mut kids = Vec::with_capacity(pages.len());
+    // The profiles written: (gamma, grey) and their object.
+    let mut profiles: Vec<((u64, bool), usize)> = Vec::new();
+    for page in pages {
         let (image, layout) = (page.image, page.layout);
-        let id = page_id(i);
+        // On the sheet at the size of the scan; the picture maybe smaller,
+        // maybe grey.
+        let prepared = prepare(image, &page.encoding)?;
+        let profile = match icc::of(prepared.format, page.gamma) {
+            None => None,
+            Some(bytes) => {
+                let grey = prepared.format == Format::Grey;
+                let key = (page.gamma.to_bits(), grey);
+                match profiles.iter().find(|(k, _)| *k == key) {
+                    Some(&(_, id)) => Some(id),
+                    None => {
+                        let (n, alternate) = if grey {
+                            (1, "/DeviceGray")
+                        } else {
+                            (3, "/DeviceRGB")
+                        };
+                        let head = format!(
+                            "<< /N {n} /Alternate {alternate} /Length {} >>\nstream\n",
+                            bytes.len()
+                        );
+                        object(&mut pdf, next, &[head.as_bytes(), &bytes, b"\nendstream"])?;
+                        profiles.push((key, next));
+                        next += 1;
+                        Some(next - 1)
+                    }
+                }
+            }
+        };
+        let id = next;
+        next += 3;
+        kids.push(format!("{id} 0 R"));
         let dpi = f64::from(image.dpi.max(1));
         let (iw, ih) = (image.width as f64 / dpi, image.height as f64 / dpi);
         let Placed {
@@ -353,16 +378,24 @@ pub fn write_pages<W: Write>(out: &mut W, pages: &[PdfPage]) -> Result<()> {
             )
             .as_bytes()],
         )?;
-        // On the sheet at the size of the scan; the picture maybe smaller.
-        let prepared = prepare(image, &page.encoding)?;
-        let (dict, data) = encode(&prepared, page.encoding.quality)?;
+        let (dict, data) = encode(&prepared, page.encoding.quality, profile)?;
         let head = format!(
             "<< /Type /XObject /Subtype /Image {dict} /Length {} >>\nstream\n",
             data.len()
         );
         object(&mut pdf, id + 2, &[head.as_bytes(), &data, b"\nendstream"])?;
     }
-    let count = 3 + 3 * pages.len();
+    object(
+        &mut pdf,
+        2,
+        &[format!(
+            "<< /Type /Pages /Kids [{}] /Count {} >>",
+            kids.join(" "),
+            pages.len()
+        )
+        .as_bytes()],
+    )?;
+    let count = next;
     offsets.sort_unstable();
     let xref = pdf.written;
     pdf.put(format!("xref\n0 {count}\n0000000000 65535 f \n").as_bytes())?;
@@ -381,6 +414,49 @@ mod tests {
     use crate::tests::sample;
     use scan_imaging::Format;
 
+    fn tagged(pages: &[Image]) -> Vec<Tagged<'_>> {
+        pages
+            .iter()
+            .map(|image| Tagged { image, gamma: 2.2 })
+            .collect()
+    }
+
+    #[test]
+    fn pages_at_different_gammas_have_their_own_profiles() {
+        let pages = [
+            sample(Format::Rgb),
+            sample(Format::Rgb),
+            sample(Format::Rgb),
+        ];
+        let tagged: Vec<Tagged> = pages
+            .iter()
+            .zip([1.8, 2.2, 1.8])
+            .map(|(image, gamma)| Tagged { image, gamma })
+            .collect();
+        let mut out = Vec::new();
+        write(&mut out, &tagged, PageSize::A4, 85).unwrap();
+        let text = String::from_utf8_lossy(&out);
+        // Two profiles, the third page using the first's.
+        assert_eq!(text.matches("/N 3 /Alternate /DeviceRGB").count(), 2);
+        assert_eq!(text.matches("/ColorSpace [/ICCBased 3 0 R]").count(), 2);
+        assert_eq!(text.matches("/ColorSpace [/ICCBased 7 0 R]").count(), 1);
+        // Each profile as written.
+        let profile = |id: usize| {
+            let head = format!("{id} 0 obj\n<< /N 3 /Alternate /DeviceRGB /Length ");
+            let at = out
+                .windows(head.len())
+                .position(|w| w == head.as_bytes())
+                .unwrap()
+                + head.len();
+            let end = at + out[at..].iter().position(|&b| b == b' ').unwrap();
+            let len: usize = std::str::from_utf8(&out[at..end]).unwrap().parse().unwrap();
+            let start = end + " >>\nstream\n".len();
+            icc::read(&out[start..start + len]).unwrap().gamma
+        };
+        assert_eq!(profile(3), 1.80078125);
+        assert_eq!(profile(7), 2.19921875);
+    }
+
     #[test]
     fn document_structure() {
         let pages = [
@@ -389,13 +465,18 @@ mod tests {
             sample(Format::Grey),
         ];
         let mut out = Vec::new();
-        write(&mut out, &pages, PageSize::A4, 85).unwrap();
+        write(&mut out, &tagged(&pages), PageSize::A4, 85).unwrap();
         let text = String::from_utf8_lossy(&out);
         assert!(text.starts_with("%PDF-1.4"));
         assert!(text.contains("/Count 3"));
         assert_eq!(text.matches("/Type /Page ").count(), 3);
         assert_eq!(text.matches("/DCTDecode").count(), 2);
         assert_eq!(text.matches("/FlateDecode").count(), 1);
+        // A profile for colour, one for grey, none for black and white.
+        assert_eq!(text.matches("/ColorSpace [/ICCBased ").count(), 2);
+        assert_eq!(text.matches("/N 3 /Alternate /DeviceRGB").count(), 1);
+        assert_eq!(text.matches("/N 1 /Alternate /DeviceGray").count(), 1);
+        assert!(text.contains("/ColorSpace /DeviceGray /BitsPerComponent 1"));
         // Every xref offset points at its object (on the bytes: the
         // file is binary).
         let find = |hay: &[u8], needle: &[u8]| {
@@ -410,7 +491,8 @@ mod tests {
             .parse()
             .unwrap();
         let table = std::str::from_utf8(&out[xref_at..start]).unwrap();
-        for (id, line) in table.lines().skip(3).take(11).enumerate() {
+        assert!(table.starts_with("xref\n0 14\n"), "{table}");
+        for (id, line) in table.lines().skip(3).take(13).enumerate() {
             let offset: usize = line[..10].parse().unwrap();
             let expect = format!("{} 0 obj", id + 1);
             assert!(
@@ -538,6 +620,7 @@ mod tests {
         let mut out = Vec::new();
         let page = |layout| PdfPage {
             image: &image,
+            gamma: 2.2,
             layout,
             encoding: Encoding::default(),
         };
@@ -574,7 +657,7 @@ mod tests {
             focus: [0.5, 0.5],
         };
         let mut out = Vec::new();
-        write(&mut out, &[sample(Format::Grey)], layout, 85).unwrap();
+        write(&mut out, &tagged(&[sample(Format::Grey)]), layout, 85).unwrap();
         assert!(String::from_utf8_lossy(&out).contains(" re W n "));
     }
 
@@ -759,7 +842,13 @@ mod tests {
     fn fit_page_is_the_scan_at_its_size() {
         // 16 x 8 pixels at 300 dpi: 3.84 x 1.92 points.
         let mut out = Vec::new();
-        write(&mut out, &[sample(Format::Grey)], PageSize::Fit, 85).unwrap();
+        write(
+            &mut out,
+            &tagged(&[sample(Format::Grey)]),
+            PageSize::Fit,
+            85,
+        )
+        .unwrap();
         assert!(String::from_utf8_lossy(&out).contains("/MediaBox [0 0 3.84 1.92]"));
     }
 
@@ -770,7 +859,7 @@ mod tests {
         empty.data.clear();
         let pages = [sample(Format::Grey), empty];
         let mut out = Vec::new();
-        let e = write(&mut out, &pages, PageSize::A4, 85).unwrap_err();
+        let e = write(&mut out, &tagged(&pages), PageSize::A4, 85).unwrap_err();
         assert!(e.to_string().contains("page 2 is empty"), "{e}");
         assert!(out.is_empty(), "nothing written");
     }
