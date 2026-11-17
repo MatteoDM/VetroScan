@@ -1935,19 +1935,45 @@ never run by us (step 12).
     through "Separa" and the page's turns, saved as `…-infrarosso` (16-bit grey, linear); the
     memory estimate counts it; e2e with the made-up scanner with it and with one without.
 
+    **The second ICE capture** (17 November 2026, evening; captures 106-114 in
+    `captures/epson4490/05-catture.md`, the numbers in `06-formato-dati.md`, "Le catture
+    106-114"; `tools/ice.py` now reads the runs, columns and resolution from any capture).
+    Measured:
+    - the same sequence as 18 every time (holes, colour pass with source `04`, `1E 88`, the
+      infrared pass); at 1200 dpi too (infrared read h lines, `1E 41` columns at 2400);
+      **with ICE the scanner never reads above 2400 dpi**: asked 4800, Epson Scan reads 2400
+      and enlarges (113, and 110);
+    - the image's scale is the same at every scan for a part of the sensor: 0.99279 (18, 108,
+      110), 0.99282 at 1200 (109), 0.9925 on the slide (112, 113, read further right); the holes
+      always 0.9931;
+    - the shift changes at every scan: 0.5 lines and 0.6 columns between 108 and its repeat
+      110, 1.1 lines between 113 and our replay of it; Epson follows it in part with the holes
+      (**infrared start = colour start + round(48.3 - dy)**, dy the holes' line in the colour
+      pre-read less the infrared's: right in all six), and moves the infrared columns by 2;
+      the fine registration still has to be measured on the image;
+    - `1E 88` is the colour pre-read's two holes in half pixels (x, y, width, height; the right
+      one's x counted from column 6,235); the scanner gives it back with `1E 87 01`.
+    **Our replay of capture 113** (114, Matteo at the scanner, told beforehand what was sent:
+    `1E A2 04`/`05`, mode `20`, the unit's 1,729 steps): every answer as captured, 135.6 s,
+    227 MB read; colour 1.7 % and infrared 0.4 % lower than Epson's read (its calibration sent
+    back); `captures/epson4490/replay/113_diapositiva_ice.txt` (`script.py` takes sources
+    `03`/`04` as film now).
+
+    **Matteo's decision** (17 November 2026, evening): the driver registers from **the holes and
+    the image**: the hole pre-read at every scan as Epson (for the infrared pass's start and
+    columns; it is in the captured sequence anyway), a fixed scale per resolution, the fine
+    shift measured on the image (infrared against colour, as `ice.py --register`).
+
     **Left, in order:**
-    1. **A second ICE capture** (Matteo at Epson Scan): the same frame again at 2400 dpi
-       (does the scale or the `1E 88` block change between scans?), then the resolutions
-       Epson Scan offers ICE at (1200, 4800?) and a slide with ICE. Decides whether the
-       driver reads the holes every time, as Epson, or keeps a fixed scale per resolution.
+    1. Done (above).
     2. **The driver's infrared pass**: the rules of the second pass (from the captures, as
        `filmsetup.py` did for colour: the unit's move, the exposure loop, the shading on the
-       wider columns, the start move +39), the hole pre-read and `1E 88`/`1E 87 01`, every one
-       guarded in `guard.rs` before anything moves; a replay of capture 18's infrared pass
-       first (`epson4490 replay`, Matteo told what is sent: `1E A2 04`/`05`, mode `20`, the
-       unit's 1,729 steps, never sent by our code), then our own; the registration (green
-       row, the line shift, the scale) in the driver, checked against `ice.py`; then the
-       4490 declares `Infrared { Negative, 2400 }` and nothing else.
+       wider columns, the start move from the holes, the infrared columns), the hole pre-read
+       and `1E 88`/`1E 87 01`, every one guarded in `guard.rs` before anything moves (the replay
+       of 113 is done); then our own pass, with Matteo at the scanner; the registration (green
+       row, the line shift and column offset measured on the image, the scale per resolution)
+       in the driver, checked against `ice.py`; then the 4490 declares `Infrared` for what was
+       captured: negatives at 1200 and 2400 dpi, slides at 2400, and nothing above 2400.
     3. **The dust removal** in `scan-imaging` (generic, from what it measures): the infrared
        relative to its local mean (5 % explains 99 % of Epson's changes here), the cyan
        crosstalk taken away first, the pixels found filled from their neighbours; measured
