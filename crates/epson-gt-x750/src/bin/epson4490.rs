@@ -15,7 +15,17 @@
 //!                                      scans an area of the glass, in millimetres
 //! epson4490 film-scan DPI X Y W H OUT.png [--positive] [--bits 8] [--pixels] [--raw FILE] --move
 //!                                      scans an area of the film window (the lid's unit)
+//! epson4490 film-scan DPI X Y W H OUT.png --ice [--positive] [--pixels] [--raw FILE] --move
+//!                                      the same with Digital ICE: colours, then infrared
 //! ```
+//!
+//! `film-scan --ice` scans with Digital ICE as Epson Scan does (`epson_gt_x750::scan::scan_ice`,
+//! captures 18, 108-113): the colour pass with the holder's hole pre-read, then the infrared pass
+//! (the lid unit's infrared light, `1E A2 04`), the infrared laid on the colours by the driver.
+//! Only what was captured with ICE: negatives at 1200 and 2400 dpi, slides at 2400, 16 bits.
+//! OUT.png is the colour image, OUT-infrarosso.png the infrared (16-bit grey, linear); `--raw
+//! FILE` keeps the colour read in FILE and the infrared read in FILE.ir (trailers removed, three
+//! 16-bit samples a pixel).
 //!
 //! `film-scan` scans a film in the lid's transparency unit as Epson Scan does
 //! (`epson_gt_x750::scan::scan_film`): the area in millimetres from the film window's corner
@@ -42,9 +52,12 @@
 //! With `--no-lock` it opens the scanner without Windows' STI lock (taking it has Epson's
 //! driver ask the scanner its state, capture 44) and writes nothing at all: it only reads.
 //! `epson4490 lamp-off` switches the lamp off (`1E A2 00`), as the application's lamp timer.
-//! `epson4490 lid-lamp [--positive]` lights the lid's lamp as Epson Scan does before a film's
+//! `epson4490 lid-lamp [--positive] [--watch SECONDS]` lights the lid's lamp as Epson Scan does before a film's
 //! preview (capture 72: its `1E 57` for a negative's, or a slide's, `1E A2 02`, then `1B 03` and
-//! `1E A1` every second until warm); nothing moves. A glass scan after it switches back.
+//! `1E A1` every second until warm); nothing of ours moves (the scanner itself may take the carriages
+//! to 1994 / 1078 when it lights the lamp again, captures 85, 115, 118). `--watch SECONDS` then reads
+//! the state and the positions four times a second for SECONDS, the scanner held open. A glass scan
+//! after it switches back.
 //! Without `--move` it only prints the plan and what the guard says of it. A lamp taken to be
 //! cold (switched on, or no scan for 14 minutes, or switched off and on since: `1E 87`; the
 //! time and `1E 87` of the last scan are kept in the
@@ -73,8 +86,8 @@ use std::process::ExitCode;
 
 const USAGE: &str = "usage: epson4490 list | firmware [--firmware FILE] | probe | \
                      upload [--firmware FILE] | buttons [SECONDS] | replay SCRIPT OUT --move | \
-                     scan DPI X Y W H OUT.png [--bits 16] [--tone wia|linear] [--raw FILE] [--cancel-after BLOCKS] --move   (X Y W H in mm) | probe/drain [--no-lock] | recover | lamp-off | lid-lamp [--positive] | \
-                     film-scan DPI X Y W H OUT.png [--positive] [--bits 8] [--pixels] [--raw FILE] --move   (X Y W H in mm in the film window, or pixels)";
+                     scan DPI X Y W H OUT.png [--bits 16] [--tone wia|linear] [--raw FILE] [--cancel-after BLOCKS] --move   (X Y W H in mm) | probe/drain [--no-lock] | recover | lamp-off | lid-lamp [--positive] [--watch SECONDS] | \
+                     film-scan DPI X Y W H OUT.png [--positive] [--bits 8] [--ice] [--pixels] [--raw FILE] --move   (X Y W H in mm in the film window, or pixels)";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -90,6 +103,7 @@ fn main() -> ExitCode {
     let mut curves = Curves::Wia;
     let mut cancel_after = None;
     let mut positive = false;
+    let mut ice = false;
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
@@ -100,6 +114,7 @@ fn main() -> ExitCode {
             "--move" => moves = true,
             "--no-lock" => no_lock = true,
             "--positive" => positive = true,
+            "--ice" => ice = true,
             "--pixels" => pixels = true,
             "--bits" => match rest.next().map(|b| b.parse()) {
                 Some(Ok(b)) => bits = Some(b),
@@ -129,6 +144,12 @@ fn main() -> ExitCode {
             o if matches!(command.as_deref(), Some("scan" | "film-scan")) && operands.len() < 6 => {
                 operands.push(o.to_owned())
             }
+            "--watch" if command.as_deref() == Some("lid-lamp") => {
+                match rest.next().map(|n| n.parse::<u64>()) {
+                    Some(Ok(n)) => seconds = Some(n),
+                    _ => return usage(),
+                }
+            }
             n if command.as_deref() == Some("buttons") && seconds.is_none() => {
                 match n.parse::<u64>() {
                     Ok(n) => seconds = Some(n),
@@ -149,7 +170,7 @@ fn main() -> ExitCode {
         Some("buttons") => buttons(seconds.unwrap_or(10)),
         Some("drain") => drain(no_lock),
         Some("lamp-off") => lamp_off(),
-        Some("lid-lamp") => lid_lamp(positive),
+        Some("lid-lamp") => lid_lamp(positive, seconds),
         Some("recover") => recover(),
         Some("replay") if operands.len() == 2 && moves => replay(&operands[0], &operands[1]),
         Some("replay") if operands.len() == 2 => {
@@ -164,7 +185,7 @@ fn main() -> ExitCode {
                     return ExitCode::from(2);
                 }
             };
-            let fine = show_film_plan(&request);
+            let fine = show_film_plan(&request, ice);
             if !moves {
                 eprintln!("epson4490: film-scan moves the carriages: add --move to run it");
                 return ExitCode::from(2);
@@ -172,7 +193,11 @@ fn main() -> ExitCode {
             if !fine {
                 return ExitCode::FAILURE;
             }
-            film_scan(&request, &operands[5], raw_path.as_deref())
+            if ice {
+                ice_scan(&request, &operands[5], raw_path.as_deref())
+            } else {
+                film_scan(&request, &operands[5], raw_path.as_deref())
+            }
         }
         Some("scan") if operands.len() == 6 => {
             let request = match scan_request(&operands[..5], bits.unwrap_or(8)) {
@@ -292,25 +317,30 @@ fn probe(path: Option<&std::path::Path>, no_lock: bool) -> Result<(), Error> {
     };
     println!("state (1B 03): {}", describe(protocol::state(&mut t)?));
     if !no_lock {
-        // Read-only (the guard lets it out always): where the carriage and the lid's unit are.
-        t.bulk_out(&guard::GET_POSITIONS)?;
-        let mut a = [0u8; 4];
-        let mut got = 0;
-        while got < 4 {
-            match t.bulk_in(&mut a[got..])? {
-                0 => break,
-                n => got += n,
-            }
-        }
-        if got == 4 {
-            println!(
-                "positions (1E 86): carriage {}, lid's unit {}",
-                u16::from_le_bytes([a[0], a[1]]),
-                u16::from_le_bytes([a[2], a[3]])
-            );
+        if let Some((c, u)) = positions(&mut t)? {
+            println!("positions (1E 86): carriage {c}, lid's unit {u}");
         }
     }
     Ok(())
+}
+
+/// `1E 86`, read-only (the guard lets it out always): where the carriage and the lid's unit are.
+fn positions(t: &mut dyn epson_gt_x750::Transport) -> Result<Option<(u16, u16)>, Error> {
+    t.bulk_out(&guard::GET_POSITIONS)?;
+    let mut a = [0u8; 4];
+    let mut got = 0;
+    while got < 4 {
+        match t.bulk_in(&mut a[got..])? {
+            0 => break,
+            n => got += n,
+        }
+    }
+    Ok((got == 4).then(|| {
+        (
+            u16::from_le_bytes([a[0], a[1]]),
+            u16::from_le_bytes([a[2], a[3]]),
+        )
+    }))
 }
 
 fn upload(path: Option<PathBuf>) -> Result<(), Error> {
@@ -368,7 +398,7 @@ fn lamp_off() -> Result<(), Error> {
 
 /// Lights the lid's lamp as Epson Scan does before a film's preview (`scan::light_lid_lamp`,
 /// the preview's request of captures 72 and 79): nothing moves.
-fn lid_lamp(positive: bool) -> Result<(), Error> {
+fn lid_lamp(positive: bool, watch: Option<u64>) -> Result<(), Error> {
     use epson_gt_x750::film::{Film, FilmRequest};
     let film = if positive {
         Film::Positive
@@ -406,6 +436,27 @@ fn lid_lamp(positive: bool) -> Result<(), Error> {
         waited.as_secs_f64(),
         describe(protocol::state(&mut t)?)
     );
+    if let Some(seconds) = watch {
+        // Read-only: the state and the positions four times a second, each change printed,
+        // the scanner held open meanwhile.
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+        let mut last = None;
+        while std::time::Instant::now() < until {
+            let s = protocol::state(&mut t)?;
+            let at = positions(&mut t)?;
+            let now = (s.0, at);
+            if last != Some(now) {
+                println!(
+                    "  {:5.1} s  1B 03 {:02X} {:02X}, 1E 86 {at:?}",
+                    start.elapsed().as_secs_f64(),
+                    s.0[0],
+                    s.0[1]
+                );
+                last = Some(now);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+    }
     Ok(())
 }
 
@@ -598,8 +649,9 @@ fn film_request(
 }
 
 /// Prints a film request's plan with the x correction of captures 74-81 (the scan reads the
-/// scanner's own) and what the guard says of it: whether it may go out.
-fn show_film_plan(r: &epson_gt_x750::film::FilmRequest) -> bool {
+/// scanner's own) and what the guard says of it: whether it may go out. With `ice`, Digital
+/// ICE's own check too, and the infrared plan with captures 108's holes (the scan finds its own).
+fn show_film_plan(r: &epson_gt_x750::film::FilmRequest, ice: bool) -> bool {
     use epson_gt_x750::film::FilmPlan;
     let mm = |v: u32, res: u32| f64::from(v) * 25.4 / f64::from(res);
     println!(
@@ -620,6 +672,42 @@ fn show_film_plan(r: &epson_gt_x750::film::FilmRequest) -> bool {
     if let Err(e) = guard::check_film_request(r) {
         println!("the guard refuses it: {e}");
         return false;
+    }
+    if ice {
+        if let Err(e) = guard::check_ice_request(r) {
+            println!("the guard refuses it: {e}");
+            return false;
+        }
+        let corr = setup::XCorrection(-133);
+        let holes = |v| epson_gt_x750::ice::Holes {
+            found: true,
+            values: v,
+        };
+        let plan = FilmPlan::new(*r, corr).and_then(|colour| {
+            let ir = epson_gt_x750::ice::infrared_plan(
+                &colour,
+                corr,
+                &holes([702, 538, 144, 140, 630, 512, 150, 140]),
+                &holes([646, 528, 138, 138, 662, 504, 146, 132]),
+            )?;
+            guard::check_infrared_plan(&colour, &ir)?;
+            Ok(ir)
+        });
+        match plan {
+            Ok(ir) => {
+                let g = ir.geometry;
+                println!(
+                    "Digital ICE, with capture 108's correction (-133) and holes: the infrared \
+                     read columns {}-{}, {} lines of {} pixels, start move {} steps (+1024), \
+                     read move {} steps",
+                    g.columns.0, g.columns.1, g.lines, g.pixels, g.start_steps, g.read_steps
+                );
+            }
+            Err(e) => {
+                println!("no infrared plan: {e}");
+                return false;
+            }
+        }
     }
     match FilmPlan::new(*r, setup::XCorrection(-122)) {
         Ok(p) => {
@@ -719,6 +807,117 @@ fn film_scan(
         s.image.bits
     );
     Ok(())
+}
+
+/// Scans a film with Digital ICE (`scan::scan_ice`) and writes its colours to `out`, the
+/// infrared beside it (`-infrarosso`), and both raw reads with `raw`.
+fn ice_scan(
+    request: &epson_gt_x750::film::FilmRequest,
+    out: &str,
+    raw: Option<&std::path::Path>,
+) -> Result<(), Error> {
+    let mut t = open_first()?;
+    let state = protocol::state(&mut t)?;
+    println!("state (1B 03): {}", describe(state));
+    if !state.firmware_running() {
+        return Err(Error::Other(
+            "the firmware is not running: run `epson4490 upload` first".into(),
+        ));
+    }
+    let start = std::time::Instant::now();
+    let mut shown = 0;
+    let _mark = epson_gt_x750::mark::ScanMark::begin(&epson_gt_x750::mark::default_path());
+    let s = epson_gt_x750::scan::scan_ice(
+        &mut t,
+        request,
+        10,
+        &mut |line| println!("  {:5.1} s  {line}", start.elapsed().as_secs_f64()),
+        &mut |event| {
+            if let epson_gt_x750::scan::Event::Reading { done, total } = event {
+                let tenth = done * 10 / total.max(1);
+                if tenth != shown {
+                    shown = tenth;
+                    println!(
+                        "  {:5.1} s  {} of {} MB",
+                        start.elapsed().as_secs_f64(),
+                        done / 1_000_000,
+                        total / 1_000_000
+                    );
+                }
+            }
+            true
+        },
+    )?;
+    for (what, c) in [
+        ("colour", &s.colour.calibration),
+        ("infrared", &s.infrared_calibration),
+    ] {
+        let g = c.plan.geometry;
+        println!(
+            "{what} pass: holes {:?}, lid unit back {} steps, offsets {:02x?}, exposures {:?} us, \
+             gains {:02x?}; columns read {}-{}, {} lines, start move {}",
+            c.holes.map(|h| h.values),
+            c.back,
+            c.offsets,
+            c.exposures,
+            c.gains,
+            g.columns.0,
+            g.columns.1,
+            g.lines,
+            g.start_steps
+        );
+    }
+    let r = s.registration;
+    println!(
+        "registration: line {:.2}, column {:.2}, scale {:.5}, {}",
+        r.line,
+        r.column,
+        r.scale,
+        if r.measured {
+            format!("measured on {} tiles", r.tiles)
+        } else {
+            "predicted".into()
+        }
+    );
+    if let Some(path) = raw {
+        let ir_path = path.with_extension("ir");
+        std::fs::write(path, &s.colour.raw)
+            .map_err(|e| Error::Other(format!("{}: {e}", path.display())))?;
+        std::fs::write(&ir_path, &s.infrared_raw)
+            .map_err(|e| Error::Other(format!("{}: {e}", ir_path.display())))?;
+        println!("raw data -> {} and {}", path.display(), ir_path.display());
+    }
+    write_png(out, &s.colour.image)?;
+    let ir_out = match out.rsplit_once('.') {
+        Some((stem, ext)) => format!("{stem}-infrarosso.{ext}"),
+        None => format!("{out}-infrarosso"),
+    };
+    write_grey16(
+        &ir_out,
+        s.colour.image.width,
+        s.colour.image.height,
+        &s.infrared,
+    )?;
+    println!(
+        "done in {:.1} s: {} x {} pixels -> {out}, {ir_out}",
+        start.elapsed().as_secs_f64(),
+        s.colour.image.width,
+        s.colour.image.height
+    );
+    Ok(())
+}
+
+/// A 16-bit grey PNG of `samples`, `width` x `height`.
+fn write_grey16(path: &str, width: u32, height: u32, samples: &[u16]) -> Result<(), Error> {
+    let fail = |e: &dyn std::fmt::Display| Error::Other(format!("{path}: {e}"));
+    let file = std::fs::File::create(path).map_err(|e| fail(&e))?;
+    let mut enc = png::Encoder::new(std::io::BufWriter::new(file), width, height);
+    enc.set_color(png::ColorType::Grayscale);
+    enc.set_depth(png::BitDepth::Sixteen);
+    let data: Vec<u8> = samples.iter().flat_map(|v| v.to_be_bytes()).collect();
+    let mut w = enc.write_header().map_err(|e| fail(&e))?;
+    w.write_image_data(&data).map_err(|e| fail(&e))?;
+    w.finish().map_err(|e| fail(&e))
 }
 
 /// Prints the plan of `request` with the x correction of Matteo's 4490 (the scan reads the
@@ -1250,13 +1449,25 @@ mod tests {
             (px.dpi, px.ydpi, px.x, px.y, px.width, px.height, px.bits, px.film),
             (600, 600, 93, 209, 576, 874, 16, Film::Negative)
         );
-        assert!(show_film_plan(&px));
+        assert!(show_film_plan(&px, false));
+        // No Digital ICE at 600 dpi.
+        assert!(!show_film_plan(&px, true));
         let r = film_request(&args(["4800", "4", "10", "24", "37"]), 16, true, false).unwrap();
         assert_eq!((r.ydpi, r.y, r.film), (5400, 2126, Film::Positive));
-        assert!(show_film_plan(&r));
+        assert!(show_film_plan(&r, false));
+        assert!(!show_film_plan(&r, true));
         // A slide at 8 bits was never captured: refused.
         let r = film_request(&args(["2400", "4", "10", "24", "37"]), 8, true, false).unwrap();
-        assert!(!show_film_plan(&r));
+        assert!(!show_film_plan(&r, false));
+        // Capture 108's frame with Digital ICE.
+        let r = film_request(
+            &args(["2400", "303", "1096", "2362", "3401"]),
+            16,
+            false,
+            true,
+        )
+        .unwrap();
+        assert!(show_film_plan(&r, true));
         assert!(film_request(&args(["600", "-1", "0", "1", "1"]), 16, false, false).is_err());
     }
 

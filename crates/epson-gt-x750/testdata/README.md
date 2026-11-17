@@ -37,3 +37,10 @@ sum up each of their reads with what the film's rules take from it (the origin r
 levels, the black pixels' sums, the window reads' line maxima: `film_testdata.py` in
 `captures/epson4490/tools`), so that a test makes up reads that give the same decisions:
 `scan::scan_film` writes what Epson Scan wrote, line by line, from the lamp to the image read.
+
+`108_ice.txt`, `109_ice.txt`, `112_ice.txt` are Epson Scan's Digital ICE captures 108 (a negative
+at 2400 dpi), 109 (at 1200) and 112 (a slide at 2400), stripped the same way, with their
+`*_ice_reads.txt`: besides the film's reads, each hole pre-read as `holes T LEFT RIGHT`, the
+runs of green samples above the threshold T in each hole's image (`y.first.last`), from which a
+test makes a read whose holes are Epson's: `scan::scan_ice` writes what Epson Scan wrote, line
+by line, through both passes, `1E 88` included.

@@ -331,6 +331,16 @@ pub fn origin_levels(read: &[u8]) -> Option<Vec<u32>> {
 /// (150 - edge + 35) x 12 + 256, and the move back that many steps less 1024 (a 512-value ramp's).
 /// `None` when no edge is found (Epson Scan then moves by [`ORIGIN_DEFAULT`]).
 pub fn origin(read: &[u8]) -> Option<u32> {
+    origin_after(read, 35)
+}
+
+/// [`origin`] for Digital ICE's infrared pass: 31 lines in place of 35 (`0x42135d`, source
+/// `03`; captures 108, 109 and 112: 228, 228 and 204 steps back).
+pub fn infrared_origin(read: &[u8]) -> Option<u32> {
+    origin_after(read, 31)
+}
+
+fn origin_after(read: &[u8], k: u32) -> Option<u32> {
     let lines = ORIGIN_READ.0;
     let levels = origin_levels(read)?;
     let threshold = 5 * levels.iter().map(|v| v / 10).max().unwrap_or(0);
@@ -347,7 +357,7 @@ pub fn origin(read: &[u8]) -> Option<u32> {
             }
         }
     }
-    (edge > 0).then(|| (lines as u32 - edge as u32 + 35) * 12 + 256)
+    (edge > 0).then(|| (lines as u32 - edge as u32 + k) * 12 + 256)
 }
 
 #[cfg(test)]

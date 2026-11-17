@@ -1964,9 +1964,84 @@ never run by us (step 12).
     columns; it is in the captured sequence anyway), a fixed scale per resolution, the fine
     shift measured on the image (infrared against colour, as `ice.py --register`).
 
+    **The driver's infrared pass, built** (17-18 November 2026, not committed; nothing sent to
+    the scanner yet). The rules of both passes read from captures 18, 108-113 and from Epson's
+    interpreter (`captures/epson4490/tools/icesetup.py --check`: 0 differences on all six; the
+    docstring has every rule):
+    - the hole pre-read (`0x421d30`): its first column 6398 + `1E 87`'s correction halved
+      **toward zero** (the same halving for every film read at base 2400: capture 109's colour
+      read; the driver floored it, one column off for an odd correction at 600 and 1200 dpi:
+      fixed); the holes (`0x4218d0`) on its green samples, a threshold from a histogram and
+      runs of 28-122 samples a line and lines: every `1E 88` of the six exactly;
+    - the infrared read: start move = the colour one's + 48 - floor(D / 4) (D the holes' lines,
+      colour less infrared, left plus right, 4800ths); first column = the colour read's moved by
+      the left hole's shift and by the scale 1 / 0.99279 from the left hole; pixels the colour
+      read's x 1 / 0.99279 rounded up to 128; lines h + the stagger. These are Epson Scan's
+      (computed above the interpreter, which hands it the holes, `0x412700`), matched on all
+      six;
+    - the infrared calibration: the origin edge 31 lines in place of 35 (`0x42135d`), origin T
+      8064 and its ramp at T / 12, gains `19 24 22`, a slide's exposure loop up to a line time
+      of 28,800 µs, then (`0x424320`) every channel the whole line T = the green exposure
+      rounded up to 384 and the block's words from the image's end and T; no `1E 8A` in either
+      pass.
+    In the driver: `crate::ice` (the rules, the holes, the infrared plan, the registration),
+    `scan::scan_ice` (both passes through `film_calibration` with the pass), `guard.rs` (every
+    new command and combination: `permit_ice`, `permit_infrared_pass`, `check_ice_request`,
+    `check_infrared_plan` with the start 39-44 steps after the colour one's and the columns
+    near the colour read's), `epson4490 film-scan --ice`, `Gt4490` (a request with `infrared`
+    takes both passes; the 4490 does not declare `Infrared` yet). Tests: **the whole ICE scans
+    of 108, 109 and 112 written write by write as Epson Scan wrote them** (both passes, `1E 88`
+    included; their reads made up from what the rules take from them, the holes as runs).
+    The registration (Matteo's decision): the infrared's green CCD row, the scale of
+    `ice::colour_per_infrared` (0.99279 at the negatives' place, 0.99250 at the slide's: one
+    straight line through both, as one lens curve; a frame's own quadratic is too noisy to say
+    more), the fine shift the median of per-tile correlations of the infrared and the colours'
+    blue row (as `ice.py --register`). On the captures' own reads (an ignored test,
+    `ice_laid.py`): the columns as `ice.py` within 0.07 pixel, the lines within 0.05-0.25; the
+    laid infrared holds **97.0 %** of Epson's ICE changes on 108 and 109 (`ice.py`'s own
+    registration 97.2 % on 108), 90-97 % moved by a pixel. A slide cannot be checked so (Epson's
+    ICE TIFF of 112 differs from our assembly on 1.5 % of the frame).
+
     **Left, in order:**
     1. Done (above).
-    2. **The driver's infrared pass**: the rules of the second pass (from the captures, as
+    2. **The driver's infrared pass**: built (above), and **run on the scanner** (17 November
+       2026, night, Matteo at it; captures 115, 116 in `05-catture.md`): the slide of 112-114 at
+       2400 dpi, both passes, 133 s, **the same sequence as Epson Scan's 113 command for command
+       and move for move**, only the session's values different; levels within 3.7 % (colour)
+       and 0.6 % (infrared) of 113's, the lamp lit a few minutes before. Learnt: a lid lamp
+       off at the start (after a power-on) is lit by the scanner with the carriages to 1994 /
+       1078, and the ICE pass refuses to start there (115); they went home by themselves soon
+       after. The registration against `ice.py` on 116: scale and column the same, the line
+       0.35 lower, as on 112 (a bias on slides, open). Then the negative of 108-110 at 2400
+       and 1200 dpi (117, 119): the same sequences as 108 and 109, the infrared within 0.2 % of
+       Epson's, the registration as `ice.py`'s within 0.1-0.3. **Open**: a second ICE scan right
+       after one stops before moving (118): the infrared light is the one lit, `1E A2 02` lights
+       the lid's lamp again (20 s) and the scanner takes the carriages to 1994 / 1078. Measured
+       with `epson4490 lid-lamp --watch` (18 November 2026, night, 120 and 121 in
+       `05-catture.md`): 4-5 minutes after an infrared pass the lamp is lit already and nothing
+       moves (120); right after one (121) the carriages go to 1994 / 1078 and **stay there for
+       the 3 minutes the scanner is held open and asked `1B 03` / `1E 86` four times a second**;
+       within 14 s of our program closing it (only Windows' `1E 85` meanwhile) the scanner has
+       brought them home by itself.
+       **Next steps, in order** (committed 18 November 2026 without them; about 1-1.5 hours, two
+       of them with Matteo at the scanner):
+       1. With Matteo: an ICE at 1200 dpi then the lamp, asking `1E 86` only every 5 s for two
+          minutes with the scanner held open (a `--watch` interval to add): do the carriages go
+          home after a few seconds without commands, or only when the scanner is closed?
+       2. In the driver, as that says: the ICE pass's opening waits for them (no commands, `1E 86`
+          every few seconds, a limit, then the refusal as now), or the app is told to try again
+          in a moment; a test with a made-up scanner that parks them and brings them back.
+       3. With Matteo: two ICE scans in a row through the driver.
+       4. The 4490 declares `Infrared` for negatives at 1200 and 2400 dpi and slides at 2400
+          (`Capabilities::infrared`), with a test that every declared one passes
+          `guard::check_ice_request` and nothing else does; CHANGELOG (the *Leggi l'infrarosso*
+          entry says no scanner declares it yet); Matteo tries the tick in the app.
+       5. Open, not blocking: the registration's line on slides 0.35 below `ice.py`'s (112, 116;
+          the driver compares the infrared's green row with the colours' blue, `ice.py` blue with
+          blue: try the infrared's blue row for the measure); the colour tone tables of the ICE
+          colour pass are linear (Epson's own curve doubles a negative's shadows), as every film
+          of ours.
+       What the item said before it was built: the rules of the second pass (from the captures, as
        `filmsetup.py` did for colour: the unit's move, the exposure loop, the shading on the
        wider columns, the start move from the holes, the infrared columns), the hole pre-read
        and `1E 88`/`1E 87 01`, every one guarded in `guard.rs` before anything moves (the replay

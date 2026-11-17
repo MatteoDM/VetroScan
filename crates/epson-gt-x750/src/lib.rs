@@ -29,6 +29,7 @@ pub mod film;
 pub mod film_cal;
 pub mod firmware;
 pub mod guard;
+pub mod ice;
 pub mod mark;
 mod nusb_backend;
 pub mod protocol;
@@ -363,6 +364,33 @@ pub fn film_result_of(s: scan::FilmScanned, dpi: u16, height: u32, deep: bool) -
     }
 }
 
+/// A Digital ICE scan's [`ScanResult`]: the colour pass's ([`film_result_of`]) with the infrared
+/// the driver laid on it, cut to the same lines, and where it was found.
+pub fn ice_result_of(s: scan::IceScanned, dpi: u16, height: u32, deep: bool) -> ScanResult {
+    let width = s.colour.image.width as usize;
+    let reg = s.registration;
+    let mut out = film_result_of(s.colour, dpi, height, deep);
+    let lines = out.image.height;
+    let mut ir = s.infrared;
+    ir.truncate(lines * width);
+    out.infrared = Some(ir);
+    out.details.push((
+        "infrared registration".into(),
+        format!(
+            "line {:.2}, column {:.2}, scale {:.5}{}",
+            reg.line,
+            reg.column,
+            reg.scale,
+            if reg.measured {
+                format!(", measured on {} tiles", reg.tiles)
+            } else {
+                ", predicted (no shift measured)".into()
+            }
+        ),
+    ));
+    out
+}
+
 /// Epson Scan's correction of the glass's colours: it sends the scanner no colour correction
 /// (`1E 57` byte 33 is 0 in every capture) and applies this matrix on the computer to what the
 /// scanner sends, values of its tone tables (gamma about 1.8: 1.76-1.87 by channel, captures
@@ -655,6 +683,35 @@ impl Gt4490 {
         // Marked until it ends, as a glass scan.
         let _mark = mark::ScanMark::begin(&self.mark);
         self.lid_lamp = true;
+        if request.infrared {
+            // Digital ICE: two passes, each reported over half the bar.
+            let mut pass = 0usize;
+            let scanned =
+                scan::scan_ice(
+                    &mut self.transport,
+                    &r,
+                    10,
+                    &mut |_| {},
+                    &mut |event| match event {
+                        scan::Event::WarmingUp { .. } => progress(Progress::WarmingUp),
+                        scan::Event::Calibrating => {
+                            pass += 1;
+                            progress(Progress::Calibrating)
+                        }
+                        scan::Event::Reading { done, total } => progress(Progress::Scanning {
+                            done: (pass.max(1) - 1) * total + done,
+                            total: 2 * total,
+                        }),
+                    },
+                )?;
+            progress(Progress::Finishing);
+            return Ok(ice_result_of(
+                scanned,
+                request.dpi,
+                request.area.height,
+                request.depth == 16,
+            ));
+        }
         let scanned =
             scan::scan_film(
                 &mut self.transport,

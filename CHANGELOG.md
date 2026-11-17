@@ -24,6 +24,15 @@ GitHub; here they are in English.
   and RAW files (`…-infrarosso.png` / `.tif`, linear). Shown only where the scanner declares
   it, for that film and resolution: no scanner declares it yet (the Epson Perfection 4490's
   driver will, once it reads its infrared pass), and the dust is not taken away yet.
+- `epson4490 film-scan … --ice`: the Epson Perfection 4490 scans a film with Digital ICE as Epson
+  Scan does, colours then infrared, and lays the infrared on the colours itself; only what
+  Epson Scan was seen doing with ICE (negatives at 1200 and 2400 dpi, slides at 2400). The
+  application does not offer it yet. `epson4490 lid-lamp --watch SECONDS` then reads where the
+  carriages are, for that long.
+
+### Fixed
+- Epson Perfection 4490, films at 600 and 1200 dpi: when the scanner's own correction of where
+  its sensor starts is an odd number, the frame was read one column off from Epson Scan's.
 
 ## [0.10.0] - 2026-11-15
 

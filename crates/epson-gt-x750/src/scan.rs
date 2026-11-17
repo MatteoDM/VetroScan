@@ -23,8 +23,9 @@
 //! ([`calibrate_film`]) and its image read, as Epson Scan's captures 74-81, through the guard's
 //! film path ([`Guarded::permit_film_path`], [`Guarded::permit_film_plan`]).
 
-use crate::film::{FilmPlan, FilmRequest};
+use crate::film::{FilmPlan, FilmRequest, Pass};
 use crate::guard::Guarded;
+use crate::ice::{self, Holes};
 use crate::protocol::{is_state, State, ACK, GET_STATE, TABLE_CHUNK, TABLE_PAUSE};
 use crate::setup::{self, Plan, Request, XCorrection, TRAILER_LEN};
 use crate::shading::{black_block, Shading};
@@ -431,18 +432,19 @@ pub fn light_lid_lamp<T: Transport>(
     events: &mut dyn FnMut(Event) -> bool,
 ) -> Result<Duration> {
     g.permit_film(request)?;
-    let result = lid_lamp(g, request, log, events).map_err(|e| after(e, g.last_command()));
+    let result = crate::film::request_block(request)
+        .and_then(|e57| lid_lamp(g, &e57, log, events))
+        .map_err(|e| after(e, g.last_command()));
     g.end_scan();
     result
 }
 
 fn lid_lamp<T: Transport>(
     g: &mut Guarded<T>,
-    request: &FilmRequest,
+    e57: &[u8; 42],
     log: &mut dyn FnMut(String),
     events: &mut dyn FnMut(Event) -> bool,
 ) -> Result<Duration> {
-    let e57 = crate::film::request_block(request)?;
     if let Waited::Error(s) = wait_state(g, log)? {
         clear_error(g, s, log, events)?;
         wait_ready(g, log)?;
@@ -461,7 +463,7 @@ fn lid_lamp<T: Transport>(
     wait_ready(g, log)?;
     lamp_at_opening(g)?;
     ask(g, [0x1E, 0x53], 42)?;
-    send(g, [0x1E, 0x57], &e57)?;
+    send(g, [0x1E, 0x57], e57)?;
     wait_ready(g, log)?;
     lamp_at_opening(g)?;
     let asked = Instant::now();
@@ -542,12 +544,133 @@ pub struct FilmCalibration {
     pub power_on: PowerOn,
     /// The lid unit's move back after its origin read (`1E 8A` less 1024): where it is after.
     pub back: u32,
+    /// Where the lid unit is after its origin read (`1E 86`): 1416 less [`Self::back`], and
+    /// the infrared pass's 1729 steps more.
+    pub unit_at: u32,
+    /// Digital ICE: the holes the pass's pre-read found (`crate::ice::holes`).
+    pub holes: Option<Holes>,
 }
 
 /// Where the white read leaves the carriages (`1E 86`, captures 74, 77, 80): both 64 steps on
-/// from the park and the lid unit's origin, the carriage at 2058.
-fn after_white(back: u32) -> (u32, u32) {
-    (crate::film::PARK + 64, 1416 - back + 64)
+/// from the park and the lid unit's origin (`unit_at`), the carriage at 2058.
+fn after_white(unit_at: u32) -> (u32, u32) {
+    (crate::film::PARK + 64, unit_at + 64)
+}
+
+/// A film pass's `1E 43`: a film's ([`crate::film::e43`]), a slide's in the infrared pass
+/// (captures 18, 108-113: `0080` throughout).
+fn pass_e43(plan: &FilmPlan, image: bool) -> [u8; 12] {
+    if plan.pass == Pass::Infrared {
+        crate::film::E43_SLIDE
+    } else {
+        crate::film::e43(plan.request.film, image)
+    }
+}
+
+/// What a film pass is, besides its request: a film, or one of Digital ICE's passes (the
+/// infrared one with the colour pass's plan and holes).
+#[derive(Debug, Clone, Copy)]
+enum PassOf<'a> {
+    /// A film scan.
+    Film,
+    /// Digital ICE's colour pass.
+    IceColour,
+    /// Digital ICE's infrared pass.
+    Infrared(&'a FilmPlan, Holes),
+}
+
+impl PassOf<'_> {
+    fn pass(&self) -> Pass {
+        match self {
+            Self::Film => Pass::Film,
+            Self::IceColour => Pass::IceColour,
+            Self::Infrared(..) => Pass::Infrared,
+        }
+    }
+}
+
+/// The opening of Digital ICE's infrared pass, right after the colour pass's image (captures
+/// 18, 108-113): `1E 53` twice, the gamma tables (the identity), `1E A1`, `1E 53`, the infrared
+/// `1E 57`, `1E A1`, the infrared light `1E A2 04` (answered `06` once lit), the state.
+fn infrared_opening(
+    t: &mut dyn Transport,
+    e57: &[u8; 42],
+    log: &mut dyn FnMut(String),
+) -> Result<()> {
+    ask(t, [0x1E, 0x53], 42)?;
+    ask(t, [0x1E, 0x53], 42)?;
+    let gamma = Curves::Linear.gamma();
+    for channel in 0..3u8 {
+        command(t, [0x1E, 0xB3])?;
+        t.bulk_out(&[channel])?;
+        t.bulk_out(&gamma)?;
+    }
+    wait_ready(t, log)?;
+    lamp_at_opening(t)?;
+    ask(t, [0x1E, 0x53], 42)?;
+    send(t, [0x1E, 0x57], e57)?;
+    wait_ready(t, log)?;
+    lamp_at_opening(t)?;
+    let asked = Instant::now();
+    send(t, [0x1E, 0xA2], &[ice::LAMP_INFRARED])?;
+    wait_ready(t, log)?;
+    log(format!(
+        "the infrared light (1E A2 04) ready after {:.1} s",
+        asked.elapsed().as_secs_f64()
+    ));
+    Ok(())
+}
+
+/// Digital ICE's hole pre-read from home (captures 18, 108-113): `1E 25 00`, `1E 87 00`, the
+/// pre-read's gains, the carriage 131 steps on the 256-value ramp, the read's set-up and its
+/// 512 steps, the read (480 lines of 7040 pixels at 8 bits); the holes found in it. Answers the
+/// correction and the holes.
+fn hole_pre_read(
+    t: &mut dyn Transport,
+    pass: Pass,
+    log: &mut dyn FnMut(String),
+) -> Result<(XCorrection, Holes)> {
+    send(t, [0x1E, 0x25], &[0x00])?;
+    command(t, [0x1E, 0x87])?;
+    t.bulk_out(&[0x00])?;
+    let xc = XCorrection::from_1e87(&read_exact(t, 10, "1E 87")?)?;
+    let e31 = ice::pre_e31(pass);
+    send(t, [0x1E, 0x31], &e31)?;
+    table(
+        t,
+        &setup::ramp_header(256),
+        &ramp_bytes(&setup::fixed_ramp(256)),
+    )?;
+    send(
+        t,
+        [0x1E, 0x01],
+        &setup::move_block(ice::PRE_MOVE, 0, 0xFF, 0x10),
+    )?;
+    command(t, [0x1E, 0x05])?;
+    wait_ready(t, log)?;
+    send(t, [0x1E, 0x31], &e31)?;
+    send(t, [0x1E, 0x11], &[0x01])?;
+    send(t, [0x1E, 0x21], &ice::pre_e21())?;
+    send(t, [0x1E, 0x41], &ice::pre_e41(xc))?;
+    send(t, [0x1E, 0x42], &ZEROS_42)?;
+    send(t, [0x1E, 0x43], &setup::GAIN_CAL)?;
+    table(
+        t,
+        &setup::ramp_header(1),
+        &((ice::PRE_T >> 4) as u16).to_le_bytes(),
+    )?;
+    send(t, [0x1E, 0x01], &crate::guard::ice_pre_read_move())?;
+    wait_ready(t, log)?;
+    let (px, lines) = ice::PRE_READ;
+    let read = read_all(t, lines, lines, px * 3)?;
+    wait_ready(t, log)?;
+    let holes =
+        ice::holes(&read).ok_or_else(|| other("the hole pre-read came back short".into()))?;
+    log(format!(
+        "the holder's holes ({:?} pass): found {}, {:?} (4800ths: x, y, width, height, left then right)",
+        pass, holes.found, holes.values
+    ));
+    Ok((xc, holes))
 }
 
 /// The `1E 31` block: offsets and gains.
@@ -573,7 +696,7 @@ pub fn calibrate_film<T: Transport>(
     events: &mut dyn FnMut(Event) -> bool,
 ) -> Result<FilmCalibration> {
     g.permit_film(request)?;
-    let result = film_calibration(g, request, slide_factor, log, events)
+    let result = film_calibration(g, request, slide_factor, PassOf::Film, log, events)
         .map_err(|e| after(e, g.last_command()));
     g.end_scan();
     result
@@ -583,15 +706,28 @@ fn film_calibration<T: Transport>(
     g: &mut Guarded<T>,
     request: &FilmRequest,
     slide_factor: u32,
+    of: PassOf,
     log: &mut dyn FnMut(String),
     events: &mut dyn FnMut(Event) -> bool,
 ) -> Result<FilmCalibration> {
     use crate::film::{self, Film};
     use crate::film_cal as fc;
     use crate::guard::{film_origin_block, film_origin_read_move, FILM_BACK_MOVES};
-    let negative = request.film == Film::Negative;
-    let e57 = film::request_block(request)?;
-    lid_lamp(g, request, log, events)?;
+    let pass = of.pass();
+    let infrared = pass == Pass::Infrared;
+    // The infrared pass calibrates as a slide: all three channels' exposures, no gain search.
+    let negative = request.film == Film::Negative && !infrared;
+    let (lamp_on, lamp_dark) = if infrared {
+        (ice::LAMP_INFRARED, ice::LAMP_INFRARED_DARK)
+    } else {
+        (0x02, 0x03)
+    };
+    let e57 = ice::request_block(request, pass)?;
+    if infrared {
+        infrared_opening(g, &e57, log)?;
+    } else {
+        lid_lamp(g, &e57, log, events)?;
+    }
     g.permit_film_path()?;
     let positions = |a: Vec<u8>| {
         (
@@ -601,56 +737,119 @@ fn film_calibration<T: Transport>(
     };
     // The park: the carriage under the window, the lid's unit home.
     let ramp512: Vec<u8> = ramp_bytes(&setup::film_ramp());
-    match positions(ask(g, [0x1E, 0x86], 4)?) {
-        (0, 0) => {
-            send(g, [0x1E, 0x25], &[0x00])?;
-            table(g, &setup::ramp_header(512), &ramp512)?;
-            send(
-                g,
-                [0x1E, 0x01],
-                &setup::move_block(film::PARK - film::RAMP_512_STEPS, 0, 0x1FF, 0x10),
-            )?;
+    let mut pre = None;
+    let mut unit = 0;
+    if pass != Pass::Film {
+        // Digital ICE: from home only (every capture); the infrared pass first moves the lid
+        // unit's light on, then both read the holder's holes and park from there.
+        let at = positions(ask(g, [0x1E, 0x86], 4)?);
+        let at2 = positions(ask(g, [0x1E, 0x86], 4)?);
+        if at != (0, 0) || at2 != (0, 0) {
+            return Err(other(format!(
+                "the carriages at {at2:?}: a Digital ICE pass starts from home, as captured"
+            )));
         }
-        // Where the scanner puts them when it lights the lid's lamp again (capture 72).
-        (film::PARK, 1078) => {
+        if infrared {
             table(g, &setup::ramp_header(512), &ramp512)?;
             send(g, [0x1E, 0x25], &[0x02])?;
             send(
                 g,
                 [0x1E, 0x01],
-                &setup::move_block(1078 - film::RAMP_512_STEPS, 0, 0x1FF, 0x30),
+                &setup::move_block(ice::IR_UNIT_MOVE, 0, 0x1FF, 0x10),
             )?;
+            command(g, [0x1E, 0x05])?;
+            wait_ready(g, log)?;
+            send(g, [0x1E, 0xA2], &[lamp_on])?;
+            unit = ice::IR_UNIT_AT;
         }
-        (c, u) => {
+        let (xc, holes) = hole_pre_read(g, pass, log)?;
+        if !infrared {
+            send(g, [0x1E, 0x88], &holes.block88())?;
+        } else {
+            // The scanner gives back the colour pass's holes.
+            command(g, [0x1E, 0x87])?;
+            g.bulk_out(&[0x01])?;
+            read_exact(g, 18, "1E 87 01")?;
+        }
+        pre = Some((xc, holes));
+        let at = positions(ask(g, [0x1E, 0x86], 4)?);
+        if at != (ice::PRE_AT, unit) {
             return Err(other(format!(
-                "the carriage at {c} and the lid's unit at {u}: a film scan starts from home \
+                "after the hole pre-read the carriages are at {at:?}, not ({}, {unit})",
+                ice::PRE_AT
+            )));
+        }
+        send(g, [0x1E, 0x25], &[0x00])?;
+        table(
+            g,
+            &setup::ramp_header(256),
+            &ramp_bytes(&setup::fixed_ramp(256)),
+        )?;
+        send(
+            g,
+            [0x1E, 0x01],
+            &setup::move_block(ice::PRE_PARK, 0, 0xFF, 0x10),
+        )?;
+    } else {
+        match positions(ask(g, [0x1E, 0x86], 4)?) {
+            (0, 0) => {
+                send(g, [0x1E, 0x25], &[0x00])?;
+                table(g, &setup::ramp_header(512), &ramp512)?;
+                send(
+                    g,
+                    [0x1E, 0x01],
+                    &setup::move_block(film::PARK - film::RAMP_512_STEPS, 0, 0x1FF, 0x10),
+                )?;
+            }
+            // Where the scanner puts them when it lights the lid's lamp again (capture 72).
+            (film::PARK, 1078) => {
+                table(g, &setup::ramp_header(512), &ramp512)?;
+                send(g, [0x1E, 0x25], &[0x02])?;
+                send(
+                    g,
+                    [0x1E, 0x01],
+                    &setup::move_block(1078 - film::RAMP_512_STEPS, 0, 0x1FF, 0x30),
+                )?;
+            }
+            (c, u) => {
+                return Err(other(format!(
+                    "the carriage at {c} and the lid's unit at {u}: a film scan starts from home \
                  (0, 0) or from where the lid's lamp puts them (1994, 1078), as captured"
-            )))
+                )))
+            }
         }
     }
     command(g, [0x1E, 0x05])?;
     wait_ready(g, log)?;
-    let at = positions(ask(g, [0x1E, 0x86], 4)?);
-    if at != (film::PARK, 0) {
-        return Err(other(format!(
-            "after the park the carriages are at {at:?}, not (1994, 0)"
-        )));
+    if pass == Pass::Film {
+        let at = positions(ask(g, [0x1E, 0x86], 4)?);
+        if at != (film::PARK, 0) {
+            return Err(other(format!(
+                "after the park the carriages are at {at:?}, not (1994, 0)"
+            )));
+        }
     }
     // The lid unit's origin.
     if !events(Event::Calibrating) {
         return Err(Error::Cancelled);
     }
-    send(g, [0x1E, 0x31], &film::ORIGIN_E31)?;
-    send(g, [0x1E, 0xA2], &[0x02])?;
+    let origin_e31 = if infrared {
+        ice::IR_ORIGIN_E31
+    } else {
+        film::ORIGIN_E31
+    };
+    send(g, [0x1E, 0x31], &origin_e31)?;
+    send(g, [0x1E, 0xA2], &[lamp_on])?;
     send(g, [0x1E, 0x25], &[0x02])?;
     table(g, &setup::ramp_header(1), &156u16.to_le_bytes())?;
     send(g, [0x1E, 0x01], &setup::move_block(8, 0, 0, 0x18))?;
     command(g, [0x1E, 0x05])?;
     wait_ready(g, log)?;
-    send(g, [0x1E, 0x31], &film::ORIGIN_E31)?;
+    send(g, [0x1E, 0x31], &origin_e31)?;
     send(g, [0x1E, 0x11], &[film::ORIGIN_E11])?;
+    let origin_t = if infrared { ice::IR_ORIGIN_T } else { 6144 };
     let mut e21o = [0u8; 26];
-    e21o[..3].copy_from_slice(&6144u32.to_le_bytes()[..3]);
+    e21o[..3].copy_from_slice(&origin_t.to_le_bytes()[..3]);
     e21o[12] = 0x2A;
     send(g, [0x1E, 0x21], &e21o)?;
     send(g, [0x1E, 0x41], &film::origin_e41())?;
@@ -659,7 +858,7 @@ fn film_calibration<T: Transport>(
     table(
         g,
         &setup::ramp_header(512),
-        &ramp_bytes(&setup::ramp(512, setup::Mode::Medium)),
+        &ramp_bytes(&setup::ramp(origin_t / 12, setup::Mode::Medium)),
     )?;
     send(g, [0x1E, 0x01], &film_origin_read_move())?;
     wait_ready(g, log)?;
@@ -673,25 +872,42 @@ fn film_calibration<T: Transport>(
             levels.join(" ")
         ));
     }
-    let n = fc::origin(&origin)
-        .map(|v| v - film::RAMP_512_STEPS)
-        .ok_or_else(|| other("the lid unit's origin read found no edge of its light".into()))?;
+    let n = if infrared {
+        fc::infrared_origin(&origin)
+    } else {
+        fc::origin(&origin)
+    }
+    .map(|v| v - film::RAMP_512_STEPS)
+    .ok_or_else(|| other("the lid unit's origin read found no edge of its light".into()))?;
     if !FILM_BACK_MOVES.contains(&n) {
         return Err(other(format!(
             "the lid unit's origin read asks a move back of {n} steps, none of those let \
              out ({FILM_BACK_MOVES:?})"
         )));
     }
-    log(format!(
-        "the lid unit's origin: back {n} steps (1E 8A {})",
-        n + 1024
-    ));
+    log(if pass == Pass::Film {
+        format!("the lid unit's origin: back {n} steps (1E 8A {})", n + 1024)
+    } else {
+        format!("the lid unit's origin: back {n} steps (no 1E 8A with Digital ICE)")
+    });
     send(g, [0x1E, 0x25], &[0x02])?;
     table(g, &setup::ramp_header(512), &ramp512)?;
     send(g, [0x1E, 0x01], &setup::move_block(n, 0, 0x1FF, 0x30))?;
     command(g, [0x1E, 0x05])?;
     wait_ready(g, log)?;
-    send(g, [0x1E, 0x8A], &film_origin_block(n))?;
+    match pass {
+        // Digital ICE sends no 1E 8A (captures 18, 108-113).
+        Pass::Film => send(g, [0x1E, 0x8A], &film_origin_block(n))?,
+        Pass::IceColour => {}
+        Pass::Infrared => {
+            command(g, [0x1E, 0x87])?;
+            g.bulk_out(&[0x01])?;
+            read_exact(g, 18, "1E 87 01")?;
+            command(g, [0x1E, 0x87])?;
+            g.bulk_out(&[0x00])?;
+            read_exact(g, 10, "1E 87")?;
+        }
+    }
     send(g, [0x1E, 0x25], &[0x03])?;
     // The correction, the request again, the positions.
     command(g, [0x1E, 0x87])?;
@@ -701,19 +917,40 @@ fn film_calibration<T: Transport>(
     let power_on = PowerOn(a87.as_slice().try_into().expect("10 bytes"));
     ask(g, [0x1E, 0x53], 42)?;
     send(g, [0x1E, 0x57], &e57)?;
+    let unit_at = unit + 1416 - n;
     let at = positions(ask(g, [0x1E, 0x86], 4)?);
-    if at != (film::PARK, 1416 - n) {
+    if at != (film::PARK, unit_at) {
         return Err(other(format!(
-            "after the origin the carriages are at {at:?}, not (1994, {})",
-            1416 - n
+            "after the origin the carriages are at {at:?}, not (1994, {unit_at})"
         )));
     }
-    let plan = FilmPlan::new(*request, xc)?;
+    if let Some((pre_xc, _)) = pre {
+        if pre_xc != xc {
+            return Err(other(format!(
+                "1E 87 gave {} at the hole pre-read and {} now",
+                pre_xc.0, xc.0
+            )));
+        }
+    }
+    let plan = match of {
+        PassOf::Film => FilmPlan::new(*request, xc)?,
+        PassOf::IceColour => FilmPlan::from_geometry(
+            *request,
+            crate::film::geometry(request, xc)?,
+            Pass::IceColour,
+        ),
+        PassOf::Infrared(colour, colour_holes) => {
+            let (_, ir_holes) = pre.expect("the infrared pass's pre-read");
+            ice::infrared_plan(colour, xc, &colour_holes, &ir_holes)?
+        }
+    };
     g.permit_film_plan(&plan)?;
     let e11 = plan.geometry.e11;
     let (black_words, black_margin) = plan.black;
     // The offsets, on the black pixels.
-    let mut gains = if negative {
+    let mut gains = if infrared {
+        ice::IR_GAINS
+    } else if negative {
         fc::NEGATIVE_GAINS
     } else {
         fc::SLIDE_GAINS
@@ -736,7 +973,7 @@ fn film_calibration<T: Transport>(
     )?;
     send(g, [0x1E, 0x41], &plan.e41_black)?;
     send(g, [0x1E, 0x42], &ZEROS_42)?;
-    send(g, [0x1E, 0x43], &film::e43(request.film, false))?;
+    send(g, [0x1E, 0x43], &pass_e43(&plan, false))?;
     ask(g, [0x1E, 0x92], 12)?;
     let back = ask(g, [0x1E, 0x92], 12)?;
     send(g, [0x1E, 0x31], &back)?;
@@ -775,7 +1012,12 @@ fn film_calibration<T: Transport>(
     };
     let mut x = x0;
     let base = plan.geometry.base;
-    send(g, [0x1E, 0xA2], &[0x02])?;
+    let cap = if infrared {
+        ice::IR_MAX_LINE_TIME - fc::margin(base)
+    } else {
+        fc::exposure_cap(base)
+    };
+    send(g, [0x1E, 0xA2], &[lamp_on])?;
     let back = ask(g, [0x1E, 0x92], 12)?;
     send(g, [0x1E, 0x31], &back)?;
     send(g, [0x1E, 0x21], &fc::window_block21(base, x, false, 2))?;
@@ -785,7 +1027,7 @@ fn film_calibration<T: Transport>(
     send(g, [0x1E, 0x21], &fc::window_block21(base, x, false, 2))?;
     send(g, [0x1E, 0x41], &plan.e41_window)?;
     send(g, [0x1E, 0x42], &ZEROS_42)?;
-    send(g, [0x1E, 0x43], &film::e43(request.film, false))?;
+    send(g, [0x1E, 0x43], &pass_e43(&plan, false))?;
     wait_ready(g, log)?;
     let window_px = u32::from(u16::from_le_bytes([plan.e41_window[2], plan.e41_window[3]]))
         - u32::from(u16::from_le_bytes([plan.e41_window[0], plan.e41_window[1]]));
@@ -799,7 +1041,7 @@ fn film_calibration<T: Transport>(
         wait_ready(g, log)?;
         let d = read_all(g, 4, 4, window_px * 3)?;
         wait_ready(g, log)?;
-        match fc::exposure_round(x, window_level(&d), held, fc::exposure_cap(base)) {
+        match fc::exposure_round(x, window_level(&d), held, cap) {
             Some(next) => x = next,
             None => break,
         }
@@ -834,8 +1076,14 @@ fn film_calibration<T: Transport>(
             }
         }
     }
+    // The infrared pass: every channel the whole line, from the green's exposure (captures 18,
+    // 108-113).
+    let ir_end = ice::image_end(&plan);
+    if infrared {
+        last_window = ice::final_block(x[1], ir_end, fc::window_words(base), 2);
+    }
     if !negative {
-        // A slide's window block once more (captures 80, 81).
+        // A slide's window block once more (captures 80, 81), the infrared's last.
         send(g, [0x1E, 0x21], &last_window)?;
     }
     log(format!("exposures {x:?} µs, gains {gains:02X?}"));
@@ -843,7 +1091,9 @@ fn film_calibration<T: Transport>(
     // words, a slide's with the black pixels' own margin (captures 74-78, 80-81).
     ask(g, [0x1E, 0x8C], 1)?;
     send(g, [0x1E, 0x25], &[0x03])?;
-    let mut bb = if negative {
+    let mut bb = if infrared {
+        ice::final_block(x[1], ir_end, black_words, 2)
+    } else if negative {
         fc::exposure_block21(fc::margin(base), black_words, x, true, 6)
     } else {
         fc::exposure_block21(black_margin, black_words, x, false, 2)
@@ -855,20 +1105,24 @@ fn film_calibration<T: Transport>(
     send(g, [0x1E, 0x21], &bb)?;
     send(g, [0x1E, 0x41], &plan.e41_black)?;
     send(g, [0x1E, 0x42], &ZEROS_42)?;
-    send(g, [0x1E, 0x43], &film::e43(request.film, false))?;
+    send(g, [0x1E, 0x43], &pass_e43(&plan, false))?;
     wait_ready(g, log)?;
     let black = read_all(g, 4, 4, black_px * 6)?;
     wait_ready(g, log)?;
     // The white.
     let words = plan.geometry.words;
-    let white_e21 = fc::white_block21(x, words, plan.image_margin, &last_window, 6);
+    let white_e21 = if infrared {
+        ice::final_block(x[1], ir_end, words, 6)
+    } else {
+        fc::white_block21(x, words, plan.image_margin, &last_window, 6)
+    };
     send(g, [0x1E, 0x21], &white_e21)?;
     send(g, [0x1E, 0x31], &e31(offsets, gains))?;
     send(g, [0x1E, 0x11], &[e11])?;
     send(g, [0x1E, 0x21], &white_e21)?;
     send(g, [0x1E, 0x41], &plan.e41_white)?;
     send(g, [0x1E, 0x42], &crate::shading::black_block(&black))?;
-    send(g, [0x1E, 0x43], &film::e43(request.film, false))?;
+    send(g, [0x1E, 0x43], &pass_e43(&plan, false))?;
     let t_white = u32::from_le_bytes([white_e21[0], white_e21[1], white_e21[2], 0]);
     table(
         g,
@@ -881,7 +1135,9 @@ fn film_calibration<T: Transport>(
     let white = read_all(g, 16, 16, cols * 6)?;
     wait_ready(g, log)?;
     // The dark, with the image's settings.
-    let (image_e21, image_gains) = if negative {
+    let (image_e21, image_gains) = if infrared {
+        (white_e21, gains)
+    } else if negative {
         (
             fc::negative_image_block21(image_t, words, 6),
             fc::negative_image_gains(gains),
@@ -893,7 +1149,7 @@ fn film_calibration<T: Transport>(
             gains,
         )
     };
-    send(g, [0x1E, 0xA2], &[0x03])?;
+    send(g, [0x1E, 0xA2], &[lamp_dark])?;
     send(g, [0x1E, 0x21], &image_e21)?;
     send(g, [0x1E, 0x31], &e31(offsets, image_gains))?;
     send(g, [0x1E, 0x11], &[e11])?;
@@ -902,11 +1158,11 @@ fn film_calibration<T: Transport>(
     send(g, [0x1E, 0x21], &dark_e21)?;
     send(g, [0x1E, 0x41], &plan.e41_dark)?;
     send(g, [0x1E, 0x42], &ZEROS_42)?;
-    send(g, [0x1E, 0x43], &film::e43(request.film, false))?;
+    send(g, [0x1E, 0x43], &pass_e43(&plan, false))?;
     wait_ready(g, log)?;
     let dark = read_all(g, 64, 64, cols * 6)?;
     wait_ready(g, log)?;
-    send(g, [0x1E, 0xA2], &[0x02])?;
+    send(g, [0x1E, 0xA2], &[lamp_on])?;
     Ok(FilmCalibration {
         plan,
         offsets,
@@ -919,6 +1175,8 @@ fn film_calibration<T: Transport>(
         dark,
         power_on,
         back: n,
+        unit_at,
+        holes: pre.map(|(_, h)| h),
     })
 }
 
@@ -954,11 +1212,105 @@ pub fn scan_film<T: Transport>(
     events: &mut dyn FnMut(Event) -> bool,
 ) -> Result<FilmScanned> {
     g.permit_film(request)?;
-    let result = film_calibration(g, request, slide_factor, log, events)
-        .and_then(|c| film_image(g, c, log, events))
+    let result = film_calibration(g, request, slide_factor, PassOf::Film, log, events)
+        .and_then(|c| {
+            let (raw, shading) = film_image(g, &c, log, events)?;
+            Ok(FilmScanned {
+                image: assemble_film(&raw, &c.plan),
+                calibration: c,
+                shading,
+                raw,
+            })
+        })
         .map_err(|e| after(e, g.last_command()));
     g.end_scan();
     result
+}
+
+/// A Digital ICE scan ([`scan_ice`]).
+#[derive(Debug, Clone)]
+pub struct IceScanned {
+    /// The colour pass, as a film scan's.
+    pub colour: FilmScanned,
+    /// The infrared laid on [`FilmScanned::image`]: one 16-bit sample a pixel, row by row
+    /// ([`ice::register`]).
+    pub infrared: Vec<u16>,
+    /// Where the infrared read was found on the colours.
+    pub registration: ice::Registration,
+    /// The infrared pass's calibration.
+    pub infrared_calibration: FilmCalibration,
+    /// The infrared read as the scanner sent it, trailers removed: three 16-bit samples a pixel
+    /// (the CCD's three rows, each seeing the infrared).
+    pub infrared_raw: Vec<u8>,
+}
+
+/// Scans a film with Digital ICE as Epson Scan does (captures 18, 108-113; `crate::ice`): the
+/// colour pass (a film scan with the hole pre-read and `1E 88`), then the infrared pass (its own
+/// opening, light, hole pre-read, calibration and read), the infrared laid on the colours
+/// ([`ice::register`]). Stopping is honoured as in [`scan_film`]: up to each pass's image; a
+/// pass's image goes on to its end, and a stop asked during the colour image skips the infrared
+/// pass.
+pub fn scan_ice<T: Transport>(
+    g: &mut Guarded<T>,
+    request: &FilmRequest,
+    slide_factor: u32,
+    log: &mut dyn FnMut(String),
+    events: &mut dyn FnMut(Event) -> bool,
+) -> Result<IceScanned> {
+    g.permit_ice(request)?;
+    let result =
+        ice_scan(g, request, slide_factor, log, events).map_err(|e| after(e, g.last_command()));
+    g.end_scan();
+    result
+}
+
+fn ice_scan<T: Transport>(
+    g: &mut Guarded<T>,
+    request: &FilmRequest,
+    slide_factor: u32,
+    log: &mut dyn FnMut(String),
+    events: &mut dyn FnMut(Event) -> bool,
+) -> Result<IceScanned> {
+    let c = film_calibration(g, request, slide_factor, PassOf::IceColour, log, events)?;
+    let (raw, shading) = film_image(g, &c, log, events)?;
+    let image = assemble_film(&raw, &c.plan);
+    let holes = c
+        .holes
+        .ok_or_else(|| other("the colour pass read no holes".into()))?;
+    g.permit_infrared_pass()?;
+    let ci = film_calibration(
+        g,
+        request,
+        slide_factor,
+        PassOf::Infrared(&c.plan, holes),
+        log,
+        events,
+    )?;
+    let (ir_raw, _) = film_image(g, &ci, log, events)?;
+    let (infrared, registration) = ice::register(&image, &c.plan, &ir_raw, &ci.plan);
+    log(format!(
+        "the infrared laid on the colours: line {:.2}, column {:.2}, scale {:.5} ({})",
+        registration.line,
+        registration.column,
+        registration.scale,
+        if registration.measured {
+            format!("shift measured on {} tiles", registration.tiles)
+        } else {
+            "the prediction kept: no clear peak".into()
+        }
+    ));
+    Ok(IceScanned {
+        colour: FilmScanned {
+            image,
+            calibration: c,
+            shading,
+            raw,
+        },
+        infrared,
+        registration,
+        infrared_calibration: ci,
+        infrared_raw: ir_raw,
+    })
 }
 
 /// `1E 8B` and the 07 table, as Epson's drivers handle it before a read at base 2400 or 4800
@@ -1007,10 +1359,10 @@ pub fn film_shading(c: &FilmCalibration) -> Shading {
 
 fn film_image<T: Transport>(
     g: &mut Guarded<T>,
-    c: FilmCalibration,
+    c: &FilmCalibration,
     log: &mut dyn FnMut(String),
     events: &mut dyn FnMut(Event) -> bool,
-) -> Result<FilmScanned> {
+) -> Result<(Vec<u8>, Shading)> {
     let plan = &c.plan;
     let request = plan.request;
     let geo = plan.geometry;
@@ -1020,10 +1372,10 @@ fn film_image<T: Transport>(
         u32::from(u16::from_le_bytes([at[0], at[1]])),
         u32::from(u16::from_le_bytes([at[2], at[3]])),
     );
-    if at != after_white(c.back) {
+    if at != after_white(c.unit_at) {
         return Err(other(format!(
             "after the film's calibration the carriages are at {at:?}, not {:?}",
-            after_white(c.back)
+            after_white(c.unit_at)
         )));
     }
     send(g, [0x1E, 0x21], &c.image_e21)?;
@@ -1045,7 +1397,7 @@ fn film_image<T: Transport>(
     command(g, [0x1E, 0x05])?;
     wait_ready(g, log)?;
     // The image.
-    let shading = film_shading(&c);
+    let shading = film_shading(c);
     log(format!(
         "shading: K {:?}, minimum dark {:?} / {:?}, scales 2^{} and 2^{}",
         shading.k, shading.dark_min, shading.dark_min_odd, shading.white_shift, shading.dark_shift
@@ -1057,7 +1409,7 @@ fn film_image<T: Transport>(
     send(g, [0x1E, 0x21], &c.image_e21)?;
     send(g, [0x1E, 0x41], &e41)?;
     send(g, [0x1E, 0x42], &shading.block42())?;
-    send(g, [0x1E, 0x43], &crate::film::e43(request.film, true))?;
+    send(g, [0x1E, 0x43], &pass_e43(plan, true))?;
     table(
         g,
         &setup::shading_header(geo.column_count()),
@@ -1105,12 +1457,7 @@ fn film_image<T: Transport>(
     if stopped {
         return Err(Error::Cancelled);
     }
-    Ok(FilmScanned {
-        image: assemble_film(&raw, &c.plan),
-        calibration: c,
-        shading,
-        raw,
-    })
+    Ok((raw, shading))
 }
 
 /// Each channel's mean of a read of 16-bit samples, three a pixel.
@@ -1900,6 +2247,20 @@ pub(crate) mod tests {
                         }
                     }
                 }
+                // Digital ICE's hole pre-read: green 255 on the runs, 2 elsewhere.
+                "holes" => {
+                    out.fill(2);
+                    let px = ice::PRE_READ.0 as usize;
+                    for (part, x0) in [(f[2], 0), (f[3], ice::RIGHT_HOLE as usize)] {
+                        for run in part.split(',').filter(|r| *r != "-") {
+                            let v: Vec<usize> =
+                                run.split('.').map(|n| n.parse().unwrap()).collect();
+                            for x in v[1]..=v[2] {
+                                out[(v[0] * px + x0 + x) * 3 + 1] = 255;
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
             out.into()
@@ -2372,6 +2733,66 @@ pub(crate) mod tests {
             "{:?}",
             f.lines.get(f.at)
         );
+    }
+
+    /// A Digital ICE scan writes what Epson Scan wrote in captures 108 (a negative at 2400 dpi),
+    /// 109 (at 1200) and 112 (a slide at 2400), write by write through both passes: the hole
+    /// pre-reads and `1E 88` from the holes found, the infrared pass's opening, light, lid unit,
+    /// `1E 87 01`, calibration (its exposures' last block), start move and columns from the
+    /// holes; the calibration reads made up from what the rules take from the real ones (the
+    /// holes as the runs of samples above the threshold).
+    #[test]
+    fn an_ice_scan_writes_what_epson_scan_wrote() {
+        let ice_cases = crate::ice::tests::ICE;
+        let cases = [
+            (
+                "108",
+                include_str!("../testdata/108_ice.txt"),
+                include_str!("../testdata/108_ice_reads.txt"),
+                ice_cases[1],
+            ),
+            (
+                "109",
+                include_str!("../testdata/109_ice.txt"),
+                include_str!("../testdata/109_ice_reads.txt"),
+                ice_cases[2],
+            ),
+            (
+                "112",
+                include_str!("../testdata/112_ice.txt"),
+                include_str!("../testdata/112_ice_reads.txt"),
+                ice_cases[4],
+            ),
+        ];
+        for (name, text, reads, (_, request, _, holes, ir_holes, _, istart, cols, _, lines)) in
+            cases
+        {
+            let mut g = Guarded::new(Follow::film(name, text, reads));
+            let s = scan_ice(&mut g, &request, 10, &mut |_| {}, &mut |_| true)
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            let f = g.inner();
+            assert_eq!(f.lines.len() - f.at, 0, "{name}: lines of the capture left");
+            // Over: the guard lets out no film's command any more.
+            assert!(g.bulk_out(&[0x1E, 0x25]).is_err());
+            assert_eq!(s.colour.calibration.holes.map(|h| h.values), Some(holes));
+            assert_eq!(
+                s.infrared_calibration.holes.map(|h| h.values),
+                Some(ir_holes)
+            );
+            let gi = s.infrared_calibration.plan.geometry;
+            assert_eq!(
+                (gi.start_steps, gi.columns, gi.lines),
+                (istart, cols, lines)
+            );
+            assert_eq!(
+                s.infrared_raw.len() as u32,
+                gi.lines * gi.line_bytes(16),
+                "{name}"
+            );
+            let img = &s.colour.image;
+            assert_eq!((img.width, img.height), (request.width, request.height));
+            assert_eq!(s.infrared.len() as u32, img.width * img.height);
+        }
     }
 
     /// The same for capture 77 (base 4800, a third exposure round), 80 (a slide, Epson Scan's

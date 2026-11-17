@@ -31,7 +31,16 @@
 //!   read's), the calibration's set-ups in the forms captured; once [`Guarded::permit_film_plan`]
 //!   has accepted the plan: its reads' `1E 41`, the tone tables (linear), its shading table,
 //!   the 07 table and its raw line, and the image's start move then its read move, each once
-//!   and in that order.
+//!   and in that order;
+//! * a Digital ICE scan, once [`Guarded::permit_ice`] has accepted its request
+//!   ([`check_ice_request`]): the film's path with the colour pass's `1E 57` (source `04`), its
+//!   hole pre-read (`1E 11 01`, the 256-value ramp, the carriage's 131 steps, the read's 512,
+//!   the park's 327 from 1155), `1E 88` once with a block of the holes' form; once
+//!   [`Guarded::permit_infrared_pass`] has switched to the infrared pass: the infrared `1E 57`
+//!   (mode `20`, source `03`), its light (`1E A2 04`, `05`), the lid unit's 705 steps, `1E 87 01`,
+//!   the origin read's ramp at T 8064, window line times up to [`ice::IR_MAX_LINE_TIME`], and its
+//!   plan only with a start move 39-44 steps after the colour pass's ([`ICE_START_DELTAS`]) and
+//!   its columns near the colour read's ([`check_infrared_plan`]).
 //!
 //! What a scan may ask ([`check_request`], [`check_plan`]): the glass, colour,
 //! 100, 200, 300, 400, 600 and 1200 dpi, at 8 bits (WIA) or 16 (Epson Scan,
@@ -43,8 +52,9 @@
 //! captured sending ([`FILM_COVERED`], inside [`crate::film::ADAPTER_INCHES`]).
 //! Anything else is refused with an error and never reaches the scanner.
 
-use crate::film::{self, Film, FilmPlan, FilmRequest};
+use crate::film::{self, Film, FilmPlan, FilmRequest, Pass};
 use crate::firmware::{HEADER_LEN, PAYLOAD_LEN};
+use crate::ice;
 use crate::protocol::{
     checksum, FIRMWARE_BEGIN, FIRMWARE_END, FIRMWARE_RUN, GET_BUTTONS, GET_STATE, TABLE_CHUNK,
 };
@@ -210,6 +220,79 @@ pub fn check_film_request(r: &FilmRequest) -> Result<()> {
     Ok(())
 }
 
+/// The Digital ICE scans a scan may send: resolution across and along, bits, the films, as Epson
+/// Scan was captured sending them (captures 18 and 108-113, 17 November 2026): negatives at 1200
+/// and 2400 dpi, a slide at 2400, 16 bits. Epson Scan asked 4800 dpi reads 2400 with ICE (110,
+/// 113): never above.
+pub const ICE_COVERED: [(u32, u32, u8, &[Film]); 2] = [
+    (1200, 1200, 16, &[Film::Negative]),
+    (2400, 2400, 16, &[Film::Negative, Film::Positive]),
+];
+
+/// The infrared pass's start move less the colour pass's, as captured (39-44 steps,
+/// `ice::start_delta`): another one is refused.
+pub const ICE_START_DELTAS: std::ops::RangeInclusive<i64> = 39..=44;
+
+/// How far the infrared read's first column may lie from the colour read's, 4800ths of an inch:
+/// the captures' -53 to -26 (`ice::infrared_plan`), and room for a frame anywhere in the window
+/// (the lens's ratio moves it by up to +90 at the window's right edge).
+pub const ICE_COLUMN_SHIFT: std::ops::RangeInclusive<i64> = -96..=96;
+
+/// Whether a Digital ICE scan of `r` may be sent: a film request ([`check_film_request`]) of a
+/// resolution, depth and film captured with ICE ([`ICE_COVERED`]).
+pub fn check_ice_request(r: &FilmRequest) -> Result<()> {
+    check_film_request(r)?;
+    let covered = ICE_COVERED
+        .iter()
+        .any(|&(d, y, b, f)| d == r.dpi && y == r.ydpi && b == r.bits && f.contains(&r.film));
+    if !covered {
+        let kind = match r.film {
+            Film::Negative => "a negative",
+            Film::Positive => "a slide",
+        };
+        return Err(Error::InvalidRequest(format!(
+            "Epson 4490: Digital ICE on {kind} at {} dpi and {} bits was never captured \
+             (negatives at 1200 and 2400 dpi, slides at 2400, 16 bits)",
+            r.dpi, r.bits
+        )));
+    }
+    Ok(())
+}
+
+/// Whether an infrared pass's plan may follow its colour pass's: the same request and resolution,
+/// a start move [`ICE_START_DELTAS`] after the colour one's, the first column within
+/// [`ICE_COLUMN_SHIFT`] of the colour read's, as many pixels or up to 256 more.
+pub fn check_infrared_plan(colour: &FilmPlan, ir: &FilmPlan) -> Result<()> {
+    let refuse = |why: String| {
+        Err(Error::InvalidRequest(format!(
+            "Epson 4490, Digital ICE: {why}"
+        )))
+    };
+    let (c, i) = (&colour.geometry, &ir.geometry);
+    if colour.request != ir.request || c.base != i.base || c.read_dpi != i.read_dpi {
+        return refuse("an infrared plan for another request".into());
+    }
+    let delta = i64::from(i.start_steps) - i64::from(c.start_steps);
+    if !ICE_START_DELTAS.contains(&delta) {
+        return refuse(format!(
+            "the infrared read would start {delta} steps after the colour one, never captured \
+             (39-44)"
+        ));
+    }
+    let u = i64::from(4800 / c.base);
+    let shift = (i64::from(film::logical_of(i.columns.0, i.words, i.base))
+        - i64::from(film::logical_of(c.columns.0, c.words, c.base)))
+        * u;
+    if !ICE_COLUMN_SHIFT.contains(&shift) || i.pixels < c.pixels || i.pixels > c.pixels + 256 {
+        return refuse(format!(
+            "the infrared read's columns ({} pixels, {shift} 4800ths from the colour read's) are \
+             far from the colour read's ({} pixels)",
+            i.pixels, c.pixels
+        ));
+    }
+    Ok(())
+}
+
 /// Whether a plan may be sent: its request accepted, and every move and
 /// speed one the captures have shown.
 pub fn check_plan(p: &Plan) -> Result<()> {
@@ -281,8 +364,14 @@ enum Expect {
     TableHeader,
     /// One of a film's `1E 01` blocks: the moves `1E 05` starts (first), the reads' (second).
     FilmMove(Vec<Vec<u8>>, Vec<Vec<u8>>),
-    /// A film's `1E 21`: a line time a multiple of 384 µs within [`FILM_LINE_TIMES`].
-    FilmBlock21,
+    /// A film's `1E 21`: a line time a multiple of 384 µs from [`FILM_LINE_TIMES`]'s start up to
+    /// this.
+    FilmBlock21(u32),
+    /// The hole pre-read's `1E 41` (Digital ICE), for an x correction in [`X_CORRECTION_RANGE`],
+    /// or the lid unit's origin read's.
+    PreRead41,
+    /// `1E 88`'s block: the holes ([`ice::Holes`]), each value within a hole's image.
+    Block88,
     /// A film's `1E 84` header.
     FilmTable,
     /// A one-value ramp no faster than this (µs / 16).
@@ -331,6 +420,30 @@ pub fn film_origin_block(n: u32) -> [u8; 4] {
     (n + film::RAMP_512_STEPS).to_le_bytes()
 }
 
+/// Digital ICE's moves started with `1E 05` (captures 18, 108-113): the carriage before the
+/// hole pre-read (131 steps, the 256-value ramp), the park after it (327 from 1155); in the
+/// infrared pass the lid unit's 705 steps (the film ramp).
+fn ice_moves(infrared: bool) -> Vec<Vec<u8>> {
+    let mut m = vec![
+        setup::move_block(ice::PRE_MOVE, 0, 0xFF, 0x10).to_vec(),
+        setup::move_block(ice::PRE_PARK, 0, 0xFF, 0x10).to_vec(),
+    ];
+    if infrared {
+        m.push(setup::move_block(ice::IR_UNIT_MOVE, 0, 0x1FF, 0x10).to_vec());
+    }
+    m
+}
+
+/// The hole pre-read's own move: 512 steps, lead 32.
+pub fn ice_pre_read_move() -> [u8; 12] {
+    setup::move_block(ice::PRE_READ_STEPS, 32, 0, 0x18)
+}
+
+/// A ramp's bytes.
+fn ramp_le(r: &[u16]) -> Vec<u8> {
+    r.iter().flat_map(|v| v.to_le_bytes()).collect()
+}
+
 /// What a scan was asked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Asked {
@@ -354,6 +467,21 @@ struct Permit {
     film_started: bool,
     /// The film plan's read move went out: not again.
     film_read: bool,
+    /// A Digital ICE scan: the pass under way and what the colour pass set.
+    ice: Option<IceState>,
+}
+
+/// What a Digital ICE scan has done.
+#[derive(Debug, Clone)]
+struct IceState {
+    /// The pass under way: [`Pass::IceColour`], then [`Pass::Infrared`].
+    pass: Pass,
+    /// The infrared pass's `1E 57`.
+    e57_infrared: [u8; 42],
+    /// The colour pass's plan, once the infrared pass is under way.
+    colour: Option<FilmPlan>,
+    /// `1E 88` went out.
+    written88: bool,
 }
 
 impl Permit {
@@ -366,7 +494,13 @@ impl Permit {
             film_plan: None,
             film_started: false,
             film_read: false,
+            ice: None,
         }
+    }
+
+    /// The Digital ICE pass under way, if any.
+    fn ice_pass(&self) -> Option<Pass> {
+        self.ice.as_ref().map(|i| i.pass)
     }
 }
 
@@ -473,6 +607,59 @@ impl<T: Transport> Guarded<T> {
         Ok(())
     }
 
+    /// Lets out a Digital ICE scan of `request`, if [`check_ice_request`] accepts it: the film's
+    /// opening with the colour pass's `1E 57` ([`ice::request_block`]), then its path as a film's
+    /// ([`Guarded::permit_film_path`]) with the hole pre-read and `1E 88`.
+    pub fn permit_ice(&mut self, request: &FilmRequest) -> Result<()> {
+        check_ice_request(request)?;
+        let mut p = Permit::new(
+            Asked::Film(*request),
+            ice::request_block(request, Pass::IceColour)?,
+        );
+        p.ice = Some(IceState {
+            pass: Pass::IceColour,
+            e57_infrared: ice::request_block(request, Pass::Infrared)?,
+            colour: None,
+            written88: false,
+        });
+        self.permit = Some(p);
+        self.expect = None;
+        self.start_armed = false;
+        self.start_done = false;
+        Ok(())
+    }
+
+    /// Switches a Digital ICE scan to its infrared pass, once its colour pass's plan was let out:
+    /// the infrared `1E 57`, its light, its moves; its own plan next
+    /// ([`Guarded::permit_film_plan`]).
+    pub fn permit_infrared_pass(&mut self) -> Result<()> {
+        let refuse = || {
+            Err(Error::Other(
+                "Epson 4490: an infrared pass without its colour pass".into(),
+            ))
+        };
+        let Some(p) = self.permit.as_mut() else {
+            return refuse();
+        };
+        let colour_done = p.ice.as_ref().is_some_and(|i| i.pass == Pass::IceColour)
+            && p.film_plan
+                .as_ref()
+                .is_some_and(|f| f.pass == Pass::IceColour);
+        if !colour_done {
+            return refuse();
+        }
+        let plan = p.film_plan.take();
+        let state = p.ice.as_mut().expect("checked");
+        state.pass = Pass::Infrared;
+        state.colour = plan;
+        p.e57 = state.e57_infrared;
+        p.film_started = false;
+        p.film_read = false;
+        self.expect = None;
+        self.start_armed = false;
+        Ok(())
+    }
+
     /// Lets out the blocks of `plan`, computed for the request already
     /// permitted, if [`check_plan`] accepts it.
     pub fn permit_plan(&mut self, plan: &Plan) -> Result<()> {
@@ -518,6 +705,16 @@ impl<T: Transport> Guarded<T> {
         match self.permit.as_mut() {
             Some(p) if p.asked == Asked::Film(plan.request) && p.film_path => {
                 check_film_request(&plan.request)?;
+                let want = p.ice_pass().unwrap_or(Pass::Film);
+                if plan.pass != want {
+                    return Err(Error::Other(format!(
+                        "Epson 4490: a film plan for {:?} in {want:?}",
+                        plan.pass
+                    )));
+                }
+                if let Some(colour) = p.ice.as_ref().and_then(|i| i.colour.as_ref()) {
+                    check_infrared_plan(colour, plan)?;
+                }
                 p.film_plan = Some(plan.clone());
                 Ok(())
             }
@@ -594,7 +791,10 @@ impl<T: Transport> Guarded<T> {
         };
         let film = matches!(permit.asked, Asked::Film(_));
         // The glass's lamp in a glass scan, the lid's for a film (Epson Scan, captures 72-81).
-        let lamps: &[&[u8]] = if film && permit.film_path {
+        let lamps: &[&[u8]] = if permit.ice_pass() == Some(Pass::Infrared) {
+            // The lid unit's infrared light, and its dark read's (captures 18, 108-113).
+            &[&[0x04], &[0x05]]
+        } else if film && permit.film_path {
             &[&[0x02], &[0x03]]
         } else if film {
             &[&[0x02]]
@@ -604,6 +804,9 @@ impl<T: Transport> Guarded<T> {
         let request_level = match data {
             [0x1B, 0x40] | [0x1B, 0x13] => Some(None),
             [0x1E, 0x53 | 0xA1 | 0x92 | 0x8C | 0x04 | 0x8B] => Some(None),
+            [0x1E, 0x87] if permit.ice_pass() == Some(Pass::Infrared) => {
+                Some(one(&[&[0x00], &[0x01]]))
+            }
             [0x1E, 0x87] => Some(one(&[&[0x00]])),
             [0x1E, 0xA2] => Some(one(lamps)),
             // The lid's lamp switched back to the glass's (WIA's driver, capture 25), and Epson
@@ -661,7 +864,16 @@ impl<T: Transport> Guarded<T> {
     fn film_command(&self, permit: &Permit, data: &[u8]) -> Result<Option<Expect>> {
         let p = permit.film_plan.as_ref();
         let plan_only = |what: &str| Err(refusal(data, &format!("{what} before the film's plan")));
+        let pass = permit.ice_pass();
         Ok(match data {
+            [0x1E, 0x88]
+                if pass == Some(Pass::IceColour)
+                    && permit.ice.as_ref().is_some_and(|i| !i.written88) =>
+            {
+                Some(Expect::Block88)
+            }
+            [0x1E, 0x11] if pass.is_some() => one(&[[0x01], [0x03], [0x08], [0x09]]),
+            [0x1E, 0x41] if pass.is_some() && p.is_none() => Some(Expect::PreRead41),
             [0x1E, 0x25] => one(&[[0x00], [0x02], [0x03]]),
             [0x1E, 0x84] => Some(Expect::FilmTable),
             [0x1E, 0x01] => {
@@ -670,6 +882,10 @@ impl<T: Transport> Guarded<T> {
                     film_origin_read_move().to_vec(),
                     setup::move_block(64, 32, 0, 0x18).to_vec(),
                 ];
+                if pass.is_some() {
+                    moves.extend(ice_moves(pass == Some(Pass::Infrared)));
+                    reads.push(ice_pre_read_move().to_vec());
+                }
                 // The image's start move once, then its read move once.
                 if let Some(p) = p {
                     let (start, read) = film_image_moves(p);
@@ -689,7 +905,11 @@ impl<T: Transport> Guarded<T> {
                     .collect(),
             )),
             [0x1E, 0x11] => one(&[[0x03], [0x08], [0x09]]),
-            [0x1E, 0x21] => Some(Expect::FilmBlock21),
+            [0x1E, 0x21] => Some(Expect::FilmBlock21(if pass == Some(Pass::Infrared) {
+                ice::IR_MAX_LINE_TIME
+            } else {
+                *FILM_LINE_TIMES.end()
+            })),
             [0x1E, 0x41] if p.is_some() => Some(Expect::Block41),
             [0x1E, 0x41] => one(&[film::origin_e41()]),
             [0x1E, 0x42] => Some(Expect::Len(18)),
@@ -784,22 +1004,70 @@ impl<T: Transport> Guarded<T> {
                 Ok(None)
             }
             Expect::FilmMove(..) => bad("a film's move"),
-            Expect::FilmBlock21 => {
-                let t = u32::from_le_bytes([data[0], data[1], data[2], 0]);
-                if data.len() == 26 && t % 384 == 0 && FILM_LINE_TIMES.contains(&t) {
+            Expect::FilmBlock21(max) => {
+                let t = match data {
+                    [a, b, c, ..] => u32::from_le_bytes([*a, *b, *c, 0]),
+                    _ => 0,
+                };
+                if data.len() == 26
+                    && t % 384 == 0
+                    && (*FILM_LINE_TIMES.start()..=*max).contains(&t)
+                {
                     Ok(None)
                 } else {
                     bad("a film's 1E 21: its line time")
                 }
             }
+            Expect::PreRead41 => {
+                let c0 = match data {
+                    [a, b, ..] if data.len() == 22 => u32::from(u16::from_le_bytes([*a, *b])),
+                    _ => return bad("the hole pre-read's 1E 41"),
+                };
+                let lo = ice::pre_c0(setup::XCorrection(*X_CORRECTION_RANGE.start()));
+                let hi = ice::pre_c0(setup::XCorrection(*X_CORRECTION_RANGE.end()));
+                if ((lo..=hi).contains(&c0) && ice::pre_e41_at(c0)[..] == *data)
+                    || film::origin_e41()[..] == *data
+                {
+                    Ok(None)
+                } else {
+                    bad("the hole pre-read's 1E 41")
+                }
+            }
+            Expect::Block88 => match ice::Holes::from_block88(data) {
+                // Each hole's column and width within its image (692 pixels, in halves), its
+                // line and height within the read's 480 lines.
+                Some(h)
+                    if (0..2).all(|k| {
+                        let v = &h.values[4 * k..4 * k + 4];
+                        u32::from(v[0]) < 2 * ice::HOLE_W as u32
+                            && u32::from(v[1]) < 2 * ice::PRE_READ.1
+                            && u32::from(v[2]) < 2 * ice::HOLE_W as u32
+                            && u32::from(v[3]) < 2 * ice::PRE_READ.1
+                    }) =>
+                {
+                    Ok(None)
+                }
+                _ => bad("1E 88's holes"),
+            },
             Expect::MinWord(min) => match data {
                 [lo, hi] if u16::from_le_bytes([*lo, *hi]) >= *min => Ok(None),
                 _ => bad("a one-value ramp faster than any captured"),
             },
             Expect::FilmTable => {
                 let fp = self.permit.as_ref().and_then(|p| p.film_plan.as_ref());
+                let pass = self.permit.as_ref().and_then(Permit::ice_pass);
+                if pass.is_some() && setup::ramp_header(256)[..] == *data {
+                    return Ok(Some(Expect::OneOf(vec![ramp_le(&setup::fixed_ramp(256))])));
+                }
                 if setup::ramp_header(512)[..] == *data {
-                    let ramps = [setup::film_ramp(), setup::ramp(512, setup::Mode::Medium)];
+                    // The origin read's ramp: at T / 12 (6144 on films, 8064 in the infrared
+                    // pass).
+                    let origin = if pass == Some(Pass::Infrared) {
+                        ice::IR_ORIGIN_T / 12
+                    } else {
+                        512
+                    };
+                    let ramps = [setup::film_ramp(), setup::ramp(origin, setup::Mode::Medium)];
                     return Ok(Some(Expect::OneOf(
                         ramps
                             .iter()
@@ -905,6 +1173,11 @@ impl<T: Transport> Guarded<T> {
         }
         if was_command && data.len() == 2 && matches!(data[0], 0x1B | 0x1E) && data != GET_STATE {
             self.last_command = Some([data[0], data[1]]);
+        }
+        if matches!(self.expect, Some(Expect::Block88)) {
+            if let Some(i) = self.permit.as_mut().and_then(|p| p.ice.as_mut()) {
+                i.written88 = true;
+            }
         }
         if self.stage == Stage::Run && stage == Stage::Idle {
             // 80 went out: the upload is over.
@@ -1460,6 +1733,120 @@ mod tests {
         t.end_scan();
         t.bulk_out(&[0x1E, 0xA2]).unwrap();
         assert!(t.bulk_out(&[0x02]).is_err());
+    }
+
+    /// Digital ICE only as captured: its requests (negatives at 1200 and 2400 dpi, slides at
+    /// 2400, 16 bits), its commands only in an ICE scan and in their pass (`1E 88` once in the
+    /// colour pass, the infrared light and `1E 87 01` in the infrared one), the infrared plan
+    /// only with the start and columns captured.
+    #[test]
+    fn digital_ice_goes_out_only_as_captured() {
+        use crate::ice::{self, tests::ICE};
+        let (neg, neg1200, slide) = (ICE[1].1, ICE[2].1, ICE[4].1);
+        for r in [neg, neg1200, slide] {
+            check_ice_request(&r).unwrap_or_else(|e| panic!("{r:?}: {e}"));
+        }
+        let mut slide1200 = neg1200;
+        slide1200.film = Film::Positive;
+        let mut neg600 = neg1200;
+        (neg600.dpi, neg600.ydpi, neg600.width, neg600.height) = (600, 600, 576, 850);
+        let mut neg8 = neg;
+        neg8.bits = 8;
+        for r in [slide1200, neg600, neg8] {
+            assert!(check_ice_request(&r).is_err(), "{r:?}");
+        }
+        // A film scan without ICE: none of ICE's commands.
+        let mut t = guarded(&[]);
+        t.permit_film(&neg).unwrap();
+        t.permit_film_path().unwrap();
+        assert!(t.bulk_out(&[0x1E, 0x88]).is_err());
+        t.bulk_out(&[0x1E, 0xA2]).unwrap();
+        assert!(t.bulk_out(&[ice::LAMP_INFRARED]).is_err());
+        t.bulk_out(&[0x1E, 0x87]).unwrap();
+        assert!(t.bulk_out(&[0x01]).is_err());
+        t.bulk_out(&[0x1E, 0x11]).unwrap();
+        assert!(t.bulk_out(&[0x01]).is_err());
+        t.bulk_out(&[0x1E, 0x01]).unwrap();
+        assert!(t
+            .bulk_out(&setup::move_block(ice::PRE_MOVE, 0, 0xFF, 0x10))
+            .is_err());
+        // An ICE scan: its colour 1E 57, not a film's; the pre-read's moves and 1E 41; 1E 88
+        // once and of the holes' form; not the infrared light.
+        let mut t = guarded(&[]);
+        t.permit_ice(&neg).unwrap();
+        t.bulk_out(&[0x1E, 0x57]).unwrap();
+        assert!(t.bulk_out(&film::request_block(&neg).unwrap()).is_err());
+        t.bulk_out(&[0x1E, 0x57]).unwrap();
+        t.bulk_out(&ice::request_block(&neg, Pass::IceColour).unwrap())
+            .unwrap();
+        t.permit_film_path().unwrap();
+        t.bulk_out(&[0x1E, 0x01]).unwrap();
+        t.bulk_out(&setup::move_block(ice::PRE_MOVE, 0, 0xFF, 0x10))
+            .unwrap();
+        t.bulk_out(&[0x1E, 0x05]).unwrap();
+        t.bulk_out(&[0x1E, 0x41]).unwrap();
+        t.bulk_out(&ice::pre_e41(setup::XCorrection(-133))).unwrap();
+        t.bulk_out(&[0x1E, 0x41]).unwrap();
+        assert!(t.bulk_out(&ice::pre_e41_at(ice::PRE_C0 + 400)).is_err());
+        t.bulk_out(&[0x1E, 0x01]).unwrap();
+        t.bulk_out(&ice_pre_read_move()).unwrap();
+        t.bulk_out(&[0x1E, 0x88]).unwrap();
+        let mut bad = ice::Holes {
+            found: true,
+            values: [702, 538, 144, 140, 630, 512, 150, 140],
+        };
+        bad.values[1] = 2000;
+        assert!(t.bulk_out(&bad.block88()).is_err());
+        bad.values[1] = 538;
+        t.bulk_out(&[0x1E, 0x88]).unwrap();
+        t.bulk_out(&bad.block88()).unwrap();
+        assert!(t.bulk_out(&[0x1E, 0x88]).is_err(), "1E 88 twice");
+        t.bulk_out(&[0x1E, 0xA2]).unwrap();
+        assert!(t.bulk_out(&[ice::LAMP_INFRARED]).is_err());
+        // The infrared pass only after the colour pass's plan; then its light, its 1E 57, its
+        // lid unit's move, 1E 87 01, longer window times.
+        assert!(t.permit_infrared_pass().is_err());
+        let corr = setup::XCorrection(-133);
+        let colour =
+            FilmPlan::from_geometry(neg, film::geometry(&neg, corr).unwrap(), Pass::IceColour);
+        assert!(t
+            .permit_film_plan(&FilmPlan::new(neg, corr).unwrap())
+            .is_err());
+        t.permit_film_plan(&colour).unwrap();
+        t.permit_infrared_pass().unwrap();
+        t.bulk_out(&[0x1E, 0x57]).unwrap();
+        t.bulk_out(&ice::request_block(&neg, Pass::Infrared).unwrap())
+            .unwrap();
+        t.bulk_out(&[0x1E, 0xA2]).unwrap();
+        t.bulk_out(&[ice::LAMP_INFRARED]).unwrap();
+        t.bulk_out(&[0x1E, 0xA2]).unwrap();
+        assert!(t.bulk_out(&[0x02]).is_err());
+        t.bulk_out(&[0x1E, 0x01]).unwrap();
+        t.bulk_out(&setup::move_block(ice::IR_UNIT_MOVE, 0, 0x1FF, 0x10))
+            .unwrap();
+        t.bulk_out(&[0x1E, 0x87]).unwrap();
+        t.bulk_out(&[0x01]).unwrap();
+        assert!(t.bulk_out(&[0x1E, 0x88]).is_err());
+        let mut long = [0u8; 26];
+        long[..3].copy_from_slice(&ice::IR_MAX_LINE_TIME.to_le_bytes()[..3]);
+        t.bulk_out(&[0x1E, 0x21]).unwrap();
+        t.bulk_out(&long).unwrap();
+        long[..3].copy_from_slice(&(ice::IR_MAX_LINE_TIME + 384).to_le_bytes()[..3]);
+        t.bulk_out(&[0x1E, 0x21]).unwrap();
+        assert!(t.bulk_out(&long).is_err());
+        // The infrared plan: as captured, or refused.
+        let h = |v| ice::Holes {
+            found: true,
+            values: v,
+        };
+        let ir = ice::infrared_plan(&colour, corr, &h(ICE[1].3), &h(ICE[1].4)).unwrap();
+        let mut far = ir.clone();
+        far.geometry.start_steps += 10;
+        assert!(t.permit_film_plan(&far).is_err());
+        let mut wide = ir.clone();
+        wide.geometry.pixels += 512;
+        assert!(t.permit_film_plan(&wide).is_err());
+        t.permit_film_plan(&ir).unwrap();
     }
 
     #[test]

@@ -105,6 +105,12 @@ const MAX_LINES_PER_BLOCK: u32 = 32;
 /// line, at most [`MAX_LINES_PER_BLOCK`] (true of the eleven film requests captured).
 const BLOCK_BYTES: u32 = 262_144;
 
+/// `1E 57`'s byte 28 for lines of `line` bytes: [`BLOCK_BYTES`] over them, at most
+/// [`MAX_LINES_PER_BLOCK`].
+pub fn lines_per_request_block(line: u32) -> u8 {
+    (BLOCK_BYTES / line.max(1)).min(MAX_LINES_PER_BLOCK) as u8
+}
+
 /// Epson Scan's `1E 57` for a film (42 bytes): the request in pixels, colour (`13`), the bits,
 /// the source `01` (the transparency unit), the lines per block, gamma `04` (Epson Scan's), the
 /// film in byte 37; everything else zero (no colour correction in the scanner, as on the glass).
@@ -125,7 +131,7 @@ pub fn request_block(r: &FilmRequest) -> Result<[u8; 42]> {
     e57[24] = 0x13;
     e57[25] = r.bits;
     e57[26] = 0x01;
-    e57[28] = (BLOCK_BYTES / line).min(MAX_LINES_PER_BLOCK) as u8;
+    e57[28] = lines_per_request_block(line);
     e57[29] = 0x04;
     e57[37] = u8::from(r.film == Film::Negative);
     Ok(e57)
@@ -150,7 +156,7 @@ const START_K: u32 = 583;
 
 /// The most bytes of image a block carries (as on the glass): the lines per block are this over
 /// the bytes of a line.
-const BLOCK_MAX: u32 = 65_527;
+pub(crate) const BLOCK_MAX: u32 = 65_527;
 
 /// What a film scan's set-up takes from its request, as Epson Scan computes it (read from
 /// captures 17 and 74-81 and Epson's interpreter, `captures/epson4490/tools/filmsetup.py`, 0
@@ -218,10 +224,41 @@ fn gcd(a: u32, b: u32) -> u32 {
     }
 }
 
+/// The film window's first column at `base` with `1E 87`'s x correction `corr` (the logical
+/// start of a read with no x): [`FILM_ORIGIN`] + `corr` at base 4800; at base 2400 both halved,
+/// the correction toward zero (the interpreter halves its magnitude, `0x421e24`; capture 109's
+/// colour read, -133, gives 6594 where a floor would give 6593; -122 halves either way).
+pub fn logical_origin(corr: XCorrection, base: u32) -> i32 {
+    let c = i32::from(corr.0);
+    if base == 4800 {
+        FILM_ORIGIN + c
+    } else {
+        FILM_ORIGIN / 2 + c / 2
+    }
+}
+
+/// The glass's left-edge form (`0x40fdd0`, divisor 6 at base 4800, 3 at base 2400) of a read
+/// starting at the logical column `logical` for `count` columns: its first `1E 41` column and
+/// `1E 21`'s words at bytes 13-14 and 15-16 (w1, r9).
+pub fn left_edge(logical: u32, count: u32, base: u32) -> (u32, (u16, u16)) {
+    let d = 6 * base / 4800;
+    let r9 = ((logical.saturating_sub(80) / d) >> 3) * 2;
+    let r8 = logical - 4 * d * r9 - 80;
+    let c0 = r8 + 4 * r9 + 80;
+    let w1 = (((r8 + count + 160) >> 1) + 2 * r9) >> 1;
+    (c0, (w1 as u16, r9 as u16))
+}
+
+/// The logical column of a read whose first `1E 41` column is `c0` and whose words are `words`
+/// ([`left_edge`]'s inverse): `c0` + 4 (d - 1) r9.
+pub fn logical_of(c0: u32, words: (u16, u16), base: u32) -> u32 {
+    let d = 6 * base / 4800;
+    c0 + 4 * (d - 1) * u32::from(words.1)
+}
+
 /// The geometry of a film request with `1E 87`'s x correction `corr`. The start column is the
-/// glass's left-edge form (`0x40fdd0`: divisor 6 at base 4800, 3 at base 2400) from the logical
-/// start (`FILM_ORIGIN` + `corr`) x base / 4800 + x; at base 2400 only an even correction was
-/// captured (-122), so how an odd one rounds is not known.
+/// glass's left-edge form ([`left_edge`]) from the logical start [`logical_origin`] + x x base /
+/// dpi.
 pub fn geometry(r: &FilmRequest, corr: XCorrection) -> Result<Geometry> {
     let bad = |why: &str| Err(Error::InvalidRequest(format!("Epson 4490: {why}")));
     if !matches!(r.dpi, 600 | 1200 | 2400 | 4800) || r.width == 0 || r.height == 0 {
@@ -234,16 +271,11 @@ pub fn geometry(r: &FilmRequest, corr: XCorrection) -> Result<Geometry> {
     };
     let pixels = (r.width * read_dpi / r.dpi).div_ceil(16) * 16;
     let count = pixels * base / read_dpi;
-    let d = 6 * base / 4800;
-    let logical =
-        (FILM_ORIGIN + i32::from(corr.0)) * base as i32 / 4800 + (r.x * base / r.dpi) as i32;
+    let logical = logical_origin(corr, base) + (r.x * base / r.dpi) as i32;
     let Ok(logical) = u32::try_from(logical) else {
         return bad("a film's start column before the scanner's first");
     };
-    let r9 = ((logical.saturating_sub(80) / d) >> 3) * 2;
-    let r8 = logical - 4 * d * r9 - 80;
-    let c0 = r8 + 4 * r9 + 80;
-    let w1 = (((r8 + count + 160) >> 1) + 2 * r9) >> 1;
+    let (c0, words) = left_edge(logical, count, base);
     let g = gcd(r.ydpi, 2400);
     let (den, num) = (r.ydpi / g, 2400 / g);
     // The staggered columns' lines when read at 4800 across (4 at 2400 along, 9 at 5400), the
@@ -271,7 +303,7 @@ pub fn geometry(r: &FilmRequest, corr: XCorrection) -> Result<Geometry> {
         read_dpi,
         pixels,
         columns: (c0, c0 + count),
-        words: (w1 as u16, r9 as u16),
+        words,
         lines,
         b8: ratio_code | u8::from(r.bits == 8),
         ratio: (den as u8, num as u8),
@@ -320,6 +352,18 @@ pub fn origin_e41() -> [u8; 22] {
     crate::setup::block41(2800, 3184, 150, 0x01, 1, 12, 0, 0, 0x80, 0x80, 150)
 }
 
+/// Which scan a film plan is for: a film without Digital ICE, or one of Digital ICE's two passes
+/// ([`crate::ice`]): the colour pass (`1E 57` source `04`) and the infrared one (source `03`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pass {
+    /// A film scan (captures 17, 72-81, 98-101).
+    Film,
+    /// Digital ICE's colour pass (captures 18, 108-113).
+    IceColour,
+    /// Digital ICE's infrared pass.
+    Infrared,
+}
+
 /// What a film scan sends that follows from its request and `1E 87`'s correction: the
 /// [`Geometry`], and every `1E 41` and fixed move of its reads (captures 17, 74-81; the
 /// calibration's values, from the reads, are `crate::film_cal`'s).
@@ -348,13 +392,24 @@ pub struct FilmPlan {
     pub black: ((u16, u16), u32),
     /// The image columns' margin (`crate::film_cal::image_margin`).
     pub image_margin: u32,
+    /// The scan it is for.
+    pub pass: Pass,
 }
 
 impl FilmPlan {
     /// The plan of `request` with `1E 87`'s x correction `corr`.
     pub fn new(request: FilmRequest, corr: XCorrection) -> Result<Self> {
+        Ok(Self::from_geometry(
+            request,
+            geometry(&request, corr)?,
+            Pass::Film,
+        ))
+    }
+
+    /// The plan of `request` read with the geometry `g`, for `pass`: the infrared pass's origin
+    /// read has T 8064 (6144 on films and in the colour pass; captures 18, 108-113).
+    pub fn from_geometry(request: FilmRequest, g: Geometry, pass: Pass) -> Self {
         use crate::setup::block41;
-        let g = geometry(&request, corr)?;
         let (den, num) = g.ratio;
         let (c0, c1) = g.columns;
         let lines = g.lines;
@@ -365,11 +420,16 @@ impl FilmPlan {
         } else {
             (2276, 8756)
         };
+        let origin_t: u32 = if pass == Pass::Infrared {
+            crate::ice::IR_ORIGIN_T
+        } else {
+            6144
+        };
         let mut e21_origin = [0u8; 26];
-        e21_origin[..3].copy_from_slice(&6144u32.to_le_bytes()[..3]);
+        e21_origin[..3].copy_from_slice(&origin_t.to_le_bytes()[..3]);
         e21_origin[12] = 0x2A;
         let r8 = c0 - 4 * u32::from(g.words.1) - 80;
-        Ok(Self {
+        Self {
             request,
             e21_origin,
             e41_origin: origin_e41(),
@@ -397,7 +457,8 @@ impl FilmPlan {
             },
             image_margin: crate::film_cal::image_margin(g.base, r8, c1 - c0),
             geometry: g,
-        })
+            pass,
+        }
     }
 }
 
