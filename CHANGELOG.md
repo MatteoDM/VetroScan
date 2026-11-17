@@ -17,6 +17,14 @@ GitHub; here they are in English.
 
 ## [Unreleased]
 
+### Added
+- **Leggi l'infrarosso** in *Pellicola*, for scanners that read an infrared channel from a
+  film (Digital ICE): a second reading in infrared light, which goes through the film but not
+  through dust and scratches. The channel is kept with each frame and saved beside its 16-bit
+  and RAW files (`…-infrarosso.png` / `.tif`, linear). Shown only where the scanner declares
+  it, for that film and resolution: no scanner declares it yet (the Epson Perfection 4490's
+  driver will, once it reads its infrared pass), and the dust is not taken away yet.
+
 ## [0.10.0] - 2026-11-15
 
 ### Added

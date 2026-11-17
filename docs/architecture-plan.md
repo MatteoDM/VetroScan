@@ -1884,6 +1884,75 @@ never run by us (step 12).
 17. The second pass (`1E 57` mode `20`, source `03`, capture 18), the infrared channel in the
     contract and the dust removal in `scan-imaging` (already planned below).
 
+    **The protocol, read from capture 18** (17 November 2026; capture 18 against 17, the same
+    frame without ICE, and against Epson Scan's ICE TIFF of 18; `captures/epson4490/
+    06-formato-dati.md`, "Digital ICE"; `tools/ice.py` reproduces every number). Measured:
+    - **An ICE scan is two whole scans in a row**, each with its own calibration: the colour
+      pass (68 s) and the infrared pass (75 s), 146 s against 57. The colour pass is capture
+      17's but for `1E 57` source `04` (not `01`) and gamma `03`, and a **pre-read of two
+      holes** at its start followed by **`1E 88`**, 18 bytes written to the scanner
+      (`01 00` + eight u16). The infrared pass: `1E 57` with the same area, **mode `20`**,
+      16 bits, **source `03`**, film type `00`; **`1E A2 04`** for the light (`05` for the
+      dark read, where colour has `02`/`03`); the lid's unit moved 1,729 steps further before
+      its own hole pre-read, and **`1E 87 01`** reading back `1E 88`'s bytes; offsets searched
+      on one channel only, gains 1.0, its own exposure loop (ends differently, to be read with
+      `filmsetup.py`'s rules), calibration and shading on 4,224 columns (64 more than colour),
+      identity gamma tables; the read starts 518 steps on (479 for colour), **h + 4 lines**.
+      The old note's "`1B 0D`" is not a command (it was `1E 01`'s step count).
+    - **The infrared comes back as colour does**: three CCD rows, 16 bits, staggered ydpi/50
+      lines, odd sensor columns ydpi/600 late; each row sees the infrared through its filter,
+      levels alike (~52,500-54,900 on clear film, dust down to -60 %). With h + 4 lines, **the
+      green row covers the frame** (raw line = frame row + 1). The film is nearly clear; a
+      faint shadow of the picture shows (the cyan dye absorbs a little infrared: seen, not
+      measured).
+    - **Registration on the colour pass**: along, a shift only (colour line = infrared line +
+      46.99, sd 0.29, the same over the frame); across, **a scale**: colour column = 0.99279 ×
+      infrared column + 26.97 (sensor columns at 4800; residual sd 0.58): the lens magnifies
+      the infrared 0.73 % more, **15 pixels of drift across a 2400 dpi frame**. The hole
+      pre-read measures the same (spacing 6,205 columns in colour light, 6,247 in infrared:
+      0.99317), so Epson Scan measures it at every scan; what `1E 88`'s numbers are is guessed
+      only (the holes' positions and sizes in half pixels, one x not matching).
+    - **Against Epson's ICE**: Epson changes 0.04 % of the frame by more than 3,000 of 65,535
+      (a hair, dust); **99 %** of those pixels lie where our registered infrared (green row) is
+      5 % or more below its 31 × 31 mean (0.18 % of the frame). So the channel and the
+      registration are right; what Epson does there (how it fills) is still to measure.
+    - Capture 18's colour read lost 256 bytes in USBPcap (rows ~600-780 of our assembly):
+      excluded, a reminder that a second ICE capture is worth having.
+
+    **Matteo's decisions** (17 November 2026): the **registration is the driver's** (optics,
+    motor and holes are the scanner's physics): the contract gives a fourth channel laid on the
+    colours pixel for pixel; **declared per source and resolution** (`Capabilities::infrared`,
+    like the stripes), opened one capture at a time; until the algorithm exists the tick
+    **reads and keeps** the channel (saved beside the 16-bit and RAW files), the removal comes
+    in the same tick.
+
+    **Done** (17 November 2026, not committed): the contract (`Infrared { source, dpi }`,
+    `Capabilities::infrared_at`, `ScanRequest::infrared`, `ScanResult::infrared`, `check`
+    refusing it where not declared); the made-up `FakeScanner::with_infrared` (negatives at
+    600 and 1200 dpi, dust on its strip, dark in its infrared); the app's tick **Leggi
+    l'infrarosso** in Pellicola where declared (off by default, remembered, never for the
+    preview nor "Senza elaborazioni"), the channel cut and straightened with each frame, kept
+    through "Separa" and the page's turns, saved as `…-infrarosso` (16-bit grey, linear); the
+    memory estimate counts it; e2e with the made-up scanner with it and with one without.
+
+    **Left, in order:**
+    1. **A second ICE capture** (Matteo at Epson Scan): the same frame again at 2400 dpi
+       (does the scale or the `1E 88` block change between scans?), then the resolutions
+       Epson Scan offers ICE at (1200, 4800?) and a slide with ICE. Decides whether the
+       driver reads the holes every time, as Epson, or keeps a fixed scale per resolution.
+    2. **The driver's infrared pass**: the rules of the second pass (from the captures, as
+       `filmsetup.py` did for colour: the unit's move, the exposure loop, the shading on the
+       wider columns, the start move +39), the hole pre-read and `1E 88`/`1E 87 01`, every one
+       guarded in `guard.rs` before anything moves; a replay of capture 18's infrared pass
+       first (`epson4490 replay`, Matteo told what is sent: `1E A2 04`/`05`, mode `20`, the
+       unit's 1,729 steps, never sent by our code), then our own; the registration (green
+       row, the line shift, the scale) in the driver, checked against `ice.py`; then the
+       4490 declares `Infrared { Negative, 2400 }` and nothing else.
+    3. **The dust removal** in `scan-imaging` (generic, from what it measures): the infrared
+       relative to its local mean (5 % explains 99 % of Epson's changes here), the cyan
+       crosstalk taken away first, the pixels found filled from their neighbours; measured
+       against Epson Scan's ICE TIFFs of the same frames, then in the same tick.
+
 **F. Release** (milestone 7)
 
 18. "Firmware missing" as a state of its own and the firmware's path in the Preferences (left
@@ -1964,7 +2033,10 @@ documents, 1-2. With them, about 58-115 hours.
   New functions come with the field in `Capabilities`, the branch of the app and two e2e
   (a made-up scanner with it, one without):
   - **infrared** (Digital ICE): a fourth channel in `ScanResult` and its use in `scan-imaging`
-    (dust found where the infrared is dark); until then the 4490's films scan without it;
+    (dust found where the infrared is dark); until then the 4490's films scan without it.
+    **The contract is in** (17 November 2026, step 17 above: `Capabilities::infrared` per
+    source and resolution, the channel registered by the driver); the use in `scan-imaging`
+    is left;
   - **medium format**: an `Adapter` whose film is not only 35 mm (`film::frames` knows 35 mm
     strips and slides only);
   - **firmware missing**: a `DeviceStatus` state (or an error at open) the app shows as "needs

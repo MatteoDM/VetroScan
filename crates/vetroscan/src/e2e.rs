@@ -3933,3 +3933,98 @@ fn senza_elaborazioni_and_raw_files_say_what_their_numbers_are() {
     let name = save_as(&mut ui, Output::TiffPages);
     assert_eq!(profiles(&name, &ui), vec![(*b"RGB ", G22); n]);
 }
+
+// ------------------------------------------------------------------ infrared
+
+/// Digital ICE, the scanner that reads an infrared channel from negatives (at 600 and 1200
+/// dpi): "Leggi l'infrarosso" offered there only, off by default and remembered; asked for the
+/// frames when ticked (never for the preview, nor "Senza elaborazioni"); kept with each frame,
+/// one sample a pixel, dark on the strip's dust; saved beside each 16-bit file.
+#[test]
+fn the_infrared_is_offered_asked_kept_and_saved_where_the_scanner_reads_it() {
+    use crate::{DeepFormat, Output};
+    use scanner_api::fake::FILM_INFRARED;
+    let tick = "Leggi l'infrarosso";
+    let scanner = FakeScanner::with_infrared();
+    let controls = scanner.controls();
+    let mut ui = Ui::with_scanners(vec![scanner]);
+    ui.send(Message::Pane(crate::Pane::Scan));
+    assert!(!ui.shows(tick), "not on the glass");
+    ui.click("Pellicola");
+    ui.send(Message::Dpi(600));
+    assert!(ui.shows(tick));
+    assert!(!ui.app.settings().infrared, "off by default");
+    assert!(!ui.app.request().infrared);
+    ui.send(Message::Infrared(true));
+    assert_eq!(ui.app.prefs().film.infrared, Some(true));
+    assert!(ui.app.request().infrared);
+    // "Senza elaborazioni": the scan as the scanner gives it, no second pass.
+    ui.send(Message::Untouched(true));
+    assert!(!ui.app.request().infrared);
+    ui.send(Message::Untouched(false));
+    ui.send(Message::Preview);
+    ui.settle();
+    ui.scan(1);
+    assert_eq!(ui.app.pages.len(), 2, "{}", ui.app.note);
+    let asked = controls.requests();
+    let (preview, frames) = asked.split_first().expect("the preview");
+    assert!(!preview.infrared, "not for the preview");
+    assert!(
+        !frames.is_empty() && frames.iter().all(|r| r.infrared),
+        "{frames:?}"
+    );
+    let clear = (FILM_INFRARED * 65535.0) as u16;
+    let mut darkest = u16::MAX;
+    for page in &ui.app.pages {
+        let full = &page.raw.full;
+        let ir = page.infrared.as_deref().expect("the infrared kept");
+        assert_eq!(ir.len(), full.width * full.height);
+        let mut sorted = ir.to_vec();
+        sorted.sort_unstable();
+        assert!(
+            sorted[sorted.len() / 2].abs_diff(clear) < 300,
+            "the film clear in the infrared: {}",
+            sorted[sorted.len() / 2]
+        );
+        darkest = darkest.min(sorted[0]);
+    }
+    assert!(darkest < clear / 2, "the dust dark: {darkest}");
+    // Saved beside each 16-bit file, with its name.
+    let before = ui.saved();
+    ui.send(Message::Output(Output::Deep(DeepFormat::Png)));
+    ui.send(Message::Save);
+    let new: Vec<String> = ui
+        .saved()
+        .into_iter()
+        .filter(|n| !before.contains(n))
+        .collect();
+    assert_eq!(new.len(), 4, "{new:?} {}", ui.app.note);
+    let infrared: Vec<&String> = new.iter().filter(|n| n.contains("-infrarosso")).collect();
+    assert_eq!(infrared.len(), 2, "{new:?}");
+    for name in infrared {
+        let stem = name.trim_end_matches("-infrarosso.png");
+        assert!(new.iter().any(|n| n == &format!("{stem}.png")), "{new:?}");
+    }
+    // Remembered: the app opened again keeps the tick.
+    let mut reopened = Ui::with_scanners(vec![FakeScanner::with_infrared()]);
+    reopened.click("Pellicola");
+    reopened.send(Message::Dpi(600));
+    assert!(reopened.app.request().infrared);
+}
+
+/// The same with a scanner that reads no infrared: no tick, nothing asked, nothing kept, even
+/// with the choice left on by another scanner.
+#[test]
+fn no_infrared_where_the_scanner_reads_none() {
+    let (mut ui, controls) = with_adapter();
+    ui.send(Message::Pane(crate::Pane::Scan));
+    ui.click("Pellicola");
+    ui.send(Message::Dpi(600));
+    assert!(!ui.shows("Leggi l'infrarosso"));
+    ui.send(Message::Infrared(true));
+    assert!(!ui.app.request().infrared);
+    ui.click("Scansiona foto");
+    assert_eq!(ui.app.pages.len(), 2, "{}", ui.app.note);
+    assert!(controls.requests().iter().all(|r| !r.infrared));
+    assert!(ui.app.pages.iter().all(|p| p.infrared.is_none()));
+}

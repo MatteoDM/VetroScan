@@ -11,11 +11,12 @@
 //! too, a strip of two frames in its holder ([`film`]);
 //! [`FakeScanner::with_slides`] one for slides and negatives, two slides in
 //! its holder ([`slides`]) until a test puts the strip in
-//! ([`Controls::load`]).
+//! ([`Controls::load`]); [`FakeScanner::with_infrared`] one that reads an
+//! infrared channel from negatives, with [`dust`] on its strip.
 
 use crate::{
     check, Adapter, Backend, ButtonInfo, Capabilities, ColourCorrection, ColourMatrix, ColourMode,
-    DeviceInfo, DeviceStatus, Error, LampInfo, LampState, Progress, Result, ScanMemory,
+    DeviceInfo, DeviceStatus, Error, Infrared, LampInfo, LampState, Progress, Result, ScanMemory,
     ScanRequest, ScanResult, Scanner, Source, Stripes, SuggestedAction, Tone,
 };
 use scan_imaging::{Format, Image};
@@ -94,6 +95,50 @@ fn strip(x: f64, y: f64, base: [f64; 3]) -> [f64; 3] {
         }
     }
     base
+}
+
+/// Specks of dust on the first frame of [`film`]'s strip with [`FakeScanner::with_infrared`]:
+/// centre x, y and radius, inches from the adapter's top left corner.
+pub const SPECKS: [[f64; 3]; 2] = [[0.7, 0.9, 0.006], [1.1, 1.5, 0.004]];
+
+/// A hair on the same frame: from x, y to x, y (inches), and its width.
+pub const HAIR: ([f64; 4], f64) = ([0.5, 1.2, 0.9, 1.35], 0.0015);
+
+/// The light the [`SPECKS`] and the [`HAIR`] let through, in every channel and in the infrared.
+pub const DUST_LETS: f64 = 0.25;
+
+/// The film's transmission of the infrared of [`FakeScanner::with_infrared`]: nearly clear,
+/// whatever the scene (films' dyes let infrared through).
+pub const FILM_INFRARED: f64 = 0.85;
+
+/// How much of the light the dust on [`FakeScanner::with_infrared`]'s strip lets through at a
+/// point (inches from the adapter's top left corner): [`DUST_LETS`] on the [`SPECKS`] and the
+/// [`HAIR`], 1 elsewhere.
+pub fn dust(x: f64, y: f64) -> f64 {
+    let speck = SPECKS
+        .iter()
+        .any(|&[cx, cy, r]| (x - cx).hypot(y - cy) <= r);
+    let ([x0, y0, x1, y1], width) = HAIR;
+    let (dx, dy) = (x1 - x0, y1 - y0);
+    let t = (((x - x0) * dx + (y - y0) * dy) / dx.mul_add(dx, dy * dy)).clamp(0.0, 1.0);
+    let hair = (x - t.mul_add(dx, x0)).hypot(y - t.mul_add(dy, y0)) <= width / 2.0;
+    if speck || hair {
+        DUST_LETS
+    } else {
+        1.0
+    }
+}
+
+/// [`dust`] at each pixel of a request's area, row by row.
+fn dust_map(request: &ScanRequest) -> Vec<f64> {
+    let a = request.area;
+    let dpi = f64::from(request.dpi);
+    (0..a.height)
+        .flat_map(|row| {
+            let gy = (f64::from(a.y) + f64::from(row) + 0.5) / dpi;
+            (0..a.width).map(move |col| dust((f64::from(a.x) + f64::from(col) + 0.5) / dpi, gy))
+        })
+        .collect()
 }
 
 /// The adapter's area of [`FakeScanner::with_two_strips`], inches: wide
@@ -337,6 +382,7 @@ impl FakeScanner {
                 dpi: 2400,
                 times: 2.0,
             }],
+            infrared: Vec::new(),
         })
     }
 
@@ -365,6 +411,7 @@ impl FakeScanner {
             stripes: Vec::new(),
             colour: Vec::new(),
             scan_memory: Vec::new(),
+            infrared: Vec::new(),
         })
     }
 
@@ -420,6 +467,21 @@ impl FakeScanner {
             a.area_inches = TWO_STRIPS_INCHES;
         }
         s.controls.load(Holder::TwoStrips);
+        s
+    }
+
+    /// [`Self::with_adapter`] reading an infrared channel from negatives at both its film
+    /// resolutions, as the Epson 4490 with Digital ICE; its strip has [`dust`] on it, which the
+    /// infrared shows dark on a nearly clear film ([`FILM_INFRARED`]).
+    pub fn with_infrared() -> Self {
+        let mut s = Self::with_adapter();
+        s.caps.model = "Flatbed A4 infrared".into();
+        s.caps.infrared = [600, 1200]
+            .map(|dpi| Infrared {
+                source: Source::Negative,
+                dpi,
+            })
+            .to_vec();
         s
     }
 
@@ -540,6 +602,29 @@ impl Scanner for FakeScanner {
             self.controls.lamp_on.store(true, Ordering::SeqCst);
         }
         let mut deep = samples16(request, self.controls.holder());
+        // The dust lies on the strip of the scanner that reads infrared, so that the infrared has
+        // something to show.
+        let dusty = !self.caps.infrared.is_empty()
+            && request.source.is_film()
+            && self.controls.holder() == Holder::Strip;
+        let dust = dusty.then(|| dust_map(request));
+        if let Some(dust) = &dust {
+            for (pixel, &k) in deep.chunks_mut(3).zip(dust) {
+                for v in pixel {
+                    *v = (f64::from(*v) * k).round() as u16;
+                }
+            }
+        }
+        let infrared = request.infrared.then(|| match &dust {
+            Some(dust) => dust
+                .iter()
+                .map(|&k| (FILM_INFRARED * k * 65535.0).round() as u16)
+                .collect(),
+            None => vec![
+                (FILM_INFRARED * 65535.0).round() as u16;
+                request.area.width as usize * request.area.height as usize
+            ],
+        });
         let amplitude = f64::from(self.controls.stripes.load(Ordering::SeqCst)) / 1000.0;
         if let Some(repeat) = self.caps.stripes_at(request.source, request.dpi) {
             if amplitude > 0.0 {
@@ -564,6 +649,7 @@ impl Scanner for FakeScanner {
                 data: rgb,
             },
             samples16,
+            infrared,
             details: Vec::new(),
         })
     }
@@ -645,6 +731,7 @@ mod tests {
                 height: 300,
             },
             depth,
+            infrared: false,
         }
     }
 
@@ -856,5 +943,76 @@ mod tests {
         assert_eq!(crate::button_mask(3), 0b111);
         assert_eq!(crate::button_mask(32), u32::MAX);
         assert_eq!(crate::button_mask(40), u32::MAX);
+    }
+
+    #[test]
+    fn infrared_only_where_declared_and_dark_on_the_dust() {
+        let go = &mut |_| true;
+        // The first frame at 600 dpi: the speck at (0.7, 0.9) inches and the hair are in it.
+        let film = ScanRequest {
+            source: Source::Negative,
+            area: Area {
+                x: 240,
+                y: 330,
+                width: 567,
+                height: 850,
+            },
+            infrared: true,
+            ..request(600, 16)
+        };
+        let mut s = FakeScanner::with_infrared();
+        assert!(s.caps.infrared_at(Source::Negative, 600));
+        assert!(!s.caps.infrared_at(Source::Glass, 600));
+        let r = s.scan(&film, go).unwrap();
+        let ir = r.infrared.unwrap();
+        assert_eq!(ir.len(), 567 * 850, "one sample a pixel");
+        let clear = (FILM_INFRARED * 65535.0).round() as u16;
+        // The speck's centre, (0.7, 0.9) inches: 420 - 240 across, 540 - 330 down.
+        let (x, y) = (420 - 240, 540 - 330);
+        assert!(ir[y * 567 + x] < clear / 3, "dark on the speck");
+        assert_eq!(ir[y * 567 + x + 20], clear, "clear beside it");
+        let deep = r.samples16.unwrap();
+        let rgb = |x: usize| deep[(y * 567 + x) * 3..][..3].to_vec();
+        assert!(
+            (0..3).all(|c| rgb(x)[c] < rgb(x + 20)[c] / 2),
+            "the dust in the colours too: {:?} {:?}",
+            rgb(x),
+            rgb(x + 20)
+        );
+        // Not asked: none.
+        let without = ScanRequest {
+            infrared: false,
+            ..film
+        };
+        assert_eq!(s.scan(&without, go).unwrap().infrared, None);
+        // Refused where it is not declared: another resolution, the glass, another scanner.
+        for (scanner, request) in [
+            (
+                FakeScanner::with_infrared(),
+                ScanRequest { dpi: 1200, ..film },
+            ),
+            (
+                FakeScanner::with_infrared(),
+                ScanRequest {
+                    source: Source::Glass,
+                    ..film
+                },
+            ),
+            (FakeScanner::with_adapter(), film),
+        ] {
+            let mut scanner = scanner;
+            let declared = scanner.caps.infrared_at(request.source, request.dpi);
+            let e = scanner.scan(&request, go);
+            assert_eq!(e.is_ok(), declared, "{request:?}");
+        }
+        let plain = FakeScanner::with_adapter()
+            .scan(&without, go)
+            .unwrap()
+            .samples16
+            .unwrap();
+        assert!(
+            plain[(y * 567 + x) * 3] > 2 * rgb(x)[0],
+            "no dust on its strip"
+        );
     }
 }

@@ -110,6 +110,21 @@ pub struct Capabilities {
     /// how much more: the host counts it when it estimates a scan's memory. A resolution not
     /// listed takes the image's size.
     pub scan_memory: Vec<ScanMemory>,
+    /// Where it can read an infrared channel besides the colours (Digital ICE): films are nearly
+    /// transparent to infrared, dust, hairs and scratches are not, so the host finds them there
+    /// (`scan_imaging`). One entry per source and resolution it was tried at; a scan asks for it
+    /// with [`ScanRequest::infrared`].
+    pub infrared: Vec<Infrared>,
+}
+
+/// An infrared channel a scanner reads from one source at one resolution
+/// ([`Capabilities::infrared`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Infrared {
+    /// Where the scan comes from.
+    pub source: Source,
+    /// The resolution, dpi.
+    pub dpi: u16,
 }
 
 /// How much memory a scanner's driver needs at one resolution, as a multiple of what the same
@@ -169,7 +184,15 @@ impl Capabilities {
             stripes: Vec::new(),
             colour: Vec::new(),
             scan_memory: Vec::new(),
+            infrared: Vec::new(),
         }
+    }
+
+    /// Whether it reads an infrared channel from `source` at `dpi` ([`Infrared`]).
+    pub fn infrared_at(&self, source: Source, dpi: u16) -> bool {
+        self.infrared
+            .iter()
+            .any(|i| i.source == source && i.dpi == dpi)
     }
 
     /// Lines after which the stripes of a scan from `source` at `dpi`
@@ -406,6 +429,10 @@ pub struct ScanRequest {
     /// Bits per sample, one of [`Capabilities::depths`]: with 16 the
     /// samples also come in [`ScanResult::samples16`].
     pub depth: u8,
+    /// Read the infrared channel too ([`ScanResult::infrared`]): only where
+    /// [`Capabilities::infrared_at`] says so. It takes a second pass on some
+    /// scanners, so about twice the time.
+    pub infrared: bool,
 }
 
 /// A finished scan.
@@ -415,6 +442,11 @@ pub struct ScanResult {
     pub image: Image,
     /// The same samples at 16 bits, when the request asked for them.
     pub samples16: Option<Vec<u16>>,
+    /// The infrared channel, when the request asked for it: one linear 16-bit sample a pixel,
+    /// row by row, the transmission as the colours' (full scale: the lamp through no film).
+    /// The driver lays it on the colours pixel for pixel (a second pass, another lens
+    /// magnification are its business): a pixel here is the same spot as in [`Self::image`].
+    pub infrared: Option<Vec<u16>>,
     /// What else the scanner says about the scan (label, value), for the
     /// curious: gains, warm-up, buffer.
     pub details: Vec<(String, String)>,
@@ -483,6 +515,12 @@ pub fn check(caps: &Capabilities, request: &ScanRequest) -> Result<()> {
         return Err(Error::InvalidRequest(format!(
             "{} dpi is not one of {:?}",
             request.dpi, resolutions
+        )));
+    }
+    if request.infrared && !caps.infrared_at(request.source, request.dpi) {
+        return Err(Error::InvalidRequest(format!(
+            "this scanner reads no infrared from {:?} at {} dpi",
+            request.source, request.dpi
         )));
     }
     if !caps.depths.contains(&request.depth) {

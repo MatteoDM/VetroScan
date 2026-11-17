@@ -162,6 +162,7 @@ fn the_registry_opens_the_scanner_like_the_app() {
             height: side,
         },
         depth: 16,
+        infrared: false,
     };
     let mut stages = 0;
     let result = scanner

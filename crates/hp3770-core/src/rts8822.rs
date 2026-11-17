@@ -101,6 +101,8 @@ pub fn capabilities(profile: &Profile) -> Capabilities {
             .filter(|&&dpi| dpi > 1200)
             .map(|&dpi| ScanMemory { dpi, times: 2.0 })
             .collect(),
+        // No infrared lamp in the HP 3770's adapter.
+        infrared: Vec::new(),
     }
 }
 
@@ -367,6 +369,7 @@ impl<T: Transport + Send> Scanner for Rts8822<T> {
         Ok(ScanResult {
             image,
             samples16: report.samples16,
+            infrared: None,
             details,
         })
     }
@@ -459,6 +462,7 @@ mod tests {
                     height: 4,
                 },
                 depth: 16,
+                infrared: false,
             },
             true,
             &HP3770,
@@ -493,6 +497,7 @@ mod tests {
                     height: h,
                 },
                 depth: 16,
+                infrared: false,
             },
             true,
             &HP3770,
@@ -516,6 +521,7 @@ mod tests {
                     height: h,
                 },
                 depth: 16,
+                infrared: false,
             },
             true,
             &HP3770,
@@ -542,6 +548,7 @@ mod tests {
                     height: 4,
                 },
                 depth: 8,
+                infrared: false,
             },
             true,
             &HP3770,

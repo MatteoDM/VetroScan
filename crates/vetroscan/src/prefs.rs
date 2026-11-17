@@ -138,6 +138,9 @@ pub struct StoredMode {
     /// With `untouched`, negatives left as they are, not inverted (absent:
     /// inverted).
     pub keep_negative: Option<bool>,
+    /// Films: read the infrared channel where the scanner offers it, for dust and scratches
+    /// (absent: no).
+    pub infrared: Option<bool>,
     /// Films: the base of the roll in the adapter, locked ("Blocca la base"),
     /// transmission per channel (absent: each strip measures its own).
     pub roll_base: Option<[f32; 3]>,
@@ -169,6 +172,7 @@ impl Default for StoredMode {
             scanner_colour: None,
             untouched: None,
             keep_negative: None,
+            infrared: None,
             roll_base: None,
             slides: false,
             adjust: StoredAdjust::default(),
@@ -559,6 +563,21 @@ mod tests {
         let mut chosen = p.clone();
         chosen.film.untouched = Some(true);
         chosen.film.keep_negative = Some(true);
+        let text = serde_json::to_string(&chosen).unwrap();
+        assert_eq!(serde_json::from_str::<Prefs>(&text).unwrap(), chosen);
+    }
+
+    #[test]
+    fn files_before_the_infrared_read_none() {
+        // A file of v0.10: no "infrared".
+        let old = r#"{"film": {"dpi": 1200, "colour": "colore", "threshold": 128,
+                        "output": "jpeg", "pdf_size": "scansione", "pdf_sheet": "auto",
+                        "pdf_fit": "reale", "auto_save": false, "slides": false,
+                        "untouched": false, "adjust": {}}}"#;
+        let p = serde_json::from_str::<Prefs>(old).unwrap().migrated();
+        assert_eq!(p.film.infrared, None, "no infrared pass, as before");
+        let mut chosen = p.clone();
+        chosen.film.infrared = Some(true);
         let text = serde_json::to_string(&chosen).unwrap();
         assert_eq!(serde_json::from_str::<Prefs>(&text).unwrap(), chosen);
     }

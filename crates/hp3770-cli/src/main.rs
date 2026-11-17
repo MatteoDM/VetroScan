@@ -531,6 +531,7 @@ fn scan(
             height: area.height,
         },
         depth,
+        infrared: false,
     };
     let start = Instant::now();
     let mut last_percent = None;

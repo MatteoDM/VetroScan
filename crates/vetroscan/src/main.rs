@@ -738,6 +738,11 @@ struct Settings {
     /// With [`Settings::untouched`], negatives: left as they are, not
     /// inverted (for programs that turn them into positives themselves).
     keep_negative: bool,
+    /// Films: read the infrared channel too, where the scanner reads one from this film at this
+    /// resolution (`Capabilities::infrared`), for the dust and scratches it shows. The scan
+    /// takes about twice the time; the channel is kept with each frame and saved beside its
+    /// 16-bit and RAW files.
+    infrared: bool,
 }
 
 impl Settings {
@@ -765,6 +770,7 @@ impl Settings {
             scanner_colour: true,
             untouched: false,
             keep_negative: false,
+            infrared: false,
         }
     }
 
@@ -871,6 +877,7 @@ impl Settings {
             scanner_colour: Some(self.scanner_colour),
             untouched: Some(self.untouched),
             keep_negative: Some(self.keep_negative),
+            infrared: Some(self.infrared),
             roll_base: None,
             slides: false,
             adjust: prefs::StoredAdjust {
@@ -1023,6 +1030,7 @@ impl Settings {
             scanner_colour: m.scanner_colour.unwrap_or(base.scanner_colour),
             untouched: m.untouched.unwrap_or(base.untouched),
             keep_negative: m.keep_negative.unwrap_or(base.keep_negative),
+            infrared: m.infrared.unwrap_or(base.infrared),
         }
     }
 }
@@ -1590,6 +1598,9 @@ struct Page {
     /// The chip's 16-bit samples (same size as `raw.full`), when the scan
     /// was made for a RAW file.
     raw16: Option<Arc<Vec<u16>>>,
+    /// The scanner's infrared channel (one 16-bit sample a pixel of `raw.full`), when the scan
+    /// read one ([`Settings::infrared`]).
+    infrared: Option<Arc<Vec<u16>>>,
     /// Turns, straightening, crop and size, worked out from the samples
     /// each time (the samples stay as scanned).
     transform: Transform,
@@ -1626,6 +1637,7 @@ impl Page {
             origin: None,
             whole: None,
             raw16: None,
+            infrared: None,
             transform: Transform::default(),
             layout: None,
             focus: [0.5, 0.5],
@@ -1688,6 +1700,43 @@ impl Page {
             Arc::new(t.apply(samples, full.width, full.height, 3, &fill).0)
         });
         (Arc::new(edited(full, t, &self.raw.tone)), deep)
+    }
+
+    /// The infrared channel at full size with the geometry edits, as [`Self::full_samples`]:
+    /// width, height and the samples (full scale, clear, where a turn leaves a corner).
+    fn full_infrared(&self) -> Option<(usize, usize, Vec<u16>)> {
+        let ir = self.infrared.as_ref()?;
+        let full = &self.raw.full;
+        let (data, width, height) =
+            self.transform
+                .apply(ir.as_slice(), full.width, full.height, 1, &[u16::MAX]);
+        Some((width, height, data))
+    }
+
+    /// Saves the infrared channel beside `target` (its name with "-infrarosso", a 16-bit grey
+    /// TIFF or PNG as `target`, linear), when the page has one: the file written.
+    fn save_infrared(
+        &self,
+        target: &std::path::Path,
+    ) -> Result<Option<std::path::PathBuf>, String> {
+        let Some((width, height, data)) = self.full_infrared() else {
+            return Ok(None);
+        };
+        let ext = match target.extension().and_then(|e| e.to_str()) {
+            Some(e) if e.eq_ignore_ascii_case("png") => "png",
+            _ => "tif",
+        };
+        let stem = target
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("foto");
+        // not translated: a file name
+        let path = target.with_file_name(format!("{stem}-infrarosso.{ext}"));
+        let full = &self.raw.full;
+        let dpi = self.transform.output_dpi(full.width, full.height, full.dpi);
+        vetroscan_export::save_deep(&path, width, height, 1, dpi, &data, 1.0, &software())
+            .map_err(|e| e.to_string())?;
+        Ok(Some(path))
     }
 
     /// A point of the viewer (`frame`: the whole turned frame) on the
@@ -2125,6 +2174,8 @@ enum Message {
     KeepNegative(bool),
     /// "Correggi i colori dello scanner" (films it declares a matrix for).
     ScannerColour(bool),
+    /// "Leggi l'infrarosso" (films it reads an infrared channel from).
+    Infrared(bool),
     /// "Blocca la base": the base of the last strip becomes the roll's.
     LockBase,
     /// "Nuovo rullino": each strip measures its own base again.
@@ -2377,6 +2428,10 @@ impl Bench {
 /// The measures of each strip of negatives: where it lies (left, top,
 /// width, height in pixels) and how it becomes its picture.
 type StripMeasures = Vec<([f32; 4], film::Negative)>;
+
+/// One image cut out of a scan ([`App::cut`]): the image, where it was found, its 16-bit
+/// samples and its infrared.
+type Cut = (Image, Option<Found>, Option<Vec<u16>>, Option<Vec<u16>>);
 
 /// A scan of films developed ([`App::develop`]).
 struct Developed {
@@ -3906,7 +3961,21 @@ impl App {
             source: self.source(),
             area,
             depth,
+            infrared: self.wants_infrared(dpi),
         }
+    }
+
+    /// Whether the scanner in use reads an infrared channel from the film chosen at the
+    /// resolution chosen (`Capabilities::infrared`): the tick "Leggi l'infrarosso".
+    fn offers_infrared(&self) -> bool {
+        self.filming() && self.caps.infrared_at(self.source(), self.dpi())
+    }
+
+    /// Whether a scan at `dpi` asks for the infrared channel: films, where the scanner reads one
+    /// there and the user ticked it; never "Senza elaborazioni".
+    fn wants_infrared(&self, dpi: u16) -> bool {
+        let s = self.settings();
+        self.filming() && s.infrared && !s.untouched && self.caps.infrared_at(self.source(), dpi)
     }
 
     /// The scan of a pass.
@@ -3992,6 +4061,7 @@ impl App {
             source: Source::Glass,
             area,
             depth: if self.offers_16bit() { 16 } else { 8 },
+            infrared: false,
         };
         if let (Some(worker), None) = (&self.worker, &self.busy) {
             worker.send(Command::Scan(Purpose::Measure, request));
@@ -4033,7 +4103,10 @@ impl App {
     fn bytes(&self, request: &ScanRequest) -> f64 {
         let a = request.area;
         let raw = 3.0 * f64::from(a.width) * f64::from(a.height);
-        let depth = if request.depth == 16 { 3.0 } else { 1.0 };
+        // The 8-bit samples, the 16-bit ones besides them, and the infrared's one 16-bit sample
+        // a pixel (two thirds of the 8-bit RGB).
+        let depth = if request.depth == 16 { 3.0 } else { 1.0 }
+            + if request.infrared { 2.0 / 3.0 } else { 0.0 };
         let sent = match self.double_dpi() {
             Some(double) if self.doubles() => double,
             _ => request.dpi,
@@ -4184,12 +4257,19 @@ impl App {
                 self.doubled = true;
             }
         }
+        // The infrared only for the picture, where it is offered at the resolution sent.
+        request.infrared = purpose == Purpose::Page && self.wants_infrared(request.dpi);
         if let (Some(worker), None) = (&self.worker, &self.busy) {
             // What was asked, for the log: a scan too large shows there.
             let a = request.area;
             worker::log(&format!(
-                "scan {purpose:?}: {:?} {} dpi, {} x {} pixels, {} bits",
-                request.source, request.dpi, a.width, a.height, request.depth
+                "scan {purpose:?}: {:?} {} dpi, {} x {} pixels, {} bits{}",
+                request.source,
+                request.dpi,
+                a.width,
+                a.height,
+                request.depth,
+                if request.infrared { ", infrared" } else { "" }
             ));
             worker.send(Command::Scan(purpose, request));
             self.busy = Some((purpose, None));
@@ -4296,6 +4376,7 @@ impl App {
             find: false,
         };
         let samples = page.raw16.as_ref().map(|s| s.to_vec());
+        let infrared = page.infrared.as_ref().map(|s| s.to_vec());
         let (tone, scanner, settings, own) = (
             page.raw.tone,
             Arc::clone(&page.raw.scanner),
@@ -4303,9 +4384,9 @@ impl App {
             page.own,
         );
         let title = self.page_title(i);
-        let parts: Vec<Page> = Self::cut((*full).clone(), samples, Some(&job))
+        let parts: Vec<Page> = Self::cut((*full).clone(), samples, infrared, Some(&job))
             .into_iter()
-            .map(|(image, origin, samples)| {
+            .map(|(image, origin, samples, infrared)| {
                 let (w, h) = (image.width, image.height);
                 let mut raw = Raw::new(image, &self.caps);
                 raw.tone = tone;
@@ -4315,6 +4396,7 @@ impl App {
                 part.own = own;
                 part.origin = origin;
                 part.raw16 = samples.filter(|s| s.len() == w * h * 3).map(Arc::new);
+                part.infrared = infrared.filter(|s| s.len() == w * h).map(Arc::new);
                 part
             })
             .collect();
@@ -4339,17 +4421,18 @@ impl App {
     }
 
     /// The images of a scan: the originals cut out and straightened, or
-    /// the whole scan.
+    /// the whole scan; with each, its 16-bit samples and its infrared, cut the same way.
     fn cut(
         image: Image,
         samples16: Option<Vec<u16>>,
+        infrared: Option<Vec<u16>>,
         job: Option<&Job>,
-    ) -> Vec<(Image, Option<Found>, Option<Vec<u16>>)> {
+    ) -> Vec<Cut> {
         let Some((job, area)) = job
             .filter(|j| !j.crops.is_empty())
             .and_then(|j| Some((j, j.area?)))
         else {
-            return vec![(image, None, samples16)];
+            return vec![(image, None, samples16, infrared)];
         };
         let factor = f32::from(image.dpi) / f32::from(PREVIEW_DPI);
         let inset = INSET_MM / 25.4 * f32::from(image.dpi);
@@ -4362,7 +4445,10 @@ impl App {
                 let samples = samples16
                     .as_ref()
                     .map(|s| detect::straightened16(s, image.width, image.height, &f).2);
-                (image.straightened(&f), Some(*c), samples)
+                let infrared = infrared
+                    .as_ref()
+                    .map(|s| detect::straightened16_one(s, image.width, image.height, &f));
+                (image.straightened(&f), Some(*c), samples, infrared)
             })
             .collect()
     }
@@ -4854,6 +4940,7 @@ impl App {
                 &software(),
             )
             .map_err(|e| e.to_string())?;
+            page.save_infrared(&target)?;
         }
         Ok(if n == 1 {
             path.display().to_string()
@@ -4906,6 +4993,7 @@ impl App {
                 RawFormat::Dng => vetroscan_export::save_dng(&target, &raw),
             }
             .map_err(|e| e.to_string())?;
+            page.save_infrared(&target)?;
             written.push(target);
         }
         Ok(match written.as_slice() {
@@ -5314,6 +5402,7 @@ impl App {
             }
             Message::KeepNegative(on) => self.settings_mut().keep_negative = on,
             Message::ScannerColour(on) => self.settings_mut().scanner_colour = on,
+            Message::Infrared(on) => self.settings_mut().infrared = on,
             Message::LockBase => {
                 let negatives = self.filming() && self.film_kind() == Film::Negative;
                 if let Some(base) = self.strip_base.filter(|_| negatives) {
@@ -5457,6 +5546,7 @@ impl App {
                     new.scanner_colour = self.settings().scanner_colour;
                     new.untouched = self.settings().untouched;
                     new.keep_negative = self.settings().keep_negative;
+                    new.infrared = self.settings().infrared;
                     self.change(|s| *s = new);
                     self.note = trf(
                         "Preset «{name}» applicato (Ctrl+Z per tornare indietro)",
@@ -6260,7 +6350,12 @@ impl App {
                 self.busy = None;
                 match result {
                     Ok(done) => {
-                        self.on_scan(purpose, done.image.clone(), done.samples16.clone());
+                        self.on_scan(
+                            purpose,
+                            done.image.clone(),
+                            done.samples16.clone(),
+                            done.infrared.clone(),
+                        );
                     }
                     Err(e) => {
                         self.redo = None;
@@ -6385,7 +6480,15 @@ impl App {
         }
     }
 
-    fn on_scan(&mut self, purpose: Purpose, image: Image, samples16: Option<Vec<u16>>) {
+    fn on_scan(
+        &mut self,
+        purpose: Purpose,
+        image: Image,
+        samples16: Option<Vec<u16>>,
+        infrared: Option<Vec<u16>>,
+    ) {
+        // One sample a pixel of the scan, as the contract says, or nothing.
+        let infrared = infrared.filter(|ir| ir.len() == image.width * image.height);
         let (image, samples16) = self.cleaned(purpose, image, samples16);
         let colour_noise = self.settings().colour_noise;
         let correction = self.colour_correction();
@@ -6548,8 +6651,10 @@ impl App {
                 } else {
                     (image, samples16)
                 };
-                for (image, origin, samples) in Self::cut(image, samples16, job.as_ref()) {
-                    self.add_page(image, origin, samples, kept.clone());
+                for (image, origin, samples, infrared) in
+                    Self::cut(image, samples16, infrared, job.as_ref())
+                {
+                    self.add_page(image, origin, samples, infrared, kept.clone());
                 }
                 self.result_view = View::default();
                 self.tab = Tab::Result;
@@ -6569,6 +6674,7 @@ impl App {
         image: Image,
         origin: Option<Found>,
         samples16: Option<Vec<u16>>,
+        infrared: Option<Vec<u16>>,
         whole: Option<Whole>,
     ) {
         self.close_editor(true);
@@ -6585,6 +6691,7 @@ impl App {
         }
         page.origin = origin;
         page.raw16 = samples16.filter(|s| s.len() == w * h * 3).map(Arc::new);
+        page.infrared = infrared.filter(|s| s.len() == w * h).map(Arc::new);
         let first = self.batch.0 == 0;
         self.batch.0 += 1;
         let of = if self.batch.1 > 1 {
@@ -8009,6 +8116,23 @@ impl App {
                             text(tr(
                                 "La correzione che lo scanner dichiara per questa pellicola. \
                                  Senza, i colori come li legge il sensore.",
+                            ))
+                            .size(11),
+                        );
+                }
+                if self.offers_infrared() {
+                    pane = pane
+                        .push(
+                            checkbox(self.settings().infrared)
+                                .label(tr("Leggi l'infrarosso"))
+                                .on_toggle(Message::Infrared)
+                                .text_size(13),
+                        )
+                        .push(
+                            text(tr(
+                                "Una seconda lettura con la luce infrarossa, che passa la \
+                                 pellicola ma non la polvere e i graffi: circa il doppio del \
+                                 tempo. Si salva accanto ai file a 16 bit e RAW.",
                             ))
                             .size(11),
                         );

@@ -275,6 +275,9 @@ pub fn capabilities() -> Capabilities {
             matrix: GLASS_COLOUR,
         }],
         scan_memory: scan_memory(),
+        // Digital ICE (capture 18, `docs/architecture-plan.md` phase 12 step 17): declared once
+        // the driver reads the infrared pass and lays it on the colours; not yet.
+        infrared: Vec::new(),
     }
 }
 
@@ -342,6 +345,7 @@ pub fn film_result_of(s: scan::FilmScanned, dpi: u16, height: u32, deep: bool) -
             data: wide.iter().map(|&v| (v >> 8) as u8).collect(),
         },
         samples16: deep.then_some(wide),
+        infrared: None,
         details: vec![
             (
                 "columns read".into(),
@@ -405,6 +409,7 @@ pub fn result_of(s: scan::Scanned, dpi: u16) -> ScanResult {
             data,
         },
         samples16,
+        infrared: None,
         details: vec![
             (
                 "x origin correction (1E 87)".into(),
@@ -896,6 +901,7 @@ P 1b03 1881
                 height: 874,
             },
             depth: 16,
+            infrared: false,
         };
         let mut seen = Vec::new();
         let result = s
@@ -970,6 +976,7 @@ P 1b03 1881
                 height: r.height,
             },
             depth: 8,
+            infrared: false,
         }
     }
 
@@ -1011,6 +1018,7 @@ P 1b03 1881
                 height: 100,
             },
             depth: 8,
+            infrared: false,
         };
         // Not a resolution of the capabilities.
         assert!(s.scan(&request, &mut |_| true).is_err());

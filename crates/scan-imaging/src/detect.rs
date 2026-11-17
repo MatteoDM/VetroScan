@@ -639,6 +639,13 @@ pub fn straightened16(
     )
 }
 
+/// One channel of 16-bit samples (`width` × `height`: a scanner's infrared) of `found`,
+/// turned straight as [`straightened16`] turns the colours, so its pixels stay theirs; full
+/// scale where the image does not reach.
+pub fn straightened16_one(data: &[u16], width: usize, height: usize, found: &Found) -> Vec<u16> {
+    resample(data, width, height, 1, found, 65535.0)
+}
+
 /// 16-bit RGB samples turned clockwise by `quarter_turns` × 90°.
 pub fn rotated16(data: &[u16], width: usize, height: usize, quarter_turns: u8) -> Vec<u16> {
     let turns = quarter_turns % 4;
