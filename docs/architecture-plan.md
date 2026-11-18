@@ -2034,11 +2034,16 @@ never run by us (step 12).
           How much quiet is enough (between 0.25 and 5 s) is not measured. 122 met the other
           case again (the lid's lamp off after hours: lit by `1E A2 02`, carriages to 1994 /
           1078, refused before moving, as 115).
-       2. In the driver, as that says: the ICE pass's opening, finding the carriages at 1994 /
-          1078, waits for them with `1E 86` every few seconds and nothing else (5 s seen to work),
-          up to a limit, then the refusal as now; a test with a made-up scanner that parks them
-          and brings them back.
-       3. With Matteo: two ICE scans in a row through the driver.
+       2. **Done** (18 November 2026, evening; `scan::film_calibration`, `ICE_HOME_WAIT`): the
+          ICE pass's opening, finding the carriages at 1994 / 1078, asks `1E 86` every 5 s and
+          nothing else, at most a minute (cancellable), then goes on or refuses as before; any
+          other place is refused at once. Test: capture 108's ICE scan with the carriages out,
+          on the way and home (`an_ice_scan_waits_for_the_scanner_to_bring_the_carriages_home`).
+          Tried on the scanner in step 3.
+       3. **Done** (18 November 2026, evening, Matteo at the scanner; capture 124): two ICE scans
+          at 1200 dpi in a row through the driver; each found the carriages at 1994 / 1078 (the
+          first after `1B 40` lit the lamp again, the second after the infrared), waited 5 s,
+          and ran whole (127 and 129 s); the registration line -0.60 / -0.07, column 0.11 / -0.31.
        4. The 4490 declares `Infrared` for negatives at 1200 and 2400 dpi and slides at 2400
           (`Capabilities::infrared`), with a test that every declared one passes
           `guard::check_ice_request` and nothing else does; CHANGELOG (the *Leggi l'infrarosso*

@@ -26,7 +26,9 @@ GitHub; here they are in English.
   driver will, once it reads its infrared pass), and the dust is not taken away yet.
 - `epson4490 film-scan … --ice`: the Epson Perfection 4490 scans a film with Digital ICE as Epson
   Scan does, colours then infrared, and lays the infrared on the colours itself; only what
-  Epson Scan was seen doing with ICE (negatives at 1200 and 2400 dpi, slides at 2400). The
+  Epson Scan was seen doing with ICE (negatives at 1200 and 2400 dpi, slides at 2400). When the
+  lid's lamp, lit again, has left the carriages out, it waits for the scanner to bring them home
+  (at most a minute) instead of stopping. The
   application does not offer it yet. `epson4490 lid-lamp --watch SECONDS` then reads where the
   carriages are, for that long (`--every SECONDS`: that often).
 
