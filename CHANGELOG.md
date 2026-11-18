@@ -28,7 +28,7 @@ GitHub; here they are in English.
   Scan does, colours then infrared, and lays the infrared on the colours itself; only what
   Epson Scan was seen doing with ICE (negatives at 1200 and 2400 dpi, slides at 2400). The
   application does not offer it yet. `epson4490 lid-lamp --watch SECONDS` then reads where the
-  carriages are, for that long.
+  carriages are, for that long (`--every SECONDS`: that often).
 
 ### Fixed
 - Epson Perfection 4490, films at 600 and 1200 dpi: when the scanner's own correction of where

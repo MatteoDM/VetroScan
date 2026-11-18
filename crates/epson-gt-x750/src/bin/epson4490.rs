@@ -52,11 +52,13 @@
 //! With `--no-lock` it opens the scanner without Windows' STI lock (taking it has Epson's
 //! driver ask the scanner its state, capture 44) and writes nothing at all: it only reads.
 //! `epson4490 lamp-off` switches the lamp off (`1E A2 00`), as the application's lamp timer.
-//! `epson4490 lid-lamp [--positive] [--watch SECONDS]` lights the lid's lamp as Epson Scan does before a film's
+//! `epson4490 lid-lamp [--positive] [--watch SECONDS [--every SECONDS]]` lights the lid's lamp as Epson Scan does before a film's
 //! preview (capture 72: its `1E 57` for a negative's, or a slide's, `1E A2 02`, then `1B 03` and
 //! `1E A1` every second until warm); nothing of ours moves (the scanner itself may take the carriages
 //! to 1994 / 1078 when it lights the lamp again, captures 85, 115, 118). `--watch SECONDS` then reads
-//! the state and the positions four times a second for SECONDS, the scanner held open. A glass scan
+//! the state and the positions four times a second for SECONDS, the scanner held open (each change
+//! printed); `--every SECONDS` reads them that often instead, each reading printed (to see whether
+//! the scanner brings the carriages home by itself while it is asked little). A glass scan
 //! after it switches back.
 //! Without `--move` it only prints the plan and what the guard says of it. A lamp taken to be
 //! cold (switched on, or no scan for 14 minutes, or switched off and on since: `1E 87`; the
@@ -86,7 +88,7 @@ use std::process::ExitCode;
 
 const USAGE: &str = "usage: epson4490 list | firmware [--firmware FILE] | probe | \
                      upload [--firmware FILE] | buttons [SECONDS] | replay SCRIPT OUT --move | \
-                     scan DPI X Y W H OUT.png [--bits 16] [--tone wia|linear] [--raw FILE] [--cancel-after BLOCKS] --move   (X Y W H in mm) | probe/drain [--no-lock] | recover | lamp-off | lid-lamp [--positive] [--watch SECONDS] | \
+                     scan DPI X Y W H OUT.png [--bits 16] [--tone wia|linear] [--raw FILE] [--cancel-after BLOCKS] --move   (X Y W H in mm) | probe/drain [--no-lock] | recover | lamp-off | lid-lamp [--positive] [--watch SECONDS [--every SECONDS]] | \
                      film-scan DPI X Y W H OUT.png [--positive] [--bits 8] [--ice] [--pixels] [--raw FILE] --move   (X Y W H in mm in the film window, or pixels)";
 
 fn main() -> ExitCode {
@@ -94,6 +96,7 @@ fn main() -> ExitCode {
     let mut firmware_path = None;
     let mut command = None;
     let mut seconds = None;
+    let mut every = None;
     let mut operands: Vec<String> = Vec::new();
     let mut moves = false;
     let mut no_lock = false;
@@ -150,6 +153,12 @@ fn main() -> ExitCode {
                     _ => return usage(),
                 }
             }
+            "--every" if command.as_deref() == Some("lid-lamp") => {
+                match rest.next().map(|n| n.parse::<f64>()) {
+                    Some(Ok(n)) if (0.25..=60.0).contains(&n) => every = Some(n),
+                    _ => return usage(),
+                }
+            }
             n if command.as_deref() == Some("buttons") && seconds.is_none() => {
                 match n.parse::<u64>() {
                     Ok(n) => seconds = Some(n),
@@ -170,7 +179,8 @@ fn main() -> ExitCode {
         Some("buttons") => buttons(seconds.unwrap_or(10)),
         Some("drain") => drain(no_lock),
         Some("lamp-off") => lamp_off(),
-        Some("lid-lamp") => lid_lamp(positive, seconds),
+        Some("lid-lamp") if every.is_some() && seconds.is_none() => return usage(),
+        Some("lid-lamp") => lid_lamp(positive, seconds, every),
         Some("recover") => recover(),
         Some("replay") if operands.len() == 2 && moves => replay(&operands[0], &operands[1]),
         Some("replay") if operands.len() == 2 => {
@@ -398,7 +408,7 @@ fn lamp_off() -> Result<(), Error> {
 
 /// Lights the lid's lamp as Epson Scan does before a film's preview (`scan::light_lid_lamp`,
 /// the preview's request of captures 72 and 79): nothing moves.
-fn lid_lamp(positive: bool, watch: Option<u64>) -> Result<(), Error> {
+fn lid_lamp(positive: bool, watch: Option<u64>, every: Option<f64>) -> Result<(), Error> {
     use epson_gt_x750::film::{Film, FilmRequest};
     let film = if positive {
         Film::Positive
@@ -437,15 +447,16 @@ fn lid_lamp(positive: bool, watch: Option<u64>) -> Result<(), Error> {
         describe(protocol::state(&mut t)?)
     );
     if let Some(seconds) = watch {
-        // Read-only: the state and the positions four times a second, each change printed,
-        // the scanner held open meanwhile.
+        // Read-only: the state and the positions four times a second, each change printed, or
+        // every `every` seconds, each reading printed; the scanner held open meanwhile.
         let until = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+        let pause = std::time::Duration::from_secs_f64(every.unwrap_or(0.25));
         let mut last = None;
         while std::time::Instant::now() < until {
             let s = protocol::state(&mut t)?;
             let at = positions(&mut t)?;
             let now = (s.0, at);
-            if last != Some(now) {
+            if last != Some(now) || every.is_some() {
                 println!(
                     "  {:5.1} s  1B 03 {:02X} {:02X}, 1E 86 {at:?}",
                     start.elapsed().as_secs_f64(),
@@ -454,7 +465,7 @@ fn lid_lamp(positive: bool, watch: Option<u64>) -> Result<(), Error> {
                 );
                 last = Some(now);
             }
-            std::thread::sleep(std::time::Duration::from_millis(250));
+            std::thread::sleep(pause);
         }
     }
     Ok(())

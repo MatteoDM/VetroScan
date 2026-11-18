@@ -2025,12 +2025,19 @@ never run by us (step 12).
        brought them home by itself.
        **Next steps, in order** (committed 18 November 2026 without them; about 1-1.5 hours, two
        of them with Matteo at the scanner):
-       1. With Matteo: an ICE at 1200 dpi then the lamp, asking `1E 86` only every 5 s for two
-          minutes with the scanner held open (a `--watch` interval to add): do the carriages go
-          home after a few seconds without commands, or only when the scanner is closed?
-       2. In the driver, as that says: the ICE pass's opening waits for them (no commands, `1E 86`
-          every few seconds, a limit, then the refusal as now), or the app is told to try again
-          in a moment; a test with a made-up scanner that parks them and brings them back.
+       1. **Done** (18 November 2026, evening, Matteo at the scanner; captures 122, 123 in
+          `05-catture.md`; `epson4490 lid-lamp --watch SECONDS --every SECONDS`): an ICE at 1200
+          dpi then the lamp, `1B 03` / `1E 86` asked only every 5 s with the scanner held open:
+          the carriages at 1994 / 1078 at the first reading, **home at the next, 5 s later**, and
+          there for the 2 minutes. With 121 (asked every 250 ms: held at 1994 / 1078 for 3
+          minutes): **the scanner brings them home by itself unless it is asked continuously**.
+          How much quiet is enough (between 0.25 and 5 s) is not measured. 122 met the other
+          case again (the lid's lamp off after hours: lit by `1E A2 02`, carriages to 1994 /
+          1078, refused before moving, as 115).
+       2. In the driver, as that says: the ICE pass's opening, finding the carriages at 1994 /
+          1078, waits for them with `1E 86` every few seconds and nothing else (5 s seen to work),
+          up to a limit, then the refusal as now; a test with a made-up scanner that parks them
+          and brings them back.
        3. With Matteo: two ICE scans in a row through the driver.
        4. The 4490 declares `Infrared` for negatives at 1200 and 2400 dpi and slides at 2400
           (`Capabilities::infrared`), with a test that every declared one passes
