@@ -1432,6 +1432,15 @@ fn film_image<T: Transport>(
     for header in &tables::TONE_HEADERS {
         table(g, header, &tone)?;
     }
+    if plan.pass == Pass::Infrared {
+        // Where the lid's unit really is: its infrared read may not take it beyond the
+        // furthest a capture showed.
+        crate::guard::check_infrared_reach(crate::guard::infrared_unit_end(
+            after_white(c.unit_at).1,
+            geo.start_steps,
+            geo.read_steps,
+        ))?;
+    }
     // The start move: the carriage to the image's first line.
     table(
         g,

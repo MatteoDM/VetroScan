@@ -22,14 +22,15 @@ GitHub; here they are in English.
   film (Digital ICE): a second reading in infrared light, which goes through the film but not
   through dust and scratches. The channel is kept with each frame and saved beside its 16-bit
   and RAW files (`…-infrarosso.png` / `.tif`, linear). Shown only where the scanner declares
-  it, for that film and resolution: no scanner declares it yet (the Epson Perfection 4490's
-  driver will, once it reads its infrared pass), and the dust is not taken away yet.
+  it, for that film and resolution: the Epson Perfection 4490 for negatives at 1200 and 2400 dpi
+  and slides at 2400 (a scan takes both passes, about twice as long), on any frame, the lowest
+  too, but not on an area reaching the holder's very bottom (its infrared light reads further
+  on in the lid, beyond where the scanner was seen going). The dust is not taken away yet.
 - `epson4490 film-scan … --ice`: the Epson Perfection 4490 scans a film with Digital ICE as Epson
   Scan does, colours then infrared, and lays the infrared on the colours itself; only what
   Epson Scan was seen doing with ICE (negatives at 1200 and 2400 dpi, slides at 2400). When the
   lid's lamp, lit again, has left the carriages out, it waits for the scanner to bring them home
-  (at most a minute) instead of stopping. The
-  application does not offer it yet. `epson4490 lid-lamp --watch SECONDS` then reads where the
+  (at most a minute) instead of stopping. `epson4490 lid-lamp --watch SECONDS` then reads where the
   carriages are, for that long (`--every SECONDS`: that often).
 
 ### Fixed
@@ -77,6 +78,8 @@ GitHub; here they are in English.
   Slides as the scanner reads them. It applies to the next scans; the frames are still found.
 
 ### Changed
+- The log in the settings folder (`tasti.log`) also says how each scan ended, and why when it
+  did not finish.
 - A frame drawn on the preview no longer takes the place of the originals found: it is added
   to them. Turning the automatic crop off keeps only the areas drawn by hand. **Esc** lets the
   area chosen go instead of removing it (**Delete** removes it).

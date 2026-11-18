@@ -2044,10 +2044,35 @@ never run by us (step 12).
           at 1200 dpi in a row through the driver; each found the carriages at 1994 / 1078 (the
           first after `1B 40` lit the lamp again, the second after the infrared), waited 5 s,
           and ran whole (127 and 129 s); the registration line -0.60 / -0.07, column 0.11 / -0.31.
-       4. The 4490 declares `Infrared` for negatives at 1200 and 2400 dpi and slides at 2400
-          (`Capabilities::infrared`), with a test that every declared one passes
-          `guard::check_ice_request` and nothing else does; CHANGELOG (the *Leggi l'infrarosso*
-          entry says no scanner declares it yet); Matteo tries the tick in the app.
+       4. **Declared** (18 November 2026, evening): the 4490's `Capabilities::infrared` has
+          negatives at 1200 and 2400 dpi and slides at 2400; a test checks that every film
+          source and resolution it offers is declared exactly where `guard::check_ice_request`
+          lets it out; the app's bar counts the two passes from the first `Calibrating` after a
+          read (the carriages' wait says `Calibrating` at every look: it had pushed the bar past
+          its end); CHANGELOG and `docs/usage.md`. **Matteo's first try in the app** (capture 125,
+          `05-catture.md`): the whole strip at 1200 dpi; it stopped before the infrared read
+          (message lost: the app keeps none), and the try after it was stopped by Matteo when
+          the gap was found: **the guard did not bound the area's length with ICE**, and the
+          infrared read of the whole window would have taken the lid's unit to step ~26,100,
+          beyond the furthest any capture showed (24,311, Epson Scan's preview; the unit reads
+          the infrared 1,741 steps further on). Now `guard::MAX_FILM_UNIT_END`, in
+          `check_ice_request` and `check_infrared_plan`, refuses it before anything moves: ICE on
+          areas ending ~22 mm above the window's bottom. Then **capture 126** (Epson Scan's ICE on
+          the lowest frame, the scanner just switched on again): the unit went to 25,880 there,
+          now the limit, checked by the driver with the unit's real place before the infrared
+          start (`guard::check_infrared_reach`); an area reaching the window's very bottom is
+          still refused. Open from it: (a) our app's try just before it stopped at an infrared
+          start 46 steps after the colour one (the guard's 39-44), where Epson Scan, minutes
+          later, took 42 and `icesetup.py` reproduces its 42 from its holes: our own hole
+          pre-reads of that moment (scanner and lamp just switched on) gave other lines, not
+          captured; (b) with 126's even correction (-82) `icesetup.py`'s infrared columns are one
+          off (3523 for 3522), right on the six odd ones. **Tried in the app** (18 November 2026, 21:50,
+          Matteo): a negative frame at 1200 dpi with *Leggi l'infrarosso*, picked on the preview:
+          scanned, saved as `foto-…tif` and `foto-…-infrarosso.tif` (both 1096 x 1663, the
+          infrared cut and straightened with the frame; dust and hairs dark on 0.21 % of it, as
+          in Epson's captures). "Scansiona la foto" without a preview asks the whole holder, now
+          refused with ICE before anything moves. The app's log (`tasti.log`) now says how each
+          scan ended (the first refusal had been lost).
        5. Open, not blocking: the registration's line on slides 0.35 below `ice.py`'s (112, 116;
           the driver compares the infrared's green row with the colours' blue, `ice.py` blue with
           blue: try the infrared's blue row for the measure); the colour tone tables of the ICE

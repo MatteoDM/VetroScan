@@ -50,7 +50,7 @@ pub use usbscan::UsbscanTransport;
 use protocol::FirmwareOutcome;
 use scanner_api::{
     Adapter, ButtonInfo, Capabilities, ColourCorrection, ColourMatrix, ColourMode, DeviceStatus,
-    Error, LampInfo, Progress, Result, ScanMemory, ScanRequest, ScanResult, Source,
+    Error, Infrared, LampInfo, Progress, Result, ScanMemory, ScanRequest, ScanResult, Source,
     SuggestedAction, Tone, UsbId,
 };
 use std::fmt;
@@ -276,9 +276,25 @@ pub fn capabilities() -> Capabilities {
             matrix: GLASS_COLOUR,
         }],
         scan_memory: scan_memory(),
-        // Digital ICE (capture 18, `docs/architecture-plan.md` phase 12 step 17): declared once
-        // the driver reads the infrared pass and lays it on the colours; not yet.
-        infrared: Vec::new(),
+        // Digital ICE (`docs/architecture-plan.md` phase 12 step 17): where Epson Scan was
+        // captured using it and ours ran (captures 18, 108-124): negatives at 1200 and 2400 dpi,
+        // slides at 2400 (`guard::ICE_COVERED`); the driver reads the infrared pass and lays it
+        // on the colours. With ICE the scanner never reads above 2400 (Epson Scan asked 4800
+        // reads 2400 and enlarges).
+        infrared: vec![
+            Infrared {
+                source: Source::Negative,
+                dpi: 1200,
+            },
+            Infrared {
+                source: Source::Negative,
+                dpi: 2400,
+            },
+            Infrared {
+                source: Source::Slide,
+                dpi: 2400,
+            },
+        ],
     }
 }
 
@@ -361,6 +377,32 @@ pub fn film_result_of(s: scan::FilmScanned, dpi: u16, height: u32, deep: bool) -
             ),
             ("lid unit's move back".into(), format!("{} steps", c.back)),
         ],
+    }
+}
+
+/// A Digital ICE scan's two passes over one bar: a pass begins at the first `Calibrating` after
+/// a read (or the first of all): the opening's wait for the carriages
+/// ([`scan::ICE_HOME_WAIT`]) says `Calibrating` at every look.
+#[derive(Debug, Default)]
+struct IcePasses {
+    pass: usize,
+    read: bool,
+}
+
+impl IcePasses {
+    fn calibrating(&mut self) {
+        if self.pass == 0 || self.read {
+            self.pass += 1;
+            self.read = false;
+        }
+    }
+
+    fn reading(&mut self, done: usize, total: usize) -> Progress {
+        self.read = true;
+        Progress::Scanning {
+            done: (self.pass.max(1) - 1) * total + done,
+            total: 2 * total,
+        }
     }
 }
 
@@ -685,7 +727,7 @@ impl Gt4490 {
         self.lid_lamp = true;
         if request.infrared {
             // Digital ICE: two passes, each reported over half the bar.
-            let mut pass = 0usize;
+            let mut passes = IcePasses::default();
             let scanned =
                 scan::scan_ice(
                     &mut self.transport,
@@ -695,13 +737,12 @@ impl Gt4490 {
                     &mut |event| match event {
                         scan::Event::WarmingUp { .. } => progress(Progress::WarmingUp),
                         scan::Event::Calibrating => {
-                            pass += 1;
+                            passes.calibrating();
                             progress(Progress::Calibrating)
                         }
-                        scan::Event::Reading { done, total } => progress(Progress::Scanning {
-                            done: (pass.max(1) - 1) * total + done,
-                            total: 2 * total,
-                        }),
+                        scan::Event::Reading { done, total } => {
+                            progress(passes.reading(done, total))
+                        }
                     },
                 )?;
             progress(Progress::Finishing);
@@ -874,6 +915,58 @@ mod tests {
     /// `1B 03` at rest, and before the firmware (captures).
     const IDLE: [u8; 2] = [0x18, 0x81];
     const NO_FW: [u8; 2] = protocol::State::NO_FIRMWARE;
+
+    /// The two passes of a Digital ICE scan fill one bar, however often the opening says
+    /// `Calibrating` while it waits for the carriages (capture 124: once more per pass).
+    #[test]
+    fn an_ice_scan_fills_the_bar_once_with_its_two_passes() {
+        let mut p = IcePasses::default();
+        let done = |p: Progress| match p {
+            Progress::Scanning { done, total } => (done, total),
+            other => panic!("{other:?}"),
+        };
+        for _ in 0..3 {
+            p.calibrating();
+        }
+        assert_eq!(done(p.reading(0, 10)), (0, 20));
+        assert_eq!(done(p.reading(10, 10)), (10, 20));
+        for _ in 0..2 {
+            p.calibrating();
+        }
+        assert_eq!(done(p.reading(4, 10)), (14, 20));
+        assert_eq!(done(p.reading(10, 10)), (20, 20));
+    }
+
+    /// The 4490 declares Digital ICE where it was captured and the guard lets it out (negatives
+    /// at 1200 and 2400 dpi, slides at 2400, 16 bits), and nowhere else: every other source and
+    /// resolution it offers films at is refused by the guard.
+    #[test]
+    fn infrared_is_declared_where_the_guard_lets_it_out() {
+        use film::Film;
+        let caps = capabilities();
+        let films = [
+            (Source::Negative, Film::Negative),
+            (Source::Slide, Film::Positive),
+        ];
+        let t = caps.transparency.as_ref().expect("the lid's adapter");
+        let mut declared = 0;
+        for &dpi in &t.resolutions {
+            for (source, film) in films {
+                // A frame near the window's top, as the application asks it.
+                let d = u32::from(dpi);
+                let r = film::for_area(d, film, (0, d / 2, d * 3 / 2, d), 16);
+                let lets_out = guard::check_ice_request(&r).is_ok();
+                assert_eq!(
+                    caps.infrared_at(source, dpi),
+                    lets_out,
+                    "{source:?} at {dpi} dpi"
+                );
+                declared += usize::from(lets_out);
+            }
+        }
+        assert_eq!(declared, caps.infrared.len());
+        assert_eq!(declared, 3);
+    }
 
     #[test]
     fn scanners_can_move_to_the_scanner_thread() {

@@ -144,8 +144,15 @@ mat taken off the lid), choose **Film** and what is in the holder, and scan as a
 covers the holder's window but its top 6 mm, where only the holder's edge is. Each film scan
 lights the lid's lamp (about 20 seconds when it was off) and calibrates on its own; a frame
 took a minute at 1200 dpi and two at 4800 on the scanner, the whole strip takes several. The
-4490 has an infrared channel for dust removal (Digital ICE), not used by VetroScan yet. After a
-film, the next scan of the glass switches back to the glass's lamp and warms it up first.
+4490 also reads an infrared channel (Digital ICE): tick **Read the infrared** in **Scan** for a
+negative at 1200 or 2400 dpi or a slide at 2400 (the tick shows only there), on a frame chosen
+in the preview, the lowest too: not on an area reaching the very bottom of the holder (the
+infrared light reads further on in the lid, beyond where the scanner was seen going). The scan then
+takes two whole passes, colours then infrared, about twice as long (two minutes for a frame at
+1200 dpi); the infrared, laid on the colours by the driver, is kept with each frame and saved
+beside it (`…-infrarosso`). Dust and hairs show dark in it; VetroScan does not take them away
+yet. After a film, the next scan of the glass switches back to the glass's lamp and warms it
+up first.
 
 Slides are scanned as negatives are on the HP 3770, with the longer exposure of its negatives'
 modes: measured on real slides, it halves the noise in their dark parts (where a slide is far

@@ -238,8 +238,43 @@ pub const ICE_START_DELTAS: std::ops::RangeInclusive<i64> = 39..=44;
 /// (the lens's ratio moves it by up to +90 at the window's right edge).
 pub const ICE_COLUMN_SHIFT: std::ops::RangeInclusive<i64> = -96..=96;
 
+/// The furthest the lid's unit has gone in a captured read: Epson Scan's Digital ICE on the
+/// lowest frame of a strip (capture 126, 18 November 2026): its infrared read from 2981 after
+/// the white read, 18,461 steps and the ramp's 1,024 to the first line, 3,414 read. (Before it,
+/// Epson Scan's preview of the whole window, 16 and 98: 24,311.)
+pub const MAX_FILM_UNIT_END: u32 = 2981 + 18_461 + 1024 + 3414;
+
+/// Where the lid's unit is after an infrared pass's white read, at least: the infrared light's
+/// 1,729 steps, the origin's 1416 less the longest move back allowed, 64.
+const IR_UNIT_AFTER_WHITE_MIN: u32 =
+    ice::IR_UNIT_AT + 1416 - FILM_BACK_MOVES[FILM_BACK_MOVES.len() - 1] + 64;
+
+/// Where an infrared read takes the lid's unit: from `unit_after_white`, the start move of
+/// `start_steps` with its ramp's 1,024 steps, then the read's `read_steps`.
+pub fn infrared_unit_end(unit_after_white: u32, start_steps: u32, read_steps: u32) -> u32 {
+    unit_after_white + start_steps + film::RAMP_512_STEPS + read_steps
+}
+
+/// Whether an infrared read may take the lid's unit to `end`: not beyond
+/// [`MAX_FILM_UNIT_END`]. The driver asks it with where the unit is, before the start move.
+pub fn check_infrared_reach(end: u32) -> Result<()> {
+    if end > MAX_FILM_UNIT_END {
+        return Err(Error::InvalidRequest(format!(
+            "Epson 4490: Digital ICE on this area would take the lid's unit to step {end}, \
+             beyond the furthest a capture showed ({MAX_FILM_UNIT_END}): its infrared light \
+             reads 1,741 steps further on than the colours; choose an area that ends higher in \
+             the holder"
+        )));
+    }
+    Ok(())
+}
+
 /// Whether a Digital ICE scan of `r` may be sent: a film request ([`check_film_request`]) of a
-/// resolution, depth and film captured with ICE ([`ICE_COVERED`]).
+/// resolution, depth and film captured with ICE ([`ICE_COVERED`]), whose infrared read could keep
+/// the lid's unit within [`MAX_FILM_UNIT_END`] (from the least far the unit may be, its start the
+/// colour one's and at least the [`ICE_START_DELTAS`]' smallest, its read the colour one's less
+/// the colours' offsets): what is refused here is refused before anything moves; the driver
+/// checks again where the unit really is ([`check_infrared_reach`]).
 pub fn check_ice_request(r: &FilmRequest) -> Result<()> {
     check_film_request(r)?;
     let covered = ICE_COVERED
@@ -256,6 +291,13 @@ pub fn check_ice_request(r: &FilmRequest) -> Result<()> {
             r.dpi, r.bits
         )));
     }
+    let g = film::geometry(r, setup::XCorrection(0))?;
+    let ir_lines = r.height + if g.read_dpi == 4800 { r.ydpi / 600 } else { 0 };
+    check_infrared_reach(infrared_unit_end(
+        IR_UNIT_AFTER_WHITE_MIN,
+        g.start_steps + *ICE_START_DELTAS.start() as u32,
+        ir_lines * 2400 / r.ydpi + g.lead,
+    ))?;
     Ok(())
 }
 
@@ -1755,6 +1797,32 @@ mod tests {
         for r in [slide1200, neg600, neg8] {
             assert!(check_ice_request(&r).is_err(), "{r:?}");
         }
+        // The whole window, to its bottom: its infrared read would take the lid's unit past the
+        // furthest captured (Epson Scan's ICE on the lowest frame, 126); a frame higher up is
+        // let out (Matteo's app scan of a strip, 18 November 2026, found the limit missing).
+        for dpi in [1200, 2400] {
+            let tall = (film::AREA_INCHES.1 * f64::from(dpi)) as u32;
+            let whole = film::for_area(dpi, Film::Negative, (0, 0, dpi * 27 / 10, tall), 16);
+            let e = check_ice_request(&whole).unwrap_err().to_string();
+            assert!(e.contains("lid's unit"), "{e}");
+            let frame = |y: u32| film::for_area(dpi, Film::Negative, (0, y, dpi * 3 / 2, dpi), 16);
+            assert!(check_ice_request(&frame(tall - dpi)).is_err(), "{dpi}");
+            check_ice_request(&frame(dpi * 6)).unwrap_or_else(|e| panic!("{dpi}: {e}"));
+        }
+        // Capture 126's own infrared read reaches the limit exactly; its request is let out.
+        assert_eq!(infrared_unit_end(2981, 18_461, 3414), MAX_FILM_UNIT_END);
+        let lowest = FilmRequest {
+            dpi: 1200,
+            ydpi: 1200,
+            x: 1876,
+            y: 9446,
+            width: 1212,
+            height: 1691,
+            bits: 16,
+            film: Film::Negative,
+        };
+        check_ice_request(&lowest).unwrap();
+        assert!(check_infrared_reach(MAX_FILM_UNIT_END + 1).is_err());
         // A film scan without ICE: none of ICE's commands.
         let mut t = guarded(&[]);
         t.permit_film(&neg).unwrap();

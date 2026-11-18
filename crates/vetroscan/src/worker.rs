@@ -318,6 +318,12 @@ impl Worker {
                 }
                 Ok(Command::Scan(purpose, request)) => {
                     let result = self.scan(&request);
+                    // How it ended, for the log: a refusal shown only on the screen was lost
+                    // once (18 November 2026).
+                    match &result {
+                        Ok(_) => log("scan done"),
+                        Err(e) => log(&format!("scan ended: {e}")),
+                    }
                     if result.as_ref().is_err_and(|e| e != CANCELLED) {
                         // Open the scanner again next time.
                         self.scanner = None;
