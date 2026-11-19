@@ -2082,10 +2082,13 @@ never run by us (step 12).
           film capture fits it; ours at 1200 dpi had sent 32 at 163 steps a second): now
           `film::lead_for` sets the lead after the calibration (the first line kept), the guard
           checks it against the line time sent, and the infrared start and its check count the
-          first line (start move + lead). Left: a second power cycle with ours first (the lead
-          128 at 1200 dpi then tried); (b) 126's infrared column, one off: not the correction's
-          parity (127's even one is right), 126 is the one frame on the right strip; (c) the
-          slides' line 0.35 low.
+          first line (start move + lead). **The second power cycle** (129, 130): ours first, the
+          colour read's line time 11,520 µs, lead 128 at 1200 dpi (start 527), +42, whole and
+          laid (line 0.11, column 0.09); Epson Scan after it the same leads, +45: right after a
+          power-on Epson's infrared holes read 2-4 half pixels higher than ours, the same rule.
+          Left: (b) 126's infrared column, one off: not the correction's parity (127's even
+          one is right), 126 is the one frame on the right strip; (c) the slides' line
+          0.35 low.
        5. Open, not blocking: the registration's line on slides 0.35 below `ice.py`'s (112, 116;
           the driver compares the infrared's green row with the colours' blue, `ice.py` blue with
           blue: try the infrared's blue row for the measure); the colour tone tables of the ICE
