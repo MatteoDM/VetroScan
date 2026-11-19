@@ -34,6 +34,10 @@ GitHub; here they are in English.
   carriages are, for that long (`--every SECONDS`: that often).
 
 ### Fixed
+- Epson Perfection 4490: a film's image read takes the run-up Epson's driver gives it for the
+  carriage's speed (128 steps when it runs fast, as at 1200 dpi with a bright lamp), not one
+  fixed by the resolution; a Digital ICE scan right after switching the scanner on is no longer
+  stopped (its infrared read starts a step later then, as with Epson Scan).
 - Epson Perfection 4490, films at 600 and 1200 dpi: when the scanner's own correction of where
   its sensor starts is an odd number, the frame was read one column off from Epson Scan's.
 

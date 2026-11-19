@@ -1212,6 +1212,19 @@ fn film_calibration<T: Transport>(
     let dark = read_all(g, 64, 64, cols * 6)?;
     wait_ready(g, log)?;
     send(g, [0x1E, 0xA2], &[lamp_on])?;
+    // The image read's lead from its line time, as Epson's driver (`film::lead_for`: 128 when the
+    // carriage runs at 151 steps a second or more; capture 127), the first line where it was.
+    let t_image = u32::from_le_bytes([image_e21[0], image_e21[1], image_e21[2], 0]);
+    let lead = crate::film::lead_for(request.ydpi, t_image);
+    let mut plan = plan;
+    if lead != plan.geometry.lead {
+        log(format!(
+            "the image's line time {t_image} µs asks a lead of {lead} steps (not {})",
+            plan.geometry.lead
+        ));
+        plan.geometry = plan.geometry.with_lead(lead)?;
+        g.permit_film_plan(&plan)?;
+    }
     Ok(FilmCalibration {
         plan,
         offsets,

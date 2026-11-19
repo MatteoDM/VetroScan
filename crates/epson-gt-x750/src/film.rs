@@ -291,7 +291,7 @@ pub fn geometry(r: &FilmRequest, corr: XCorrection) -> Result<Geometry> {
         8 => 0x50,
         _ => return bad("a film's read resolution with no ratio code"),
     };
-    let lead = if r.dpi == 600 { 128 } else { 32 };
+    let lead = planned_lead(r.dpi);
     let y_steps = r.y * 2400 / r.ydpi;
     if y_steps + START_K - lead <= RAMP_512_STEPS {
         // The start move would be shorter than its ramps: never captured (the least start
@@ -313,6 +313,52 @@ pub fn geometry(r: &FilmRequest, corr: XCorrection) -> Result<Geometry> {
         start_steps: y_steps + START_K - lead - RAMP_512_STEPS,
         e11: 8 + u8::from(base == 2400),
     })
+}
+
+/// The image read's lead a plan starts with, before the calibration has found its line time
+/// ([`lead_for`] then sets it): 128 at 600 dpi, 32 otherwise, as every film captured but 127.
+pub fn planned_lead(dpi: u32) -> u32 {
+    if dpi == 600 {
+        128
+    } else {
+        32
+    }
+}
+
+/// The image read's lead (steps of run-up before its first line) for a read along at `ydpi` with
+/// the line time `t` µs: Epson's interpreter's rule for every read (`0x41e760`, decoded for the
+/// glass, `captures/epson4490/tools/setup.py`): the carriage's speed v = (2400 / ydpi) x 10^6 / t
+/// steps a second; 32 below 151, 128 below 5500, 160 above. On films it gives every captured
+/// lead: 128 at 600 dpi, 32 at 1200-4800, and 128 at 1200 dpi with t 11,904 (capture 127, Epson
+/// Scan right after a power-on; v 168).
+pub fn lead_for(ydpi: u32, t: u32) -> u32 {
+    let v = 2400u64 * 1_000_000 / (u64::from(ydpi) * u64::from(t.max(1)));
+    if v < 151 {
+        32
+    } else if v < 5500 {
+        128
+    } else {
+        160
+    }
+}
+
+impl Geometry {
+    /// The same read with another `lead`: the image's first line where it was (the start move
+    /// shorter by what the lead grows), the read move as long as its lines and the lead.
+    pub fn with_lead(self, lead: u32) -> Result<Self> {
+        let first = self.start_steps + self.lead;
+        if first < lead {
+            return Err(Error::Other(format!(
+                "Epson 4490: a film read's lead of {lead} steps before a first line {first} steps on"
+            )));
+        }
+        Ok(Self {
+            start_steps: first - lead,
+            read_steps: self.read_steps - self.lead + lead,
+            lead,
+            ..self
+        })
+    }
 }
 
 /// The `1E 43` of the film's reads after the lid unit's origin (gains 1.0 and the film's own
@@ -465,6 +511,47 @@ impl FilmPlan {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    /// Epson's lead rule gives every film capture's lead: 600 dpi 128 (74, 99), 1200-4800 32
+    /// (75, 76, 17, 18, 80, 100, 101, 106-126), and 128 at 1200 dpi with capture 127's 11,904 µs;
+    /// a plan led again keeps its first line.
+    #[test]
+    fn the_image_lead_follows_the_line_time() {
+        for (ydpi, t, lead) in [
+            (600, 13_440, 128),
+            (600, 18_432, 128),
+            (1200, 13_440, 32),
+            (1200, 13_824, 32),
+            (1200, 18_432, 32),
+            (1200, 16_512, 32),
+            (1200, 11_904, 128),
+            (1200, 12_288, 128),
+            (2400, 12_672, 32),
+            (2400, 24_576, 32),
+            (5400, 13_440, 32),
+        ] {
+            assert_eq!(lead_for(ydpi, t), lead, "{ydpi} {t}");
+        }
+        // Capture 127's colour read: start 269 and lead 128, read 1832 lines.
+        let r = FilmRequest {
+            dpi: 1200,
+            ydpi: 1200,
+            x: 151,
+            y: 419,
+            width: 1188,
+            height: 1784,
+            bits: 16,
+            film: Film::Negative,
+        };
+        let g = geometry(&r, XCorrection(-104)).unwrap();
+        assert_eq!((g.start_steps, g.lead), (269 + 96, 32));
+        let led = g.with_lead(128).unwrap();
+        assert_eq!(
+            (led.start_steps, led.lead, led.read_steps),
+            (269, 128, 1832 * 2 + 128)
+        );
+        assert_eq!(led.start_steps + led.lead, g.start_steps + g.lead);
+    }
 
     fn hex(s: &str) -> Vec<u8> {
         (0..s.len())

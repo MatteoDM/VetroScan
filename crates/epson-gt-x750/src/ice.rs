@@ -252,7 +252,8 @@ pub fn holes(read: &[u8]) -> Option<Holes> {
 }
 
 /// The infrared start move less the colour one: [`START_K`] - floor(D / 4), D the colour holes'
-/// lines less the infrared holes', left plus right, in 4800ths (39-44 in the six captures).
+/// lines less the infrared holes', left plus right, in 4800ths (39-44 in captures 18 and
+/// 108-126, 45 right after a power-on in 127).
 pub fn start_delta(colour: &Holes, infrared: &Holes) -> i32 {
     let d = (i32::from(colour.values[1]) - i32::from(infrared.values[1]))
         + (i32::from(colour.values[5]) - i32::from(infrared.values[5]));
@@ -337,7 +338,14 @@ pub fn infrared_plan(
     let (den, _) = g.ratio;
     let stagger = if g.read_dpi == 4800 { r.ydpi / 600 } else { 0 };
     let lines = (r.height + stagger).div_ceil(u32::from(den)) * u32::from(den);
-    let start = i64::from(g.start_steps) + i64::from(start_delta(colour_holes, infrared_holes));
+    // Its first line `start_delta` steps after the colour read's (start move and lead: capture 127,
+    // the colour read's lead 128 and the infrared's 32); its lead set again from its own line
+    // time after its calibration (`film::lead_for`).
+    let lead = film::planned_lead(r.dpi);
+    let start = i64::from(g.start_steps)
+        + i64::from(g.lead)
+        + i64::from(start_delta(colour_holes, infrared_holes))
+        - i64::from(lead);
     let Ok(start_steps) = u32::try_from(start) else {
         return bad(format!("an infrared start move of {start} steps"));
     };
@@ -347,8 +355,9 @@ pub fn infrared_plan(
         words,
         lines,
         lines_per_block: (film::BLOCK_MAX / (pixels * 6)) as u16,
-        read_steps: lines * 2400 / r.ydpi + g.lead,
+        read_steps: lines * 2400 / r.ydpi + lead,
         start_steps,
+        lead,
         ..g
     };
     Ok(FilmPlan::from_geometry(r, ir, Pass::Infrared))

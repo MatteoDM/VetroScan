@@ -39,7 +39,7 @@
 //!   [`Guarded::permit_infrared_pass`] has switched to the infrared pass: the infrared `1E 57`
 //!   (mode `20`, source `03`), its light (`1E A2 04`, `05`), the lid unit's 705 steps, `1E 87 01`,
 //!   the origin read's ramp at T 8064, window line times up to [`ice::IR_MAX_LINE_TIME`], and its
-//!   plan only with a start move 39-44 steps after the colour pass's ([`ICE_START_DELTAS`]) and
+//!   plan only with a start move 39-45 steps after the colour pass's ([`ICE_START_DELTAS`]) and
 //!   its columns near the colour read's ([`check_infrared_plan`]).
 //!
 //! What a scan may ask ([`check_request`], [`check_plan`]): the glass, colour,
@@ -229,9 +229,11 @@ pub const ICE_COVERED: [(u32, u32, u8, &[Film]); 2] = [
     (2400, 2400, 16, &[Film::Negative, Film::Positive]),
 ];
 
-/// The infrared pass's start move less the colour pass's, as captured (39-44 steps,
-/// `ice::start_delta`): another one is refused.
-pub const ICE_START_DELTAS: std::ops::RangeInclusive<i64> = 39..=44;
+/// The infrared pass's start move less the colour pass's, as captured (`ice::start_delta`): 39-44
+/// in captures 18 and 108-126, 45 by Epson Scan right after a power-on (127, 19 November 2026:
+/// the infrared holes read higher then); another one is refused (Matteo's decision: only what a
+/// capture showed; our 46 after a power-on, 18 November, was never seen from Epson Scan).
+pub const ICE_START_DELTAS: std::ops::RangeInclusive<i64> = 39..=45;
 
 /// How far the infrared read's first column may lie from the colour read's, 4800ths of an inch:
 /// the captures' -53 to -26 (`ice::infrared_plan`), and room for a frame anywhere in the window
@@ -314,11 +316,15 @@ pub fn check_infrared_plan(colour: &FilmPlan, ir: &FilmPlan) -> Result<()> {
     if colour.request != ir.request || c.base != i.base || c.read_dpi != i.read_dpi {
         return refuse("an infrared plan for another request".into());
     }
-    let delta = i64::from(i.start_steps) - i64::from(c.start_steps);
+    // Where each read's first line is: its start move and its lead (capture 127: 269 + 128 and
+    // 410 + 32, 45 apart).
+    let delta = i64::from(i.start_steps + i.lead) - i64::from(c.start_steps + c.lead);
     if !ICE_START_DELTAS.contains(&delta) {
         return refuse(format!(
             "the infrared read would start {delta} steps after the colour one, never captured \
-             (39-44)"
+             ({}-{})",
+            ICE_START_DELTAS.start(),
+            ICE_START_DELTAS.end()
         ));
     }
     let u = i64::from(4800 / c.base);
@@ -509,6 +515,9 @@ struct Permit {
     film_started: bool,
     /// The film plan's read move went out: not again.
     film_read: bool,
+    /// The line time of the film's last `1E 21`: the image read's lead must be the one it asks
+    /// ([`film::lead_for`]).
+    film_t: Option<u32>,
     /// A Digital ICE scan: the pass under way and what the colour pass set.
     ice: Option<IceState>,
 }
@@ -536,6 +545,7 @@ impl Permit {
             film_plan: None,
             film_started: false,
             film_read: false,
+            film_t: None,
             ice: None,
         }
     }
@@ -697,6 +707,7 @@ impl<T: Transport> Guarded<T> {
         p.e57 = state.e57_infrared;
         p.film_started = false;
         p.film_read = false;
+        p.film_t = None;
         self.expect = None;
         self.start_armed = false;
         Ok(())
@@ -1043,6 +1054,18 @@ impl<T: Transport> Guarded<T> {
                 _ => bad("1E B3's channel"),
             },
             Expect::FilmMove(moves, reads) if moves.iter().chain(reads).any(|b| b == data) => {
+                // The image's read: the lead its line time asks, as Epson's driver gives it.
+                if let Some(p) = self.permit.as_ref() {
+                    if let (Some(plan), Some(t)) = (p.film_plan.as_ref(), p.film_t) {
+                        let lead = film::lead_for(plan.request.ydpi, t);
+                        if film_image_moves(plan).1[..] == *data && plan.geometry.lead != lead {
+                            return bad(&format!(
+                                "a film read's lead of {} steps where its line time {t} µs asks {lead}",
+                                plan.geometry.lead
+                            ));
+                        }
+                    }
+                }
                 Ok(None)
             }
             Expect::FilmMove(..) => bad("a film's move"),
@@ -1215,6 +1238,11 @@ impl<T: Transport> Guarded<T> {
         }
         if was_command && data.len() == 2 && matches!(data[0], 0x1B | 0x1E) && data != GET_STATE {
             self.last_command = Some([data[0], data[1]]);
+        }
+        if matches!(self.expect, Some(Expect::FilmBlock21(_))) && data.len() == 26 {
+            if let Some(p) = self.permit.as_mut() {
+                p.film_t = Some(u32::from_le_bytes([data[0], data[1], data[2], 0]));
+            }
         }
         if matches!(self.expect, Some(Expect::Block88)) {
             if let Some(i) = self.permit.as_mut().and_then(|p| p.ice.as_mut()) {
@@ -1984,6 +2012,15 @@ mod tests {
         t.bulk_out(&[0x1E, 0x01]).unwrap();
         t.bulk_out(&start).unwrap();
         t.bulk_out(&[0x1E, 0x05]).unwrap();
+        // The read's lead as the image's line time asks (`film::lead_for`): this 600 dpi plan's
+        // 128 not after 27,264 µs (32), after 13,440 (capture 74) yes.
+        t.bulk_out(&[0x1E, 0x21]).unwrap();
+        t.bulk_out(&block(27_264)).unwrap();
+        t.bulk_out(&[0x1E, 0x01]).unwrap();
+        let e = t.bulk_out(&read).unwrap_err().to_string();
+        assert!(e.contains("lead of 128"), "{e}");
+        t.bulk_out(&[0x1E, 0x21]).unwrap();
+        t.bulk_out(&block(13_440)).unwrap();
         // The start move once, the read move once.
         t.bulk_out(&[0x1E, 0x01]).unwrap();
         assert!(t.bulk_out(&start).is_err());

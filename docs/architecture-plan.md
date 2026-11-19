@@ -2073,6 +2073,19 @@ never run by us (step 12).
           in Epson's captures). "Scansiona la foto" without a preview asks the whole holder, now
           refused with ICE before anything moves. The app's log (`tasti.log`) now says how each
           scan ended (the first refusal had been lost).
+          **The open items, first (a)** (19 November 2026, evening, Matteo at the scanner after a
+          power cycle; captures 127, 128 in `05-catture.md`): Epson Scan right after the power-on
+          took **+45** (its own rule on its holes, the infrared holes higher then); ours a few
+          minutes later +42. Matteo's decision: `ICE_START_DELTAS` 39-45, only what Epson did.
+          And 127 showed **the image read's lead follows the line time** (Epson's interpreter's
+          rule for every read, `0x41e760`: 32 below 151 steps a second, 128 below 5,500; every
+          film capture fits it; ours at 1200 dpi had sent 32 at 163 steps a second): now
+          `film::lead_for` sets the lead after the calibration (the first line kept), the guard
+          checks it against the line time sent, and the infrared start and its check count the
+          first line (start move + lead). Left: a second power cycle with ours first (the lead
+          128 at 1200 dpi then tried); (b) 126's infrared column, one off: not the correction's
+          parity (127's even one is right), 126 is the one frame on the right strip; (c) the
+          slides' line 0.35 low.
        5. Open, not blocking: the registration's line on slides 0.35 below `ice.py`'s (112, 116;
           the driver compares the infrared's green row with the colours' blue, `ice.py` blue with
           blue: try the infrared's blue row for the measure); the colour tone tables of the ICE
