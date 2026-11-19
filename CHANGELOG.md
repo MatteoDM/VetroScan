@@ -24,8 +24,9 @@ GitHub; here they are in English.
   and RAW files (`…-infrarosso.png` / `.tif`, linear). Shown only where the scanner declares
   it, for that film and resolution: the Epson Perfection 4490 for negatives at 1200 and 2400 dpi
   and slides at 2400 (a scan takes both passes, about twice as long), on any frame, the lowest
-  too, but not on an area reaching the holder's very bottom (its infrared light reads further
-  on in the lid, beyond where the scanner was seen going). The dust, hairs and specks it shows
+  too: an area reaching the holder's bottom loses its last half millimetre or so (its infrared
+  light reads further on in the lid, and only as far as Epson Scan was seen going, which stops
+  an area 0.3 mm above the bottom). The dust, hairs and specks it shows
   are taken out of the scan (`scan_imaging::dust`): found where the infrared is darker than its
   surroundings by four times its own noise, the picture's faint copy in the infrared (a film's
   cyan) taken out first, each colour's shadow found where it lies (on a slide the red's is more

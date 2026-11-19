@@ -146,8 +146,9 @@ lights the lid's lamp (about 20 seconds when it was off) and calibrates on its o
 took a minute at 1200 dpi and two at 4800 on the scanner, the whole strip takes several. The
 4490 also reads an infrared channel (Digital ICE): tick **Read the infrared** in **Scan** for a
 negative at 1200 or 2400 dpi or a slide at 2400 (the tick shows only there), on a frame chosen
-in the preview, the lowest too: not on an area reaching the very bottom of the holder (the
-infrared light reads further on in the lid, beyond where the scanner was seen going). The scan then
+in the preview, the lowest too: an area reaching the bottom of the holder loses its last half
+millimetre or so (the infrared light reads further on in the lid, and only as far as Epson Scan
+was seen going). The scan then
 takes two whole passes, colours then infrared, about twice as long (two minutes for a frame at
 1200 dpi); the infrared, laid on the colours by the driver, is kept with each frame and saved
 beside it (`…-infrarosso`). Dust and hairs show dark in it, and VetroScan takes them out of the

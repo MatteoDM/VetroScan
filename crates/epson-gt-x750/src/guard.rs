@@ -241,10 +241,64 @@ pub const ICE_START_DELTAS: std::ops::RangeInclusive<i64> = 39..=45;
 pub const ICE_COLUMN_SHIFT: std::ops::RangeInclusive<i64> = -96..=96;
 
 /// The furthest the lid's unit has gone in a captured read: Epson Scan's Digital ICE on the
-/// lowest frame of a strip (capture 126, 18 November 2026): its infrared read from 2981 after
-/// the white read, 18,461 steps and the ramp's 1,024 to the first line, 3,414 read. (Before it,
-/// Epson Scan's preview of the whole window, 16 and 98: 24,311.)
-pub const MAX_FILM_UNIT_END: u32 = 2981 + 18_461 + 1024 + 3414;
+/// lowest frame of the right strip, its area drawn as low as Epson Scan lets it go (capture 131,
+/// 19 November 2026: 1200 dpi, y 9399, 1784 lines, ending at line 11,183): its infrared read
+/// from 2981 after the white read, 18,368 steps and the ramp's 1,024 to the first line, 3,600
+/// read. (Before it: 126, the same frame as Epson Scan found it, 25,880; Epson Scan's preview of
+/// the whole window, 16 and 98, 24,311.)
+pub const MAX_FILM_UNIT_END: u32 = 2981 + 18_368 + 1024 + 3600;
+
+/// Where the lid's unit is after an infrared pass's white read, at most: the infrared light's
+/// 1,729 steps, the origin's 1416 less the shortest move back allowed, 64.
+const IR_UNIT_AFTER_WHITE_MAX: u32 = ice::IR_UNIT_AT + 1416 - FILM_BACK_MOVES[0] + 64;
+
+/// The most of an area's height a Digital ICE scan cuts from its bottom to keep the lid's unit
+/// within [`MAX_FILM_UNIT_END`] ([`ice_reachable`]): a twentieth, a film frame's border below
+/// it; an area reaching further down is refused.
+const ICE_CUT_MAX: u32 = 20;
+
+/// `r` as a Digital ICE scan can read it: whole, or without the lines at its bottom whose
+/// infrared read would take the lid's unit beyond [`MAX_FILM_UNIT_END`], counted for the worst
+/// case (the unit as far as it can be after the white read, the start the latest of
+/// [`ICE_START_DELTAS`]), so that the infrared pass never stops after the colour one (19 November
+/// 2026, Matteo: the lowest frame as the application finds it ends 13 lines below the lowest
+/// area Epson Scan lets one draw). With the lines cut; more than a [`ICE_CUT_MAX`]th of the
+/// area, and it is refused as [`check_ice_request`] refuses it.
+pub fn ice_reachable(r: &FilmRequest) -> Result<(FilmRequest, u32)> {
+    let mut cut = *r;
+    loop {
+        let g = film::geometry(&cut, setup::XCorrection(0))?;
+        let ir_lines = cut.height
+            + if g.read_dpi == 4800 {
+                cut.ydpi / 600
+            } else {
+                0
+            };
+        let end = infrared_unit_end(
+            IR_UNIT_AFTER_WHITE_MAX,
+            g.start_steps + *ICE_START_DELTAS.end() as u32,
+            ir_lines * 2400 / cut.ydpi + g.lead,
+        );
+        if end <= MAX_FILM_UNIT_END {
+            break;
+        }
+        let over = (end - MAX_FILM_UNIT_END)
+            .div_ceil((2400 / cut.ydpi).max(1))
+            .max(1);
+        if (r.height - cut.height + over) * ICE_CUT_MAX > r.height {
+            // Too much to cut: refused, with the guard's own reason.
+            check_ice_request(r)?;
+            return Err(Error::InvalidRequest(format!(
+                "Epson 4490: Digital ICE on this area would cut more than a {ICE_CUT_MAX}th of \
+                 it at its bottom (the lid's unit's infrared light reads beyond the furthest a \
+                 capture showed); choose an area that ends higher in the holder"
+            )));
+        }
+        cut.height -= over;
+    }
+    check_ice_request(&cut)?;
+    Ok((cut, r.height - cut.height))
+}
 
 /// Where the lid's unit is after an infrared pass's white read, at least: the infrared light's
 /// 1,729 steps, the origin's 1416 less the longest move back allowed, 64.
@@ -1825,32 +1879,77 @@ mod tests {
         for r in [slide1200, neg600, neg8] {
             assert!(check_ice_request(&r).is_err(), "{r:?}");
         }
-        // The whole window, to its bottom: its infrared read would take the lid's unit past the
-        // furthest captured (Epson Scan's ICE on the lowest frame, 126); a frame higher up is
-        // let out (Matteo's app scan of a strip, 18 November 2026, found the limit missing).
+        // The whole window and a frame at its bottom: their infrared read would take the lid's
+        // unit past the furthest captured (131: Epson Scan stops an area 13 lines above the
+        // window's bottom at 1200 dpi), so their bottom lines are cut, a twentieth at most; a
+        // frame higher up is read whole (Matteo's app scan of a strip, 18 November 2026, found
+        // the limit missing; his lowest frame, 19 November, found it too strict).
         for dpi in [1200, 2400] {
             let tall = (film::AREA_INCHES.1 * f64::from(dpi)) as u32;
             let whole = film::for_area(dpi, Film::Negative, (0, 0, dpi * 27 / 10, tall), 16);
-            let e = check_ice_request(&whole).unwrap_err().to_string();
-            assert!(e.contains("lid's unit"), "{e}");
             let frame = |y: u32| film::for_area(dpi, Film::Negative, (0, y, dpi * 3 / 2, dpi), 16);
-            assert!(check_ice_request(&frame(tall - dpi)).is_err(), "{dpi}");
-            check_ice_request(&frame(dpi * 6)).unwrap_or_else(|e| panic!("{dpi}: {e}"));
+            for r in [whole, frame(tall - dpi)] {
+                let (_, lines) = ice_reachable(&r).unwrap_or_else(|e| panic!("{dpi}: {e}"));
+                assert!(
+                    lines > 0 && lines * ICE_CUT_MAX <= r.height,
+                    "{dpi}: {lines}"
+                );
+            }
+            let high = frame(dpi * 6);
+            check_ice_request(&high).unwrap_or_else(|e| panic!("{dpi}: {e}"));
+            assert_eq!(ice_reachable(&high).unwrap(), (high, 0));
         }
-        // Capture 126's own infrared read reaches the limit exactly; its request is let out.
-        assert_eq!(infrared_unit_end(2981, 18_461, 3414), MAX_FILM_UNIT_END);
-        let lowest = FilmRequest {
+        // Capture 131's own infrared read (the lowest area Epson Scan lets one draw) reaches the
+        // limit exactly; 126's (the same frame as Epson Scan found it) is let out whole.
+        assert_eq!(infrared_unit_end(2981, 18_368, 3600), MAX_FILM_UNIT_END);
+        let frame = |x, y, width, height| FilmRequest {
             dpi: 1200,
             ydpi: 1200,
-            x: 1876,
-            y: 9446,
-            width: 1212,
-            height: 1691,
+            x,
+            y,
+            width,
+            height,
             bits: 16,
             film: Film::Negative,
         };
+        let lowest = frame(1876, 9446, 1212, 1691);
         check_ice_request(&lowest).unwrap();
+        assert_eq!(ice_reachable(&lowest).unwrap(), (lowest, 0));
         assert!(check_infrared_reach(MAX_FILM_UNIT_END + 1).is_err());
+        // The same frame as the application found it (19 November 2026, refused then): 13 lines
+        // lower than 131's; a few lines cut at its bottom, counted for the worst case, and let
+        // out; so is 131's own area, by fewer.
+        for (r, most) in [
+            (frame(1888, 9420, 1228, 1776), 40),
+            (frame(1888, 9399, 1188, 1784), 20),
+        ] {
+            let (cut, lines) = ice_reachable(&r).unwrap_or_else(|e| panic!("{r:?}: {e}"));
+            assert!(lines > 0 && lines <= most, "{r:?}: {lines}");
+            assert_eq!((cut.y, cut.height + lines), (r.y, r.height));
+            check_ice_request(&cut).unwrap();
+            let g = film::geometry(&cut, setup::XCorrection(0)).unwrap();
+            let worst = infrared_unit_end(
+                IR_UNIT_AFTER_WHITE_MAX,
+                g.start_steps + *ICE_START_DELTAS.end() as u32,
+                cut.height * 2 + g.lead,
+            );
+            assert!(worst <= MAX_FILM_UNIT_END, "{worst}");
+            // A line more and it would not be.
+            let mut more = cut;
+            more.height += 1;
+            let g = film::geometry(&more, setup::XCorrection(0)).unwrap();
+            let worse = infrared_unit_end(
+                IR_UNIT_AFTER_WHITE_MAX,
+                g.start_steps + *ICE_START_DELTAS.end() as u32,
+                more.height * 2 + g.lead,
+            );
+            assert!(worse > MAX_FILM_UNIT_END, "{worse}");
+        }
+        // A short area at the window's bottom would lose more than a twentieth: refused.
+        let e = ice_reachable(&frame(1888, 11_196 - 200, 1228, 200))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("lid's unit"), "{e}");
         // A film scan without ICE: none of ICE's commands.
         let mut t = guarded(&[]);
         t.permit_film(&neg).unwrap();

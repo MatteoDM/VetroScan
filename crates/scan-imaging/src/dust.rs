@@ -9,9 +9,12 @@
 //! and its infrared (phase 12, step 17 of the plan, measured against a
 //! scanner maker's own removal on nine scans of negatives and slides):
 //!
-//! 1. **the film**: where the infrared's local mean is near the film's (its
-//!    90th percentile); a holder's edge is dark in infrared too, and it is no
-//!    dust;
+//! 1. **the film**: all but the holder, which is dark in infrared too and no
+//!    dust: the large opaque parts (under half the film's level, its 90th
+//!    percentile, over more than the window) and their blurred edge, as far as
+//!    the infrared stays below the film's; dust right by the holder is looked
+//!    for too (19 November 2026: a first rule that left out 30 pixels round
+//!    the holder left the specks by a frame's border);
 //! 2. **the infrared's contrast**: its logarithm less its local mean over a
 //!    31 x 31 window (the dust found once is left out of the mean, so a big
 //!    speck does not hide itself), and its noise on clean film;
@@ -46,9 +49,21 @@ const REACH: usize = 15;
 /// for a pixel to be dust.
 pub const DARK: f32 = 4.0;
 
-/// The film: where the infrared's local mean is at least this share of the
-/// film's level (the infrared's 90th percentile).
-const FILM: f32 = 0.8;
+/// The holder: where the infrared (over 5 x 5) is under this share of the
+/// film's level (the infrared's 90th percentile), in parts larger than the
+/// window (an opaque speck is smaller).
+const OPAQUE: f32 = 0.5;
+
+/// The holder's blurred edge: the pixels next to it while the infrared (over
+/// 5 x 5) stays under this share of the film's own level there (its mean
+/// beyond twice the window's side from the holder), as far as that, rising
+/// away from the holder (a speck by it falls again); and [`EDGE`] pixels more.
+/// (The film's noise over 5 x 5 is about a tenth of this, measured on nine
+/// scans: 0.6-0.7 % a pixel.)
+const RAMP: f32 = 0.99;
+
+/// Pixels left out beyond the holder's blurred edge.
+const EDGE: usize = 2;
 
 /// Lines and columns each colour's dust is looked for around the infrared's.
 const SEARCH: i32 = 3;
@@ -138,7 +153,7 @@ pub fn remove(
             h,
             ir: infrared,
             src,
-            level: percentile(infrared, 0.9),
+            film: film(infrared, w, h),
         })
     };
     let mut removal = removal;
@@ -232,8 +247,112 @@ struct Ctx<'a> {
     h: usize,
     ir: &'a [u16],
     src: Source<'a>,
-    /// The film's infrared (its 90th percentile).
-    level: f32,
+    /// Where the film is ([`film`]).
+    film: Vec<bool>,
+}
+
+/// Where the film is: not the holder (large parts under [`OPAQUE`] of the
+/// film's level), nor its blurred edge ([`RAMP`], [`EDGE`]).
+fn film(ir: &[u16], w: usize, h: usize) -> Vec<bool> {
+    let level = percentile(ir, 0.9);
+    let v: Vec<f32> = ir.iter().map(|&x| f32::from(x)).collect();
+    let near = boxed(&v, None, w, h, 2);
+    let mut off = vec![false; w * h];
+    let mut seen = vec![false; w * h];
+    let dark = |i: usize, share: f32| near[i] < share * level;
+    let neighbours = |i: usize| {
+        let (y, x) = (i / w, i % w);
+        [
+            (y > 0).then(|| i - w),
+            (y + 1 < h).then(|| i + w),
+            (x > 0).then(|| i - 1),
+            (x + 1 < w).then(|| i + 1),
+        ]
+        .into_iter()
+        .flatten()
+    };
+    // The opaque parts, each kept when larger than the window.
+    let large = (2 * REACH + 1) * (2 * REACH + 1);
+    for start in 0..w * h {
+        if seen[start] || !dark(start, OPAQUE) {
+            continue;
+        }
+        seen[start] = true;
+        let mut part = vec![start];
+        let mut k = 0;
+        while k < part.len() {
+            for j in neighbours(part[k]) {
+                if !seen[j] && dark(j, OPAQUE) {
+                    seen[j] = true;
+                    part.push(j);
+                }
+            }
+            k += 1;
+        }
+        if part.len() >= large {
+            for i in part {
+                off[i] = true;
+            }
+        }
+    }
+    // The film's own level by the holder: its mean beyond twice the window's
+    // side from it (a wide window, so that it reaches there).
+    let mut far = off.clone();
+    let mut front: Vec<usize> = (0..w * h).filter(|&i| off[i]).collect();
+    for _ in 0..2 * REACH {
+        let mut next = Vec::new();
+        for &i in &front {
+            for j in neighbours(i) {
+                if !far[j] {
+                    far[j] = true;
+                    next.push(j);
+                }
+            }
+        }
+        front = next;
+    }
+    let keep: Vec<bool> = far.iter().map(|&f| !f).collect();
+    let film_level = boxed(&near, Some(&keep), w, h, 3 * REACH);
+    let below = |i: usize| {
+        let l = if film_level[i].is_finite() {
+            film_level[i]
+        } else {
+            level
+        };
+        near[i] < RAMP * l
+    };
+    // Their blurred edge, while the infrared stays below the film's own level
+    // and rises away from the holder (a speck by it falls again), then a margin.
+    let mut front: Vec<usize> = (0..w * h).filter(|&i| off[i]).collect();
+    for _ in 0..2 * REACH {
+        let mut next = Vec::new();
+        for &i in &front {
+            for j in neighbours(i) {
+                if !off[j] && below(j) && near[j] >= near[i] {
+                    off[j] = true;
+                    next.push(j);
+                }
+            }
+        }
+        if next.is_empty() {
+            break;
+        }
+        front = next;
+    }
+    let mut front: Vec<usize> = (0..w * h).filter(|&i| off[i]).collect();
+    for _ in 0..EDGE {
+        let mut grown = Vec::new();
+        for &i in &front {
+            for j in neighbours(i) {
+                if !off[j] {
+                    off[j] = true;
+                    grown.push(j);
+                }
+            }
+        }
+        front = grown;
+    }
+    off.iter().map(|&o| !o).collect()
 }
 
 /// One band's measures, lines `a..b` of the image.
@@ -364,7 +483,9 @@ fn find(ctx: &Ctx) -> (Removal, [Option<Vec<bool>>; 3], Vec<f32>) {
             let lines = (band.r.len() / w) as isize;
             for i in rows(band, y0, y1, w) {
                 let at = band.a * w + i;
-                if !mask[at] || dark[at] < deepest {
+                // Clear dust only (twice the threshold): a pixel just past it may be
+                // the blurred tail of an edge, with no shadow in the colours.
+                if !mask[at] || dark[at] < deepest || dark[at] > -2.0 * threshold {
                     continue;
                 }
                 count += 1;
@@ -449,19 +570,7 @@ fn measure(
     let w = ctx.w;
     let lines = b - a;
     let ir: Vec<f32> = ctx.ir[a * w..b * w].iter().map(|&v| f32::from(v)).collect();
-    // The film: the infrared's local mean near the film's level, and the
-    // window around a pixel all such.
-    let mean = boxed(&ir, None, w, lines, REACH);
-    let off: Vec<f32> = mean
-        .iter()
-        .map(|&m| if m >= FILM * ctx.level { 0.0 } else { 1.0 })
-        .collect();
-    let near = boxed(&off, None, w, lines, REACH);
-    let film: Vec<bool> = off
-        .iter()
-        .zip(&near)
-        .map(|(&o, &k)| o == 0.0 && k < 1e-6)
-        .collect();
+    let film = ctx.film[a * w..b * w].to_vec();
     let log: Vec<f32> = ir.iter().map(|&v| v.max(1.0).ln()).collect();
     let keep: Vec<bool> = match exclude {
         Some(x) => film
@@ -934,6 +1043,34 @@ mod tests {
         assert_eq!(r.found, 0, "{r:?}");
         assert_eq!(samples, f.samples);
         assert!(r.film < 120 * 100, "{r:?}");
+    }
+
+    /// A speck 6 pixels from the holder's edge (the holder the top 40 lines, its edge blurred
+    /// over 3 lines) is found and filled; the edge itself is left as it is (19 November 2026:
+    /// the specks by a frame's border were left).
+    #[test]
+    fn a_speck_by_the_holder_is_found_too() {
+        let holder = |y: f32, x: f32| {
+            let edge = ((y - 40.0) / 3.0).clamp(0.0, 1.0) * 0.98 + 0.02;
+            let speck = (y - 49.0).hypot(x - 60.0) <= 2.0;
+            if speck {
+                edge * 0.25
+            } else {
+                edge
+            }
+        };
+        let mut f = film(120, 140, grey, holder, [[0.0; 2]; 3], 0.0);
+        let mut samples = f.samples.clone();
+        let r = remove(&mut f.image, Some(&mut samples), &f.infrared).unwrap();
+        assert!(r.found >= 9 && r.found <= 30, "{r:?}");
+        let i = (49 * 120 + 60) * 3;
+        let back = f32::from(samples[i]) / f32::from(f.clean[i]);
+        assert!((back - 1.0).abs() < 0.05, "{back} {r:?}");
+        // The holder and its edge untouched.
+        for y in [10, 38, 41, 42] {
+            let i = (y * 120 + 30) * 3;
+            assert_eq!(samples[i..i + 3], f.samples[i..i + 3], "{y}");
+        }
     }
 
     #[test]

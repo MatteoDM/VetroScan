@@ -726,7 +726,9 @@ impl Gt4490 {
         let _mark = mark::ScanMark::begin(&self.mark);
         self.lid_lamp = true;
         if request.infrared {
-            // Digital ICE: two passes, each reported over half the bar.
+            // Digital ICE: two passes, each reported over half the bar; an area low in the
+            // holder loses the few lines at its bottom the infrared light cannot reach.
+            let (r, cut) = guard::ice_reachable(&r)?;
             let mut passes = IcePasses::default();
             let scanned =
                 scan::scan_ice(
@@ -746,12 +748,14 @@ impl Gt4490 {
                     },
                 )?;
             progress(Progress::Finishing);
-            return Ok(ice_result_of(
-                scanned,
-                request.dpi,
-                request.area.height,
-                request.depth == 16,
-            ));
+            let mut result = ice_result_of(scanned, request.dpi, r.height, request.depth == 16);
+            if cut > 0 {
+                result.details.push((
+                    "lines cut at the bottom".into(),
+                    format!("{cut} (the infrared light reads no further)"),
+                ));
+            }
+            return Ok(result);
         }
         let scanned =
             scan::scan_film(
