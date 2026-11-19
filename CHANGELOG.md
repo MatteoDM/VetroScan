@@ -25,7 +25,13 @@ GitHub; here they are in English.
   it, for that film and resolution: the Epson Perfection 4490 for negatives at 1200 and 2400 dpi
   and slides at 2400 (a scan takes both passes, about twice as long), on any frame, the lowest
   too, but not on an area reaching the holder's very bottom (its infrared light reads further
-  on in the lid, beyond where the scanner was seen going). The dust is not taken away yet.
+  on in the lid, beyond where the scanner was seen going). The dust, hairs and specks it shows
+  are taken out of the scan (`scan_imaging::dust`): found where the infrared is darker than its
+  surroundings by four times its own noise, the picture's faint copy in the infrared (a film's
+  cyan) taken out first, each colour's shadow found where it lies (on a slide the red's is more
+  than a line away); light dust divided by what it took (the grain stays), the rest filled from
+  around. Against Epson Scan's own ICE on nine scans: 90-98 % of what it changes on negatives,
+  49-63 % on slides; none of its marks where the infrared is only blurred.
 - `epson4490 film-scan … --ice`: the Epson Perfection 4490 scans a film with Digital ICE as Epson
   Scan does, colours then infrared, and lays the infrared on the colours itself; only what
   Epson Scan was seen doing with ICE (negatives at 1200 and 2400 dpi, slides at 2400). When the

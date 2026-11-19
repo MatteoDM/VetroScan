@@ -4012,6 +4012,81 @@ fn the_infrared_is_offered_asked_kept_and_saved_where_the_scanner_reads_it() {
     assert!(reopened.app.request().infrared);
 }
 
+/// "Leggi l'infrarosso" takes the dust it shows out of the scan: the dusty strip's first frame
+/// scanned with the tick comes out as a scanner without the dust gives it, where the infrared is
+/// dark; without the tick the dust stays.
+#[test]
+fn the_dust_the_infrared_shows_is_taken_out_of_the_scan() {
+    // The frames, each with its infrared when read, from a scanner after a preview.
+    let frames = |scanner: FakeScanner, tick: bool| {
+        let mut ui = Ui::with_scanners(vec![scanner]);
+        ui.send(Message::Pane(crate::Pane::Scan));
+        ui.click("Pellicola");
+        ui.send(Message::Dpi(600));
+        ui.send(Message::Infrared(tick));
+        ui.send(Message::Preview);
+        ui.settle();
+        ui.scan(1);
+        assert_eq!(ui.app.pages.len(), 2, "{}", ui.app.note);
+        ui.app
+            .pages
+            .iter()
+            .map(|p| ((*p.raw.full).clone(), p.infrared.as_deref().cloned()))
+            .collect::<Vec<_>>()
+    };
+    let clean = frames(FakeScanner::with_adapter(), false);
+    let cleaned = frames(FakeScanner::with_infrared(), true);
+    let dusty = frames(FakeScanner::with_infrared(), false);
+    let (first, ir) = (&cleaned[0].0, cleaned[0].1.as_ref().expect("the infrared"));
+    assert_eq!(
+        (first.width, first.height),
+        (clean[0].0.width, clean[0].0.height)
+    );
+    assert!(dusty[0].1.is_none());
+    // The dust: where the infrared is dark (the specks and the hair let through a quarter).
+    let clear = (scanner_api::fake::FILM_INFRARED * 65535.0) as u16;
+    let dust: Vec<usize> = (0..ir.len()).filter(|&i| ir[i] < clear / 2).collect();
+    assert!(dust.len() > 30, "{}", dust.len());
+    let off = |a: &scan_imaging::Image, b: &scan_imaging::Image| {
+        dust.iter()
+            .flat_map(|&i| (0..3).map(move |c| i * 3 + c))
+            .map(|k| f64::from(a.data[k].abs_diff(b.data[k])))
+            .sum::<f64>()
+            / (dust.len() * 3) as f64
+    };
+    let (gone, left) = (off(first, &clean[0].0), off(&dusty[0].0, &clean[0].0));
+    assert!(left > 20.0, "the dust in the scan without the tick: {left}");
+    assert!(gone < 3.0, "the dust taken out with it: {gone}");
+    // Away from the dust, the scan as it was.
+    let near: Vec<bool> = {
+        let w = first.width;
+        let mut near = vec![false; ir.len()];
+        for i in (0..ir.len()).filter(|&i| ir[i] < clear) {
+            let (y, x) = (i / w, i % w);
+            for yy in y.saturating_sub(4)..=(y + 4).min(first.height - 1) {
+                for xx in x.saturating_sub(4)..=(x + 4).min(w - 1) {
+                    near[yy * w + xx] = true;
+                }
+            }
+        }
+        near
+    };
+    // (the development's rounding moves a few samples by a level)
+    let moved: Vec<u8> = (0..ir.len() * 3)
+        .filter(|&k| !near[k / 3])
+        .map(|k| first.data[k].abs_diff(dusty[0].0.data[k]))
+        .filter(|&d| d > 0)
+        .collect();
+    assert!(
+        moved.iter().all(|&d| d <= 1) && moved.len() * 10_000 < ir.len() * 3,
+        "the scan changed away from the dust: {} samples, up to {:?}",
+        moved.len(),
+        moved.iter().max()
+    );
+    // The second frame has no dust: nothing found, nothing changed.
+    assert_eq!(cleaned[1].0, dusty[1].0);
+}
+
 /// The same with a scanner that reads no infrared: no tick, nothing asked, nothing kept, even
 /// with the choice left on by another scanner.
 #[test]

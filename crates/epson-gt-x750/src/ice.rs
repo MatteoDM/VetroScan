@@ -961,22 +961,65 @@ pub(crate) mod tests {
         assert!((colour_per_infrared(16_160.0) - 0.99282).abs() < 5e-5);
     }
 
-    /// The registration on Epson Scan's own reads of captures 108, 109 and 112 (dumped by
-    /// `ice.py`'s decoder to `ICE_REG/<n>_col.bin` and `<n>_ir.bin`, three u16 a pixel), to
-    /// set beside `ice.py --register`: run with `ICE_REG=… cargo test --release -p epson-gt-x750
-    /// --lib registration_on_the_captures -- --ignored --nocapture`.
+    /// The registration on Epson Scan's own reads of every ICE capture (dumped by `ice.py`'s
+    /// decoder to `ICE_REG/<n>_col.bin` and `<n>_ir.bin`, three u16 a pixel), to set beside
+    /// `ice.py --register`; it writes the frame as the driver assembles it (`<n>_frame.bin`,
+    /// three u16 a pixel; `<n>_size.txt` its width and height) and the infrared it lays on it
+    /// (`<n>_laid.bin`, one u16 a pixel) for `ice_dust.py`, and the scan-imaging crate's
+    /// `dust_on_the_captures`. Run with `ICE_REG=… cargo test --release -p epson-gt-x750 --lib
+    /// registration_on_the_captures -- --ignored --nocapture`; a capture whose reads are not
+    /// there is skipped.
     #[test]
     #[ignore = "needs the captures' reads, outside the repository"]
     fn registration_on_the_captures() {
         let dir = std::env::var("ICE_REG").expect("ICE_REG");
-        for (k, case) in [("108", ICE[1]), ("109", ICE[2]), ("112", ICE[4])] {
-            let (_, req, corr, ch, ih, ..) = case;
+        // 127 and 130: Epson Scan right after a power-on, the colour read's lead 128.
+        let after_power_on = |corr: i16, ch, ih| {
+            let req = FilmRequest {
+                dpi: 1200,
+                ydpi: 1200,
+                x: 151,
+                y: 419,
+                width: 1188,
+                height: 1784,
+                bits: 16,
+                film: Film::Negative,
+            };
+            (req, corr, ch, ih, Some(128))
+        };
+        // Name, request, x correction, holes in colour and in infrared, the colour read's lead.
+        type Case = (FilmRequest, i16, [u16; 8], [u16; 8], Option<u32>);
+        let mut cases: Vec<(&str, Case)> = ICE
+            .iter()
+            .map(|&(k, req, corr, ch, ih, ..)| (k, (req, corr, ch, ih, None)))
+            .collect();
+        cases.push((
+            "127",
+            after_power_on(
+                -104,
+                [672, 556, 144, 142, 606, 530, 150, 142],
+                [616, 550, 138, 138, 636, 524, 146, 134],
+            ),
+        ));
+        cases.push((
+            "130",
+            after_power_on(
+                -87,
+                [656, 564, 144, 142, 584, 538, 152, 142],
+                [602, 556, 138, 138, 616, 532, 146, 132],
+            ),
+        ));
+        for (k, (req, corr, ch, ih, lead)) in cases {
+            if !std::path::Path::new(&format!("{dir}/{k}_col.bin")).exists() {
+                println!("{k}: no reads, skipped");
+                continue;
+            }
             let corr = XCorrection(corr);
-            let colour = FilmPlan::from_geometry(
-                req,
-                crate::film::geometry(&req, corr).unwrap(),
-                Pass::IceColour,
-            );
+            let mut geometry = crate::film::geometry(&req, corr).unwrap();
+            if let Some(lead) = lead {
+                geometry = geometry.with_lead(lead).unwrap();
+            }
+            let colour = FilmPlan::from_geometry(req, geometry, Pass::IceColour);
             let h = |v| Holes {
                 found: true,
                 values: v,
@@ -987,7 +1030,16 @@ pub(crate) mod tests {
             let image = crate::scan::assemble_film(&col, &colour);
             let (out, reg) = register(&image, &colour, &raw_ir, &ir);
             let mean = out.iter().map(|&v| f64::from(v)).sum::<f64>() / out.len() as f64;
-            println!("{k}: {reg:?}, infrared mean {mean:.0}");
+            println!(
+                "{k}: {reg:?}, infrared mean {mean:.0}, frame {} x {}",
+                image.width, image.height
+            );
+            std::fs::write(format!("{dir}/{k}_frame.bin"), &image.data).unwrap();
+            std::fs::write(
+                format!("{dir}/{k}_size.txt"),
+                format!("{} {}", image.width, image.height),
+            )
+            .unwrap();
             std::fs::write(
                 format!("{dir}/{k}_laid.bin"),
                 out.iter()

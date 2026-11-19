@@ -6489,7 +6489,27 @@ impl App {
     ) {
         // One sample a pixel of the scan, as the contract says, or nothing.
         let infrared = infrared.filter(|ir| ir.len() == image.width * image.height);
-        let (image, samples16) = self.cleaned(purpose, image, samples16);
+        let (mut image, mut samples16) = self.cleaned(purpose, image, samples16);
+        // "Leggi l'infrarosso": the dust it shows taken out of the scan before anything is made
+        // of it (frames, development, saving); the infrared itself is kept, and saved beside.
+        if let Some(ir) = infrared.as_deref() {
+            if !self.settings().untouched {
+                let found = scan_imaging::dust::remove(&mut image, samples16.as_deref_mut(), ir);
+                if let Some(r) = found {
+                    worker::log(&format!(
+                        "dust: {} px found, threshold {:.2} %, crosstalk {:.3?}, shifts {:.2?}, \
+                         divided {:?}, filled {:?}, left {}",
+                        r.found,
+                        r.threshold * 100.0,
+                        r.crosstalk,
+                        r.shifts,
+                        r.divided,
+                        r.filled,
+                        r.left
+                    ));
+                }
+            }
+        }
         let colour_noise = self.settings().colour_noise;
         let correction = self.colour_correction();
         match purpose {
@@ -8132,7 +8152,9 @@ impl App {
                             text(tr(
                                 "Una seconda lettura con la luce infrarossa, che passa la \
                                  pellicola ma non la polvere e i graffi: circa il doppio del \
-                                 tempo. Si salva accanto ai file a 16 bit e RAW.",
+                                 tempo. La polvere e i peli che mostra si tolgono dalla \
+                                 scansione; l'infrarosso si salva accanto ai file a 16 bit e \
+                                 RAW.",
                             ))
                             .size(11),
                         );

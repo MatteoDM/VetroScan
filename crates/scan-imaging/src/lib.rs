@@ -8,7 +8,8 @@
 //! ([`transform`]), and finding the photos and pages on the glass
 //! ([`detect`]), slides and negatives in transmitted light ([`film`]), and
 //! the noise of the colour ([`chroma`]), a scanner's colours corrected
-//! with a matrix it declares ([`colour`]).
+//! with a matrix it declares ([`colour`]), and a film's dust found in the
+//! infrared a scanner reads beside the colours ([`dust`]).
 //! Nothing here knows about USB or about a scanner model.
 
 pub mod adjust;
@@ -16,6 +17,7 @@ pub mod chroma;
 pub mod colour;
 pub mod convert;
 pub mod detect;
+pub mod dust;
 pub mod film;
 mod image;
 pub mod stripes;

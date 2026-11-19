@@ -150,8 +150,12 @@ in the preview, the lowest too: not on an area reaching the very bottom of the h
 infrared light reads further on in the lid, beyond where the scanner was seen going). The scan then
 takes two whole passes, colours then infrared, about twice as long (two minutes for a frame at
 1200 dpi); the infrared, laid on the colours by the driver, is kept with each frame and saved
-beside it (`…-infrarosso`). Dust and hairs show dark in it; VetroScan does not take them away
-yet. After a film, the next scan of the glass switches back to the glass's lamp and warms it
+beside it (`…-infrarosso`). Dust and hairs show dark in it, and VetroScan takes them out of the
+scan: light dust is divided by what it took (the grain under it stays), a speck or a hair that
+lets little through is filled from around it, in each colour where its shadow lies. What is not
+dust (the picture's edges, a hair out of focus) is left alone; a mark wider than a few tenths of
+a millimetre stays. To see what was found, open the `…-infrarosso` file beside the scan. After a
+film, the next scan of the glass switches back to the glass's lamp and warms it
 up first.
 
 Slides are scanned as negatives are on the HP 3770, with the longer exposure of its negatives'

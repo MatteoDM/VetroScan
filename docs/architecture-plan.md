@@ -2109,12 +2109,44 @@ never run by us (step 12).
        row, the line shift and column offset measured on the image, the scale per resolution)
        in the driver, checked against `ice.py`; then the 4490 declares `Infrared` for what was
        captured: negatives at 1200 and 2400 dpi, slides at 2400, and nothing above 2400.
-    3. **The dust removal** in `scan-imaging` (generic, from what it measures): the infrared
-       relative to its local mean (5 % explains 99 % of Epson's changes here), the cyan
-       crosstalk taken away first, the pixels found filled from their neighbours; measured
-       against Epson Scan's ICE TIFFs of the same frames, then in the same tick. The infrared is
-       laid on the blue row: a hair in the red lies up to 2 lines further along on a slide
-       (item 5 above), so the mask grows, or moves, by colour.
+    3. **The dust removal: done** (19 November 2026, evening; measured first, `captures/
+       epson4490/06-formato-dati.md`, "La polvere", tool `tools/ice_dust.py`). What it said: the
+       infrared relative to its local mean, the cyan crosstalk taken away first, the pixels
+       found filled from their neighbours, the mask moved by colour; measured against Epson
+       Scan's ICE TIFFs, then in the same tick.
+       **Measured** on all nine ICE captures with their TIFFs (the driver's own laid infrared,
+       `registration_on_the_captures` now on all nine): the infrared's noise on clean film
+       0.59-0.73 %; Epson corrects from about 4 times it (half of the pixels 4-5 noises dark,
+       nearly all from 8); a mask at 4 noises holds 99-100 % of Epson's changes on the
+       negatives (91.6 % on 126, by the holder), 55-72 % on the slides; the crosstalk 0.043-0.055
+       x the red's log contrast on negatives, 0.006 on slides (small: it takes 5-15 % of the
+       mask, none of Epson's changes); each colour's dust from the infrared's (laid on blue):
+       negatives at 2400 red +0.54-0.67 lines, green +0.31-0.36, blue +0.09-0.15, at 1200 within
+       0.33; slides red +1.14-1.19, green +0.52-0.54, blue +0.30; Epson divides light dust by
+       what the infrared says it took (a little more in the visible) and fills deep dust.
+       **Built**: `scan_imaging::dust::remove` (no scanner's number in it: the threshold
+       `DARK` x the noise it measures, the crosstalk fitted on the clean film, each colour's
+       shift and depth measured on the dust, the film found from the infrared's own level; a
+       pixel under dust that lets less than `DEEP` (0.9) of the infrared through is filled along
+       the line, of four, whose ends agree best, a pixel round it too; lighter dust divided),
+       five unit tests on made-up films (a speck and a hair, red 1.2 lines off; the picture's
+       copy in the infrared; a holder dark in infrared; 8 bits alone; sizes), and
+       `dust_on_the_captures` (ignored) with `ice_dust.py --ours`: **96-98 % of Epson's changes
+       made on the negatives at 2400 and 1200 (126: 90 %), 49-63 % on the slides**, 20-185
+       pixels a frame changed by us and not by Epson, the frame touched 1.2-4.3 %, 0.7-3.0 s a
+       frame (release). By eye (`scansioni/ice_polvere_20261119/`): hairs and specks gone as
+       Epson's; where Epson errs we do not (a blurred infrared mark printed as a dark disc, a
+       hair across a tree's edge broken into blocks); left: coloured dots of a few pixels in the
+       biggest specks (108), and on slides Epson's changes in foliage we do not make (who is
+       right is not known). **In the app** (Matteo's choice: the same tick): *Leggi
+       l'infrarosso* takes the dust out of the scan before frames, development and saving; the
+       `-infrarosso` file is still saved; the result in `tasti.log`; e2e
+       `the_dust_the_infrared_shows_is_taken_out_of_the_scan` (the made-up dusty strip against
+       the same scanner without dust, and without the tick).
+       **Left**: the slides (half of Epson's changes: a pair of slide scans with and without
+       dust, blown clean between them, would say who is right); the coloured dots in big
+       specks; the removal runs on the app's thread (3 s for a frame at 2400 dpi); Matteo's
+       first try on a real scan in the app.
 
 **F. Release** (milestone 7)
 
