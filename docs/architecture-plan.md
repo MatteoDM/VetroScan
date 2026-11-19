@@ -2086,14 +2086,21 @@ never run by us (step 12).
           colour read's line time 11,520 µs, lead 128 at 1200 dpi (start 527), +42, whole and
           laid (line 0.11, column 0.09); Epson Scan after it the same leads, +45: right after a
           power-on Epson's infrared holes read 2-4 half pixels higher than ours, the same rule.
-          Left: (b) 126's infrared column, one off: not the correction's parity (127's even
-          one is right), 126 is the one frame on the right strip; (c) the slides' line
-          0.35 low.
-       5. Open, not blocking: the registration's line on slides 0.35 below `ice.py`'s (112, 116;
-          the driver compares the infrared's green row with the colours' blue, `ice.py` blue with
-          blue: try the infrared's blue row for the measure); the colour tone tables of the ICE
-          colour pass are linear (Epson's own curve doubles a negative's shadows), as every film
-          of ours.
+          **(b) settled** (19 November 2026): the infrared columns' shift from the left hole
+          (x (1 / 0.99279 - 1)) is **truncated**, not rounded: 126, the one frame on the right
+          strip, is the only one whose fraction passes a half (53.55); `icesetup.py --check` 0
+          differences on all ten ICE captures (18, 108-113, 126, 127, 130), the driver's tests
+          plan 126 and, with their two leads, 127 and 130 as Epson Scan did. One capture decides
+          it: a second frame on the right strip would confirm. (c): item 5.
+       5. **(c) settled** (19 November 2026): the infrared the driver lays sits on the colours'
+          **blue** row within 0.02-0.08 lines (108, 109, 112; the laid infrared correlated with
+          each colour of our own assembly); `ice.py`'s 0.35 on slides came from its own raw-line
+          arithmetic. But the three colours are not on each other: green 0.1-0.3 lines off the
+          blue, red 0.2-1.0 in our images, and **the same or more in Epson Scan's TIFFs** (red 0.2-
+          0.65 lines on negatives, 1.4-1.9 on slides: the CCD rows a little less than ydpi / 50
+          apart, more so at a slide's height); Epson does not correct it, nor do we (a possible
+          later fix of the films' assembly). Still open: the colour tone tables of the ICE colour
+          pass are linear (Epson's own curve doubles a negative's shadows), as every film of ours.
        What the item said before it was built: the rules of the second pass (from the captures, as
        `filmsetup.py` did for colour: the unit's move, the exposure loop, the shading on the
        wider columns, the start move from the holes, the infrared columns), the hole pre-read
@@ -2105,7 +2112,9 @@ never run by us (step 12).
     3. **The dust removal** in `scan-imaging` (generic, from what it measures): the infrared
        relative to its local mean (5 % explains 99 % of Epson's changes here), the cyan
        crosstalk taken away first, the pixels found filled from their neighbours; measured
-       against Epson Scan's ICE TIFFs of the same frames, then in the same tick.
+       against Epson Scan's ICE TIFFs of the same frames, then in the same tick. The infrared is
+       laid on the blue row: a hair in the red lies up to 2 lines further along on a slide
+       (item 5 above), so the mask grows, or moves, by colour.
 
 **F. Release** (milestone 7)
 

@@ -285,14 +285,6 @@ pub fn request_block(r: &FilmRequest, pass: Pass) -> Result<[u8; 42]> {
 }
 
 /// Rounds `num / den` half away from zero.
-fn round_div(num: i64, den: i64) -> i64 {
-    if num >= 0 {
-        (2 * num + den) / (2 * den)
-    } else {
-        -((-2 * num + den) / (2 * den))
-    }
-}
-
 /// The infrared pass's plan from the colour pass's (`colour`), `1E 87`'s correction and the two
 /// passes' holes (Epson Scan's choice, `icesetup.py`): its read starts at the colour read's
 /// logical column L moved by the left hole's shift and by the scale (L + (iL - cL) +
@@ -324,7 +316,9 @@ pub fn infrared_plan(
     );
     let x = i64::from(logical * u) - p - cl;
     let (sn, sd) = (IR_SCALE.0 as i64, IR_SCALE.1 as i64);
-    let shift = round_div(x * (sn - sd), sd);
+    // Truncated toward zero, as integers divide (capture 126, the one frame on the right
+    // strip: 53.55 -> 53; every other capture's fraction is below a half).
+    let shift = x * (sn - sd) / sd;
     let at = i64::from(logical * u) + (il - cl) + shift;
     let Ok(at) = u32::try_from(at) else {
         return bad(format!(
@@ -731,7 +725,7 @@ pub(crate) mod tests {
         (u32, u32),
         (u16, u16),
         u32,
-    ); 6] = {
+    ); 7] = {
         const fn r(dpi: u32, x: u32, y: u32, width: u32, height: u32, film: Film) -> FilmRequest {
             FilmRequest {
                 dpi,
@@ -818,8 +812,65 @@ pub(crate) mod tests {
                 (0, 0),
                 2366,
             ),
+            (
+                "126",
+                r(1200, 1876, 9446, 1212, 1691, N),
+                -82,
+                [654, 558, 142, 142, 582, 538, 150, 142],
+                [600, 546, 138, 138, 616, 526, 146, 134],
+                18_419,
+                18_461,
+                (3522, 6082),
+                (0, 0),
+                1691,
+            ),
         ]
     };
+
+    /// Captures 127 and 130 (Epson Scan right after a power-on): the colour read's line time
+    /// asks a lead of 128, the infrared's 32; the infrared's first line 45 steps after the
+    /// colour's (start move and lead: 269 + 128, 410 + 32).
+    #[test]
+    fn the_infrared_start_counts_each_reads_lead() {
+        let req = FilmRequest {
+            dpi: 1200,
+            ydpi: 1200,
+            x: 151,
+            y: 419,
+            width: 1188,
+            height: 1784,
+            bits: 16,
+            film: Film::Negative,
+        };
+        for (corr, ch, ih, cols) in [
+            (
+                -104,
+                [672, 556, 144, 142, 606, 530, 150, 142],
+                [616, 550, 138, 138, 636, 524, 146, 134],
+                (2355, 4915),
+            ),
+            (
+                -87,
+                [656, 564, 144, 142, 584, 538, 152, 142],
+                [602, 556, 138, 138, 616, 532, 146, 132],
+                (2365, 4925),
+            ),
+        ] {
+            let corr = XCorrection(corr);
+            let mut colour = FilmPlan::new(req, corr).unwrap();
+            colour.geometry = colour.geometry.with_lead(128).unwrap();
+            assert_eq!(colour.geometry.start_steps, 269);
+            let h = |v| Holes {
+                found: true,
+                values: v,
+            };
+            let ir = infrared_plan(&colour, corr, &h(ch), &h(ih)).unwrap();
+            let g = ir.geometry;
+            assert_eq!((g.start_steps, g.lead, g.columns), (410, 32, cols));
+            assert_eq!(g.read_steps, 1784 * 2 + 32);
+            crate::guard::check_infrared_plan(&colour, &ir).unwrap();
+        }
+    }
 
     #[test]
     fn the_infrared_read_is_planned_as_epson_scan_planned_it() {
