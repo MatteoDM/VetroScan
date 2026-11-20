@@ -2281,6 +2281,23 @@ then our runs.
     the picture: it filled texture); negatives a little worse too. On the loose dust the gap to
     Epson is about twenty pixels a frame (we alone leave 71, Epson alone 49, both 82: the
     comparison's own floor at the marks' edges): **slides settled as they are**.
+    **The coloured dots in big specks: the comparison's, not the removal's** (20 November 2026;
+    `captures/epson4490/06-formato-dati.md`, "I puntini colorati"; `tools/ice_dots.py`). The
+    three seen on 108 (red, yellow, dark), redone through the per-channel curves alone and
+    stretched: our result there is clean, as Epson's (on one Epson leaves a grey patch). They came
+    from `ice_dust.py`'s per-cell correction (32 x 32 x 32 of our values, added for the slides'
+    mixed colours), measured over the whole frame: a speck's unusual colours fall in cells made
+    mostly of dust, whose mean is Epson's own ICE change, which tinted the dust in the comparison.
+    The cells now measured away from the dust, each value corrected by its own: on the same
+    cleaned frames, negatives **93.7-99.5 %** of Epson's changes (they read 90.2-98.2 %), ours
+    alone 4-158 pixels a frame (108: 104 -> 18); slides 41-51 % (Epson's changes counted grow:
+    the dust's colours fall in cells with little clean film; the slides' comparison stays
+    ambiguous, the 134/136 pair judges them better). Also measured: a fill grown from the deep
+    dust while a colour is darker than the infrared says by 4 times its grain (a test on a made-up
+    rim): 30-280 pixels a frame, nothing measurable changed (108 98.9 % with and without); not
+    kept, `dust.rs` unchanged. **Left, real and small**: where a hair crosses a sharp edge of the
+    picture (108, a leaf's edge at 1345/1085), our fill leaves a thin dark line along the edge;
+    Epson there is clean.
 
 **The HP 3770, what is missing** (last, as Matteo asked; from this plan's phases 10, 13, 14 and
 the code review's list):
