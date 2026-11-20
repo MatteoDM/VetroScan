@@ -2256,9 +2256,14 @@ then our runs.
     hardly do, where Epson leaves artefacts and we do not); on the dust that blowing took away,
     by the infrared's marks and away from the holder, we fix 67 %, Epson 72 %; what we leave is
     mostly inside our mask, **divided** (the infrared passing more than `DEEP`) where the
-    colour's shadow is far deeper: a fill there, or a deeper division, to try and measure on
-    134 / 136 and on the negatives. `registration_on_the_captures` and `dust_on_the_captures`
-    take 134 now.
+    colour's shadow is far deeper. `registration_on_the_captures` and `dust_on_the_captures`
+    take 134 now. **Tried and dropped** (same evening): filling also where the colour's own
+    contrast (its log over its 31 x 31 mean, the dust left out) is 10 % below what the infrared
+    predicts: the loose dust fixed 67.2 -> 67.5 %, but ten times the pixels filled on slides and
+    our changes where Epson changes nothing 112 -> 1115, 134 -> 930 (the colour's contrast holds
+    the picture: it filled texture); negatives a little worse too. On the loose dust the gap to
+    Epson is about twenty pixels a frame (we alone leave 71, Epson alone 49, both 82: the
+    comparison's own floor at the marks' edges): **slides settled as they are**.
 
 **The HP 3770, what is missing** (last, as Matteo asked; from this plan's phases 10, 13, 14 and
 the code review's list):
