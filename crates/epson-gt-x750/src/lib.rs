@@ -277,24 +277,14 @@ pub fn capabilities() -> Capabilities {
         }],
         scan_memory: scan_memory(),
         // Digital ICE (`docs/architecture-plan.md` phase 12 step 17): where Epson Scan was
-        // captured using it and ours ran (captures 18, 108-124): negatives at 1200 and 2400 dpi,
-        // slides at 2400 (`guard::ICE_COVERED`); the driver reads the infrared pass and lays it
-        // on the colours. With ICE the scanner never reads above 2400 (Epson Scan asked 4800
+        // captured using it and ours ran (captures 18, 108-140): negatives and slides at 600,
+        // 1200 and 2400 dpi (`guard::ICE_COVERED`); the driver reads the infrared pass and lays
+        // it on the colours. With ICE the scanner never reads above 2400 (Epson Scan asked 4800
         // reads 2400 and enlarges).
-        infrared: vec![
-            Infrared {
-                source: Source::Negative,
-                dpi: 1200,
-            },
-            Infrared {
-                source: Source::Negative,
-                dpi: 2400,
-            },
-            Infrared {
-                source: Source::Slide,
-                dpi: 2400,
-            },
-        ],
+        infrared: [Source::Negative, Source::Slide]
+            .into_iter()
+            .flat_map(|source| [600, 1200, 2400].map(|dpi| Infrared { source, dpi }))
+            .collect(),
     }
 }
 
@@ -942,9 +932,8 @@ mod tests {
     }
 
     /// The 4490 declares Digital ICE where it was captured and the guard lets it out (negatives
-    /// at 1200 and 2400 dpi, slides at 2400, 16 bits), and nowhere else: every other source and
-    /// resolution it offers films at is refused by the guard, or let out by it but not yet run by
-    /// us on the scanner (`NOT_YET_RUN`: Epson Scan's ICE captured there, 132, 133, 137).
+    /// and slides at 600, 1200 and 2400 dpi, 16 bits; ours run on each, 117-140), and nowhere
+    /// else: every other resolution it offers films at (4800) is refused by the guard.
     #[test]
     fn infrared_is_declared_where_the_guard_lets_it_out() {
         use film::Film;
@@ -954,19 +943,13 @@ mod tests {
             (Source::Slide, Film::Positive),
         ];
         let t = caps.transparency.as_ref().expect("the lid's adapter");
-        const NOT_YET_RUN: [(Source, u16); 3] = [
-            (Source::Negative, 600),
-            (Source::Slide, 600),
-            (Source::Slide, 1200),
-        ];
         let mut declared = 0;
         for &dpi in &t.resolutions {
             for (source, film) in films {
                 // A frame near the window's top, as the application asks it.
                 let d = u32::from(dpi);
                 let r = film::for_area(d, film, (0, d / 2, d * 3 / 2, d), 16);
-                let lets_out =
-                    guard::check_ice_request(&r).is_ok() && !NOT_YET_RUN.contains(&(source, dpi));
+                let lets_out = guard::check_ice_request(&r).is_ok();
                 assert_eq!(
                     caps.infrared_at(source, dpi),
                     lets_out,
@@ -976,7 +959,7 @@ mod tests {
             }
         }
         assert_eq!(declared, caps.infrared.len());
-        assert_eq!(declared, 3);
+        assert_eq!(declared, 6);
     }
 
     #[test]

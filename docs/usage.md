@@ -145,7 +145,7 @@ covers the holder's window but its top 6 mm, where only the holder's edge is. Ea
 lights the lid's lamp (about 20 seconds when it was off) and calibrates on its own; a frame
 took a minute at 1200 dpi and two at 4800 on the scanner, the whole strip takes several. The
 4490 also reads an infrared channel (Digital ICE): tick **Read the infrared** in **Scan** for a
-negative at 1200 or 2400 dpi or a slide at 2400 (the tick shows only there), on a frame chosen
+negative or a slide at 600, 1200 or 2400 dpi (the tick shows only there), on a frame chosen
 in the preview, the lowest too: an area reaching the bottom of the holder loses its last half
 millimetre or so (the infrared light reads further on in the lid, and only as far as Epson Scan
 was seen going). The scan then

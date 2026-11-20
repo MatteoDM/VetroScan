@@ -22,8 +22,8 @@ GitHub; here they are in English.
   film (Digital ICE): a second reading in infrared light, which goes through the film but not
   through dust and scratches. The channel is kept with each frame and saved beside its 16-bit
   and RAW files (`…-infrarosso.png` / `.tif`, linear). Shown only where the scanner declares
-  it, for that film and resolution: the Epson Perfection 4490 for negatives at 1200 and 2400 dpi
-  and slides at 2400 (a scan takes both passes, about twice as long), on any frame, the lowest
+  it, for that film and resolution: the Epson Perfection 4490 for negatives and slides at 600,
+  1200 and 2400 dpi (a scan takes both passes, about twice as long), on any frame, the lowest
   too: an area reaching the holder's bottom loses its last half millimetre or so (its infrared
   light reads further on in the lid, and only as far as Epson Scan was seen going, which stops
   an area 0.3 mm above the bottom). The dust, hairs and specks it shows
@@ -35,7 +35,7 @@ GitHub; here they are in English.
   49-63 % on slides; none of its marks where the infrared is only blurred.
 - `epson4490 film-scan … --ice`: the Epson Perfection 4490 scans a film with Digital ICE as Epson
   Scan does, colours then infrared, and lays the infrared on the colours itself; only what
-  Epson Scan was seen doing with ICE (negatives at 1200 and 2400 dpi, slides at 2400). When the
+  Epson Scan was seen doing with ICE (negatives and slides at 600, 1200 and 2400 dpi). When the
   lid's lamp, lit again, has left the carriages out, it waits for the scanner to bring them home
   (at most a minute) instead of stopping. `epson4490 lid-lamp --watch SECONDS` then reads where the
   carriages are, for that long (`--every SECONDS`: that often).
