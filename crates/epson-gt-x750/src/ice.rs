@@ -725,7 +725,7 @@ pub(crate) mod tests {
         (u32, u32),
         (u16, u16),
         u32,
-    ); 7] = {
+    ); 8] = {
         const fn r(dpi: u32, x: u32, y: u32, width: u32, height: u32, film: Film) -> FilmRequest {
             FilmRequest {
                 dpi,
@@ -824,8 +824,84 @@ pub(crate) mod tests {
                 (0, 0),
                 1691,
             ),
+            (
+                "133",
+                r(600, 361, 728, 879, 600, P),
+                -151,
+                [718, 554, 144, 142, 650, 522, 150, 142],
+                [664, 536, 138, 138, 682, 506, 146, 134],
+                2343,
+                2383,
+                (2731, 6315),
+                (0, 0),
+                600,
+            ),
         ]
     };
+
+    /// Captures 132 (a slide at 1200 dpi), 134 (one at 2400) and 137 (a negative at 600), all
+    /// with the correction -151: the infrared start one column before Epson Scan's (its hole
+    /// reads behind it differ from ours by a half pixel now and then: 132 and 133, one slide and
+    /// session, our holes 2 apart, Epson's start the same), the rest as it planned.
+    #[test]
+    fn the_infrared_columns_are_epson_scans_within_one() {
+        let slide = |dpi, x, y, w, h| FilmRequest {
+            dpi,
+            ydpi: dpi,
+            x,
+            y,
+            width: w,
+            height: h,
+            bits: 16,
+            film: Film::Positive,
+        };
+        let neg = FilmRequest {
+            film: Film::Negative,
+            ..slide(600, 81, 204, 582, 892)
+        };
+        for (req, ch, ih, cstart, istart, c0, lines) in [
+            (
+                slide(1200, 722, 1457, 1759, 1201),
+                [706, 542, 144, 142, 654, 508, 150, 140],
+                [650, 532, 138, 138, 686, 498, 146, 134],
+                2441,
+                2484,
+                2731,
+                1201,
+            ),
+            (
+                slide(2400, 1445, 2915, 3519, 2402),
+                [720, 556, 144, 144, 650, 526, 152, 142],
+                [664, 540, 136, 138, 682, 514, 146, 132],
+                2442,
+                2483,
+                2743,
+                2406,
+            ),
+            (
+                neg,
+                [720, 532, 144, 142, 652, 508, 150, 140],
+                [666, 522, 138, 136, 684, 496, 146, 134],
+                247,
+                290,
+                2356,
+                892,
+            ),
+        ] {
+            let corr = XCorrection(-151);
+            let colour = FilmPlan::new(req, corr).unwrap();
+            assert_eq!(colour.geometry.start_steps, cstart, "{req:?}");
+            let h = |v| Holes {
+                found: true,
+                values: v,
+            };
+            let g = infrared_plan(&colour, corr, &h(ch), &h(ih))
+                .unwrap()
+                .geometry;
+            assert_eq!((g.start_steps, g.lines), (istart, lines), "{req:?}");
+            assert_eq!(g.columns.0 + 1, c0, "{req:?}");
+        }
+    }
 
     /// Captures 127 and 130 (Epson Scan right after a power-on): the colour read's line time
     /// asks a lead of 128, the infrared's 32; the infrared's first line 45 steps after the
@@ -896,7 +972,8 @@ pub(crate) mod tests {
                 assert_eq!(g.words, words, "{name}");
             }
             assert_eq!(g.lines, lines, "{name}");
-            assert_eq!(g.read_steps, lines * 2400 / req.ydpi + 32, "{name}");
+            let lead = crate::film::planned_lead(req.dpi);
+            assert_eq!(g.read_steps, lines * 2400 / req.ydpi + lead, "{name}");
             assert_eq!(ir.pass, Pass::Infrared);
             assert_eq!(&ir.e21_origin[..3], &IR_ORIGIN_T.to_le_bytes()[..3]);
         }

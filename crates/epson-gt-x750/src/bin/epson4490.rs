@@ -1461,8 +1461,8 @@ mod tests {
             (600, 600, 93, 209, 576, 874, 16, Film::Negative)
         );
         assert!(show_film_plan(&px, false));
-        // No Digital ICE at 600 dpi.
-        assert!(!show_film_plan(&px, true));
+        // Digital ICE at 600 dpi too (Epson Scan's 133 and 137).
+        assert!(show_film_plan(&px, true));
         let r = film_request(&args(["4800", "4", "10", "24", "37"]), 16, true, false).unwrap();
         assert_eq!((r.ydpi, r.y, r.film), (5400, 2126, Film::Positive));
         assert!(show_film_plan(&r, false));

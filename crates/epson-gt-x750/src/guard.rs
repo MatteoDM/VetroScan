@@ -202,7 +202,9 @@ pub fn check_film_request(r: &FilmRequest) -> Result<()> {
         .any(|&(d, y, b, f)| d == r.dpi && y == r.ydpi && b == r.bits && f.contains(&r.film));
     if !covered {
         return refuse(format!(
-            "{kind} at {} x {} dpi and {} bits was never captured (negatives: 600, 1200, 2400 at              16 bits, 2400 at 8, 4800 x 5400 at 16; slides: 2400 at 16; the preview at 300 and              8 bits)",
+            "{kind} at {} x {} dpi and {} bits was never captured (negatives: 600, 1200, 2400 at \
+             16 bits, 2400 at 8, 4800 x 5400 at 16; slides: 600, 1200, 2400, 4800 x 5400 at 16; \
+             the preview at 300 and 8 bits)",
             r.dpi, r.ydpi, r.bits
         ));
     }
@@ -212,7 +214,8 @@ pub fn check_film_request(r: &FilmRequest) -> Result<()> {
     let end = |a: u32, b: u32| u64::from(a) + u64::from(b);
     if r.width == 0 || r.height == 0 || end(r.x, r.width) > max_w || end(r.y, r.height) > max_h {
         return refuse(format!(
-            "the area {}x{} at {},{} is not inside the film window ({max_w} x {max_h} pixels at              {} x {} dpi)",
+            "the area {}x{} at {},{} is not inside the film window ({max_w} x {max_h} pixels at \
+             {} x {} dpi)",
             r.width, r.height, r.x, r.y, r.dpi, r.ydpi
         ));
     }
@@ -221,11 +224,12 @@ pub fn check_film_request(r: &FilmRequest) -> Result<()> {
 }
 
 /// The Digital ICE scans a scan may send: resolution across and along, bits, the films, as Epson
-/// Scan was captured sending them (captures 18 and 108-113, 17 November 2026): negatives at 1200
-/// and 2400 dpi, a slide at 2400, 16 bits. Epson Scan asked 4800 dpi reads 2400 with ICE (110,
-/// 113): never above.
-pub const ICE_COVERED: [(u32, u32, u8, &[Film]); 2] = [
-    (1200, 1200, 16, &[Film::Negative]),
+/// Scan was captured sending them (captures 18 and 108-113, 17 November 2026; 132, 133 and 137,
+/// 20 November): negatives and slides at 600, 1200 and 2400 dpi, 16 bits. Epson Scan asked 4800
+/// dpi reads 2400 with ICE (110, 113): never above.
+pub const ICE_COVERED: [(u32, u32, u8, &[Film]); 3] = [
+    (600, 600, 16, &[Film::Negative, Film::Positive]),
+    (1200, 1200, 16, &[Film::Negative, Film::Positive]),
     (2400, 2400, 16, &[Film::Negative, Film::Positive]),
 ];
 
@@ -343,7 +347,7 @@ pub fn check_ice_request(r: &FilmRequest) -> Result<()> {
         };
         return Err(Error::InvalidRequest(format!(
             "Epson 4490: Digital ICE on {kind} at {} dpi and {} bits was never captured \
-             (negatives at 1200 and 2400 dpi, slides at 2400, 16 bits)",
+             (negatives and slides at 600, 1200 and 2400 dpi, 16 bits)",
             r.dpi, r.bits
         )));
     }
@@ -1870,13 +1874,22 @@ mod tests {
         for r in [neg, neg1200, slide] {
             check_ice_request(&r).unwrap_or_else(|e| panic!("{r:?}: {e}"));
         }
+        // Slides at 1200 and both films at 600 (Epson Scan's 132, 133, 137) let out too.
         let mut slide1200 = neg1200;
         slide1200.film = Film::Positive;
         let mut neg600 = neg1200;
         (neg600.dpi, neg600.ydpi, neg600.width, neg600.height) = (600, 600, 576, 850);
+        let mut slide600 = neg600;
+        slide600.film = Film::Positive;
+        for r in [slide1200, neg600, slide600] {
+            check_ice_request(&r).unwrap_or_else(|e| panic!("{r:?}: {e}"));
+        }
+        // Not at 8 bits, nor at 4800 (read along at 5400: Epson Scan reads 2400 there).
         let mut neg8 = neg;
         neg8.bits = 8;
-        for r in [slide1200, neg600, neg8] {
+        let mut neg4800 = neg;
+        (neg4800.dpi, neg4800.ydpi) = (4800, 5400);
+        for r in [neg8, neg4800] {
             assert!(check_ice_request(&r).is_err(), "{r:?}");
         }
         // The whole window and a frame at its bottom: their infrared read would take the lid's

@@ -943,7 +943,8 @@ mod tests {
 
     /// The 4490 declares Digital ICE where it was captured and the guard lets it out (negatives
     /// at 1200 and 2400 dpi, slides at 2400, 16 bits), and nowhere else: every other source and
-    /// resolution it offers films at is refused by the guard.
+    /// resolution it offers films at is refused by the guard, or let out by it but not yet run by
+    /// us on the scanner (`NOT_YET_RUN`: Epson Scan's ICE captured there, 132, 133, 137).
     #[test]
     fn infrared_is_declared_where_the_guard_lets_it_out() {
         use film::Film;
@@ -953,13 +954,19 @@ mod tests {
             (Source::Slide, Film::Positive),
         ];
         let t = caps.transparency.as_ref().expect("the lid's adapter");
+        const NOT_YET_RUN: [(Source, u16); 3] = [
+            (Source::Negative, 600),
+            (Source::Slide, 600),
+            (Source::Slide, 1200),
+        ];
         let mut declared = 0;
         for &dpi in &t.resolutions {
             for (source, film) in films {
                 // A frame near the window's top, as the application asks it.
                 let d = u32::from(dpi);
                 let r = film::for_area(d, film, (0, d / 2, d * 3 / 2, d), 16);
-                let lets_out = guard::check_ice_request(&r).is_ok();
+                let lets_out =
+                    guard::check_ice_request(&r).is_ok() && !NOT_YET_RUN.contains(&(source, dpi));
                 assert_eq!(
                     caps.infrared_at(source, dpi),
                     lets_out,

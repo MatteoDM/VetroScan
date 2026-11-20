@@ -2199,6 +2199,17 @@ then our runs.
    Epson Scan offers it there; if so captured, run, declared; if not, left out and said so). In
    the same sitting, for the dust: a slide scanned with ICE, blown clean, scanned again (who is
    right where we and Epson differ on slides, item 9).
+   **Captured** (20 November 2026, Matteo at Epson Scan; 132-137 in `05-catture.md`): Epson Scan
+   offers ICE at 600 dpi too, negatives and slides, read at 600 (lead 128 in both passes); a
+   slide at 1200 (132), at 600 (133), a negative at 600 (137); the dust pair: a slide with ICE
+   as it was (134, Epson; 135, ours), then blown clean and scanned without ICE on the same area
+   (136). `icesetup.py --check` 0 differences on all 14 ICE captures, the infrared column within
+   one of Epson's (11 exact; its hole reads behind the start differ from ours by a half pixel:
+   132 and 133 one session apart, our holes 2 apart, its start the same). `guard::ICE_COVERED`
+   opened to 600 and to slides at 1200. **Left**: our own runs at the scanner (slide 1200 and
+   600, negative 600, the same sequences at other resolutions), then declared in
+   `Capabilities::infrared` (the test's `NOT_YET_RUN` emptied). A classic B&W negative for
+   item 4: asked, not answered.
 3. **ICE "at 4800"**: the scanner reads 2400 with ICE (110, 113), Epson Scan enlarges. Matteo
    to choose: offer 4800 with ICE as Epson does (read 2400, enlarge, said so in the app), or
    keep ICE at 2400 at most. Nothing to capture.
