@@ -2250,6 +2250,15 @@ then our runs.
 10. **The dust's own left items** (step 17, item 3 above): the slides against Epson (the pair
     taken in item 2's sitting), the coloured dots in big specks, the removal off the app's thread
     (software only, any time).
+    **The slides against Epson, measured** (20 November 2026; 134 dusty, 136 blown clean,
+    `captures/epson4490/05-catture.md`): most of what either changes is still there after
+    blowing (stuck specks, which both take out well; hairs the infrared sees and the colours
+    hardly do, where Epson leaves artefacts and we do not); on the dust that blowing took away,
+    by the infrared's marks and away from the holder, we fix 67 %, Epson 72 %; what we leave is
+    mostly inside our mask, **divided** (the infrared passing more than `DEEP`) where the
+    colour's shadow is far deeper: a fill there, or a deeper division, to try and measure on
+    134 / 136 and on the negatives. `registration_on_the_captures` and `dust_on_the_captures`
+    take 134 now.
 
 **The HP 3770, what is missing** (last, as Matteo asked; from this plan's phases 10, 13, 14 and
 the code review's list):

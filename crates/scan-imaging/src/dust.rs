@@ -1100,7 +1100,9 @@ mod tests {
                 .map(|p| u16::from_le_bytes([p[0], p[1]]))
                 .collect()
         };
-        for k in ["18", "108", "109", "110", "112", "113", "126", "127", "130"] {
+        for k in [
+            "18", "108", "109", "110", "112", "113", "126", "127", "130", "134",
+        ] {
             let Ok(size) = std::fs::read_to_string(format!("{dir}/{k}_size.txt")) else {
                 println!("{k}: no frame, skipped");
                 continue;

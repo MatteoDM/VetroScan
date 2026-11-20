@@ -1086,6 +1086,29 @@ pub(crate) mod tests {
                 [602, 556, 138, 138, 616, 532, 146, 132],
             ),
         ));
+        // 134: the slide of the dust pair (20 November 2026), as it was before it was blown clean.
+        cases.push((
+            "134",
+            (
+                FilmRequest {
+                    dpi: 2400,
+                    ydpi: 2400,
+                    x: 1445,
+                    y: 2915,
+                    width: 3519,
+                    height: 2402,
+                    bits: 16,
+                    film: Film::Positive,
+                },
+                -151,
+                [720, 556, 144, 144, 650, 526, 152, 142],
+                [664, 540, 136, 138, 682, 514, 146, 132],
+                None,
+            ),
+        ));
+        // Where our infrared start is one column before Epson Scan's (its reads are laid by the
+        // columns they were read at).
+        let read_at = [("134", 2743u32)];
         for (k, (req, corr, ch, ih, lead)) in cases {
             if !std::path::Path::new(&format!("{dir}/{k}_col.bin")).exists() {
                 println!("{k}: no reads, skipped");
@@ -1101,7 +1124,11 @@ pub(crate) mod tests {
                 found: true,
                 values: v,
             };
-            let ir = infrared_plan(&colour, corr, &h(ch), &h(ih)).unwrap();
+            let mut ir = infrared_plan(&colour, corr, &h(ch), &h(ih)).unwrap();
+            if let Some(&(_, c0)) = read_at.iter().find(|(n, _)| *n == k) {
+                let (a, b) = ir.geometry.columns;
+                ir.geometry.columns = (c0, c0 + b - a);
+            }
             let col = std::fs::read(format!("{dir}/{k}_col.bin")).unwrap();
             let raw_ir = std::fs::read(format!("{dir}/{k}_ir.bin")).unwrap();
             let image = crate::scan::assemble_film(&col, &colour);
