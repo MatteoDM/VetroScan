@@ -2155,8 +2155,9 @@ never run by us (step 12).
        the same scanner without dust, and without the tick).
        **Left**: the slides (half of Epson's changes: a pair of slide scans with and without
        dust, blown clean between them, would say who is right); the coloured dots in big
-       specks; the removal runs on the app's thread (3 s for a frame at 2400 dpi); Matteo's
-       first try on a real scan in the app.
+       specks; the removal runs on the app's thread (3 s for a frame at 2400 dpi; moved off it
+       20 November 2026, item 10 of the 4490's list); Matteo's first try on a real scan in the
+       app.
 
 **Every film variant, to complete** (asked by Matteo on 19 November 2026, evening: "complete all
 the possibilities, to reproduce them all in VetroScan, without missing a variant"; then what the
@@ -2250,6 +2251,22 @@ then our runs.
 10. **The dust's own left items** (step 17, item 3 above): the slides against Epson (the pair
     taken in item 2's sitting), the coloured dots in big specks, the removal off the app's thread
     (software only, any time).
+    **The removal off the app's thread: done** (20 November 2026). Measured first (release, one
+    run each, the nine ICE captures' frames as the driver lays them): the dust 1.8-2.3 s a frame
+    at 2400 dpi (2080 x 3319 to 3519 x 2402), 0.55-0.58 s at 1200; the stripes filter on the same
+    frames 0.14-0.18 s and 0.04 s, on a made-up A4 at 600 dpi (4960 x 7016) 0.67 s, a made-up
+    strip at 1200 (2900 x 10800) 0.63 s: heavy too, so the whole cleaning moved, not the dust
+    alone. `App::on_scan` decides the cleaning on the app's thread (`Cleaning`: the stripes'
+    repeat, the glass's colour correction, the halving, the dust; the `doubled` flag taken there
+    as before) and runs it on a thread of its own (`away`, a oneshot channel: no runtime needed,
+    so the e2e's `block_on` runs it as iced does); nothing to clean, nothing changes. Meanwhile
+    the scan stays busy (no other scan, closing asks as during one) and the progress card says
+    *Pulizia della scansione*; the result comes back numbered (`Message::Cleaned`) and the rest
+    (frames, development, pages, saving, the next frame's scan) goes on in `on_cleaned` in the
+    same order as before. *Annulla* or closing the window drops the number: what comes back
+    goes nowhere. The `dust:` line in `tasti.log` as before (written when the result comes
+    back). e2e `the_scan_is_cleaned_away_from_the_window_and_its_frames_kept_in_order` and
+    `a_cleaning_cancelled_or_closed_on_is_dropped`.
     **The slides against Epson, measured** (20 November 2026; 134 dusty, 136 blown clean,
     `captures/epson4490/05-catture.md`): most of what either changes is still there after
     blowing (stuck specks, which both take out well; hairs the infrared sees and the colours

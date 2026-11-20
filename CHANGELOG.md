@@ -40,6 +40,13 @@ GitHub; here they are in English.
   (at most a minute) instead of stopping. `epson4490 lid-lamp --watch SECONDS` then reads where the
   carriages are, for that long (`--every SECONDS`: that often).
 
+### Changed
+- A scan is cleaned away from the window: the dust the infrared shows (about 2 s a frame at
+  2400 dpi), the scanner's stripes (0.6 s for an A4 page at 600 dpi), its colour correction and
+  the halving of a scan at twice the resolution no longer freeze VetroScan while they run. The
+  progress card says *Pulizia della scansione* meanwhile; the frames come in their order as
+  before, and *Annulla* stops the cleaning too.
+
 ### Fixed
 - Epson Perfection 4490: a film's image read takes the run-up Epson's driver gives it for the
   carriage's speed (128 steps when it runs fast, as at 1200 dpi with a bright lamp), not one

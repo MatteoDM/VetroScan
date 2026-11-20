@@ -2068,6 +2068,9 @@ enum Tab {
 #[derive(Debug, Clone)]
 enum Message {
     Worker(Event),
+    /// A scan cleaned away from the app's thread (`App::on_scan`): which
+    /// cleaning, for what, and what it gave (nothing if it failed).
+    Cleaned(u64, Purpose, Option<Arc<Cleaned>>),
     Rendered(Arc<Rendered>),
     SystemTheme(iced::theme::Mode),
     Theme(ThemeChoice),
@@ -2585,8 +2588,14 @@ struct App {
     open: Vec<Group>,
     eyedropper: bool,
     before: bool,
-    /// The scan running, and where it is.
+    /// The scan running, and where it is (still busy while its result is
+    /// cleaned).
     busy: Option<(Purpose, Option<Progress>)>,
+    /// The cleaning running away from the app's thread, by its number: what
+    /// comes back with another number (cancelled, closed) is dropped.
+    cleaning: Option<u64>,
+    /// The cleanings started so far, to number them.
+    cleanings: u64,
     /// Pages of the document; in Foto mode, the last photo only.
     pages: Vec<Page>,
     current: Option<usize>,
@@ -2751,6 +2760,8 @@ impl App {
                 eyedropper: false,
                 before: false,
                 busy: None,
+                cleaning: None,
+                cleanings: 0,
                 pages: Vec::new(),
                 current: None,
                 redo: None,
@@ -5069,7 +5080,8 @@ impl App {
         }
         match message {
             Message::Edit(m) => self.on_edit(m),
-            Message::Worker(event) => self.on_worker(event),
+            Message::Worker(event) => return self.on_worker(event),
+            Message::Cleaned(id, purpose, done) => self.on_cleaning(id, purpose, done),
             Message::Rendered(done) => {
                 self.rendering = false;
                 let Ok(Rendered {
@@ -5796,7 +5808,13 @@ impl App {
                 self.start(Purpose::Page);
             }
             Message::Cancel => {
-                if let Some(w) = &self.worker {
+                if self.cleaning.take().is_some() {
+                    // The scan is in, its cleaning not done: given up (its
+                    // thread ends on its own, and what it gives is dropped).
+                    if let Some((purpose, _)) = self.busy.take() {
+                        self.stopped(purpose, worker::CANCELLED);
+                    }
+                } else if let Some(w) = &self.worker {
                     w.cancel();
                     self.note = tr("Annullamento…").into();
                 }
@@ -5908,6 +5926,9 @@ impl App {
                     false
                 };
                 if !asked {
+                    // A cleaning running is dropped: nothing more is added
+                    // or scanned while the window closes.
+                    self.cleaning = None;
                     // The lamp off first, if there is one: nobody is going
                     // to scan.
                     let Some(worker) = self.worker.clone().filter(|_| self.caps.lamp.is_some())
@@ -6314,7 +6335,7 @@ impl App {
         }
     }
 
-    fn on_worker(&mut self, event: Event) {
+    fn on_worker(&mut self, event: Event) -> Task<Message> {
         match event {
             Event::Ready(handle) => {
                 handle.send(Command::Status);
@@ -6348,43 +6369,26 @@ impl App {
             }
             Event::Done(purpose, result) => {
                 self.busy = None;
-                match result {
-                    Ok(done) => {
-                        self.on_scan(
-                            purpose,
-                            done.image.clone(),
-                            done.samples16.clone(),
-                            done.infrared.clone(),
-                        );
-                    }
+                let task = match result {
+                    Ok(done) => self.on_scan(
+                        purpose,
+                        done.image.clone(),
+                        done.samples16.clone(),
+                        done.infrared.clone(),
+                    ),
                     Err(e) => {
-                        self.redo = None;
-                        self.redo_auto = false;
-                        self.print_next = false;
-                        self.job = None;
-                        self.jobs.clear();
-                        self.measuring = None;
-                        if e == worker::CANCELLED {
-                            // Stopped with "Annulla": nothing went wrong.
-                            self.note = match purpose {
-                                Purpose::Preview => tr("Anteprima annullata").into(),
-                                Purpose::Page => tr("Scansione annullata").into(),
-                                Purpose::Measure => tr("Misura delle righe annullata").into(),
-                            };
-                        } else {
-                            self.note = trf("Errore: {e}", &[("e", &e)]);
-                            if purpose == Purpose::Page {
-                                notify(tr("Scansione non riuscita"), &e, true);
-                            }
-                        }
+                        self.stopped(purpose, &e);
+                        Task::none()
                     }
-                }
+                };
                 if let Some(w) = &self.worker {
                     w.send(Command::Status);
                 }
+                return task;
             }
             Event::Button(button) => self.on_button(button),
         }
+        Task::none()
     }
 
     fn found_note(n: usize) -> String {
@@ -6400,68 +6404,30 @@ impl App {
         }
     }
 
-    /// A scan as the settings want it before anything else: the scanner's
-    /// stripes taken away (at the resolution scanned, where they were
-    /// measured; for films on the negative's linear samples, before it is
-    /// measured and turned into its picture), then, on the glass, a scan at
-    /// twice the resolution brought back to the one chosen.
-    fn cleaned(
-        &mut self,
-        purpose: Purpose,
-        mut image: Image,
-        mut samples16: Option<Vec<u16>>,
-    ) -> (Image, Option<Vec<u16>>) {
+    /// What the settings want done to a scan before anything else (see
+    /// [`Cleaning`]), decided here, on the app's thread, and done away from it.
+    fn cleaning(&mut self, purpose: Purpose, dpi: u16, infrared: bool) -> Cleaning {
         let doubled = std::mem::take(&mut self.doubled) && purpose == Purpose::Page;
+        let dust = infrared && !self.settings().untouched;
         if purpose == Purpose::Measure || self.settings().untouched {
-            return (image, samples16);
+            return Cleaning {
+                dust,
+                ..Cleaning::default()
+            };
         }
-        if self.settings().destripe {
-            if let Some(repeat) = self.stripes_at(self.source(), image.dpi) {
-                stripes::remove(&mut image, samples16.as_deref_mut(), repeat);
-            }
+        let stripes = self
+            .settings()
+            .destripe
+            .then(|| self.stripes_at(self.source(), dpi))
+            .flatten();
+        // Films: their colours corrected in `develop`, never doubled.
+        let film = self.filming();
+        Cleaning {
+            stripes,
+            correction: self.colour_correction().filter(|_| !film),
+            halve: doubled && !film,
+            dust,
         }
-        if self.filming() {
-            return (image, samples16);
-        }
-        // The scanner's correction of the glass's colours, where it declares one and the user
-        // leaves it on: on the linear samples, before anything else (films: in `develop`).
-        if let (Some(c), Format::Rgb) = (self.colour_correction(), image.format) {
-            let n = image.data.len();
-            match samples16.as_deref_mut().filter(|s| s.len() == n) {
-                Some(deep) => {
-                    c.apply(deep);
-                    for (v, &d) in image.data.iter_mut().zip(deep.iter()) {
-                        *v = (d >> 8) as u8;
-                    }
-                }
-                None => {
-                    let mut deep: Vec<u16> =
-                        image.data.iter().map(|&v| u16::from(v) * 257).collect();
-                    c.apply(&mut deep);
-                    for (v, d) in image.data.iter_mut().zip(deep) {
-                        *v = ((u32::from(d) + 128) / 257) as u8;
-                    }
-                }
-            }
-        }
-        if doubled && image.format == Format::Rgb {
-            let (w, h) = (image.width, image.height);
-            let (data, nw, nh) = transform::halved(&image.data, w, h, 3);
-            let deep = samples16
-                .filter(|s| s.len() == w * h * 3)
-                .map(|s| transform::halved(&s, w, h, 3).0);
-            return (
-                Image {
-                    width: nw,
-                    height: nh,
-                    dpi: image.dpi / 2,
-                    format: Format::Rgb,
-                    data,
-                },
-                deep,
-            );
-        }
-        (image, samples16)
     }
 
     /// The note on the preview of films: the frames found, or no film.
@@ -6480,36 +6446,104 @@ impl App {
         }
     }
 
+    /// A scan come back from the scanner: cleaned first (see [`Cleaning`]),
+    /// away from the app's thread when there is anything to do (the dust of a
+    /// frame at 2400 dpi takes seconds, the stripes of a page more than half
+    /// of one), the scan still busy meanwhile; the rest in `on_cleaned`.
     fn on_scan(
         &mut self,
         purpose: Purpose,
         image: Image,
         samples16: Option<Vec<u16>>,
         infrared: Option<Vec<u16>>,
-    ) {
+    ) -> Task<Message> {
         // One sample a pixel of the scan, as the contract says, or nothing.
         let infrared = infrared.filter(|ir| ir.len() == image.width * image.height);
-        let (mut image, mut samples16) = self.cleaned(purpose, image, samples16);
-        // "Leggi l'infrarosso": the dust it shows taken out of the scan before anything is made
-        // of it (frames, development, saving); the infrared itself is kept, and saved beside.
-        if let Some(ir) = infrared.as_deref() {
-            if !self.settings().untouched {
-                let found = scan_imaging::dust::remove(&mut image, samples16.as_deref_mut(), ir);
-                if let Some(r) = found {
-                    worker::log(&format!(
-                        "dust: {} px found, threshold {:.2} %, crosstalk {:.3?}, shifts {:.2?}, \
-                         divided {:?}, filled {:?}, left {}",
-                        r.found,
-                        r.threshold * 100.0,
-                        r.crosstalk,
-                        r.shifts,
-                        r.divided,
-                        r.filled,
-                        r.left
-                    ));
-                }
+        let cleaning = self.cleaning(purpose, image.dpi, infrared.is_some());
+        if cleaning.is_nothing() {
+            self.on_cleaned(
+                purpose,
+                Cleaned {
+                    image,
+                    samples16,
+                    infrared,
+                    dust: None,
+                },
+            );
+            return Task::none();
+        }
+        self.cleanings += 1;
+        let id = self.cleanings;
+        self.cleaning = Some(id);
+        self.busy = Some((purpose, Some(Progress::Finishing)));
+        Task::perform(
+            away(move || cleaning.run(image, samples16, infrared)),
+            move |done| Message::Cleaned(id, purpose, done.map(Arc::new)),
+        )
+    }
+
+    /// The cleaning numbered `id` come back: the rest of the scan's work, if
+    /// it is still the one waited for.
+    fn on_cleaning(&mut self, id: u64, purpose: Purpose, done: Option<Arc<Cleaned>>) {
+        if self.cleaning != Some(id) {
+            return;
+        }
+        self.cleaning = None;
+        self.busy = None;
+        let Some(done) = done else {
+            self.stopped(purpose, tr("la pulizia della scansione non è riuscita"));
+            return;
+        };
+        let done = Arc::unwrap_or_clone(done);
+        if let Some(r) = &done.dust {
+            worker::log(&format!(
+                "dust: {} px found, threshold {:.2} %, crosstalk {:.3?}, shifts {:.2?}, \
+                 divided {:?}, filled {:?}, left {}",
+                r.found,
+                r.threshold * 100.0,
+                r.crosstalk,
+                r.shifts,
+                r.divided,
+                r.filled,
+                r.left
+            ));
+        }
+        self.on_cleaned(purpose, done);
+    }
+
+    /// A scan stopped (cancelled, or failed with `e`): the work it was part
+    /// of dropped, and said.
+    fn stopped(&mut self, purpose: Purpose, e: &str) {
+        self.redo = None;
+        self.redo_auto = false;
+        self.print_next = false;
+        self.job = None;
+        self.jobs.clear();
+        self.measuring = None;
+        if e == worker::CANCELLED {
+            // Stopped with "Annulla": nothing went wrong.
+            self.note = match purpose {
+                Purpose::Preview => tr("Anteprima annullata").into(),
+                Purpose::Page => tr("Scansione annullata").into(),
+                Purpose::Measure => tr("Misura delle righe annullata").into(),
+            };
+        } else {
+            self.note = trf("Errore: {e}", &[("e", &e)]);
+            if purpose == Purpose::Page {
+                notify(tr("Scansione non riuscita"), e, true);
             }
         }
+    }
+
+    /// A scan cleaned: its frames, development, pages and saving, in that
+    /// order.
+    fn on_cleaned(&mut self, purpose: Purpose, cleaned: Cleaned) {
+        let Cleaned {
+            image,
+            samples16,
+            infrared,
+            ..
+        } = cleaned;
         let colour_noise = self.settings().colour_noise;
         let correction = self.colour_correction();
         match purpose {
@@ -7824,6 +7858,7 @@ impl App {
             },
         };
         let (fraction, detail) = match stage {
+            _ if self.cleaning.is_some() => (0.98, tr("Pulizia della scansione")),
             None | Some(Progress::Starting) => (0.02, tr("Avvio dello scanner")),
             Some(Progress::WarmingUp) => (0.05, tr("La lampada era spenta: riscaldamento")),
             Some(Progress::Calibrating) => (0.1, tr("Calibrazione")),
@@ -9336,6 +9371,107 @@ fn labelled<'a>(
         .spacing(8)
         .align_y(Alignment::Center)
         .into()
+}
+
+/// What is done to a scan before anything else, as the settings want it
+/// (`App::cleaning`): the scanner's stripes taken away (at the resolution
+/// scanned, where they were measured; for films on the negative's linear
+/// samples, before it is measured and turned into its picture); on the glass,
+/// the scanner's colour correction, then a scan at twice the resolution
+/// brought back to the one chosen; last, "Leggi l'infrarosso": the dust the
+/// infrared shows taken out (before frames, development and saving; the
+/// infrared itself kept, and saved beside).
+#[derive(Debug, Clone, Copy, Default)]
+struct Cleaning {
+    /// The stripes' repeat, in lines.
+    stripes: Option<usize>,
+    correction: Option<scan_imaging::colour::ColourMatrix>,
+    halve: bool,
+    dust: bool,
+}
+
+/// A scan cleaned, and what the dust removal found.
+#[derive(Debug, Clone)]
+struct Cleaned {
+    image: Image,
+    samples16: Option<Vec<u16>>,
+    infrared: Option<Vec<u16>>,
+    dust: Option<scan_imaging::dust::Removal>,
+}
+
+impl Cleaning {
+    fn is_nothing(&self) -> bool {
+        self.stripes.is_none() && self.correction.is_none() && !self.halve && !self.dust
+    }
+
+    /// The cleaning done: long work, not for the app's thread.
+    fn run(
+        self,
+        mut image: Image,
+        mut samples16: Option<Vec<u16>>,
+        infrared: Option<Vec<u16>>,
+    ) -> Cleaned {
+        if let Some(repeat) = self.stripes {
+            stripes::remove(&mut image, samples16.as_deref_mut(), repeat);
+        }
+        // The scanner's correction of the glass's colours, where it declares one and the user
+        // leaves it on: on the linear samples, before anything else (films: in `develop`).
+        if let (Some(c), Format::Rgb) = (self.correction, image.format) {
+            let n = image.data.len();
+            match samples16.as_deref_mut().filter(|s| s.len() == n) {
+                Some(deep) => {
+                    c.apply(deep);
+                    for (v, &d) in image.data.iter_mut().zip(deep.iter()) {
+                        *v = (d >> 8) as u8;
+                    }
+                }
+                None => {
+                    let mut deep: Vec<u16> =
+                        image.data.iter().map(|&v| u16::from(v) * 257).collect();
+                    c.apply(&mut deep);
+                    for (v, d) in image.data.iter_mut().zip(deep) {
+                        *v = ((u32::from(d) + 128) / 257) as u8;
+                    }
+                }
+            }
+        }
+        if self.halve && image.format == Format::Rgb {
+            let (w, h) = (image.width, image.height);
+            let (data, nw, nh) = transform::halved(&image.data, w, h, 3);
+            samples16 = samples16
+                .filter(|s| s.len() == w * h * 3)
+                .map(|s| transform::halved(&s, w, h, 3).0);
+            image = Image {
+                width: nw,
+                height: nh,
+                dpi: image.dpi / 2,
+                format: Format::Rgb,
+                data,
+            };
+        }
+        let dust = match (self.dust, infrared.as_deref()) {
+            (true, Some(ir)) => {
+                scan_imaging::dust::remove(&mut image, samples16.as_deref_mut(), ir)
+            }
+            _ => None,
+        };
+        Cleaned {
+            image,
+            samples16,
+            infrared,
+            dust,
+        }
+    }
+}
+
+/// Runs `work` on a thread of its own, the app's thread free meanwhile, and
+/// gives what it returns (nothing if it failed).
+async fn away<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+    let (done, result) = iced::futures::channel::oneshot::channel();
+    std::thread::spawn(move || {
+        let _ = done.send(work());
+    });
+    result.await.ok()
 }
 
 /// A desktop notification (with the system sound), so that whoever is at

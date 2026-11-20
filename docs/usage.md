@@ -155,7 +155,8 @@ beside it (`…-infrarosso`). Dust and hairs show dark in it, and VetroScan take
 scan: light dust is divided by what it took (the grain under it stays), a speck or a hair that
 lets little through is filled from around it, in each colour where its shadow lies. What is not
 dust (the picture's edges, a hair out of focus) is left alone; a mark wider than a few tenths of
-a millimetre stays. To see what was found, open the `…-infrarosso` file beside the scan. After a
+a millimetre stays. While it is taken out, the progress card says *Pulizia della scansione* and
+the window stays free. To see what was found, open the `…-infrarosso` file beside the scan. After a
 film, the next scan of the glass switches back to the glass's lamp and warms it
 up first.
 

@@ -171,6 +171,21 @@ impl Ui {
         }
     }
 
+    /// Hands the app what the scanner sends until the scan's result, given
+    /// back unsent.
+    fn next_done(&mut self) -> Event {
+        loop {
+            let event = self
+                .events
+                .recv_timeout(Duration::from_secs(60))
+                .expect("the scan's result");
+            if matches!(event, Event::Done(..)) {
+                return event;
+            }
+            self.send(Message::Worker(event));
+        }
+    }
+
     /// The files in the folder of the scans.
     fn saved(&self) -> Vec<String> {
         let mut names: Vec<String> = std::fs::read_dir(self.app.folder())
@@ -4085,6 +4100,94 @@ fn the_dust_the_infrared_shows_is_taken_out_of_the_scan() {
     );
     // The second frame has no dust: nothing found, nothing changed.
     assert_eq!(cleaned[1].0, dusty[1].0);
+}
+
+/// The film set to scan its frames with "Leggi l'infrarosso", after a preview.
+fn dusty_film() -> (Ui, scanner_api::fake::Controls) {
+    let scanner = FakeScanner::with_infrared();
+    let controls = scanner.controls();
+    let mut ui = Ui::with_scanners(vec![scanner]);
+    ui.send(Message::Pane(crate::Pane::Scan));
+    ui.click("Pellicola");
+    ui.send(Message::Dpi(600));
+    ui.send(Message::Infrared(true));
+    ui.send(Message::Preview);
+    ui.settle();
+    (ui, controls)
+}
+
+/// A scan's cleaning (here the dust the infrared shows, seconds a frame at 2400 dpi) runs away
+/// from the app's thread: the scanner's result handed to the app gives back at once, the scan
+/// still busy and saying so, nothing added and no other scan taken meanwhile; each frame is added
+/// when its cleaning comes back, then the next one scanned, in order, the same as cleaned at once.
+#[test]
+fn the_scan_is_cleaned_away_from_the_window_and_its_frames_kept_in_order() {
+    let (mut at_once, _) = dusty_film();
+    at_once.scan(1);
+    assert_eq!(at_once.app.pages.len(), 2, "{}", at_once.app.note);
+    let (mut ui, controls) = dusty_film();
+    ui.send(Message::Scan);
+    for frame in 0..2 {
+        let done = ui.next_done();
+        let task = ui.app.update(Message::Worker(done));
+        assert!(ui.app.cleaning.is_some(), "frame {frame}: being cleaned");
+        assert!(ui.app.busy.is_some());
+        assert!(ui.shows("Pulizia della scansione"));
+        assert_eq!(ui.app.pages.len(), frame, "added before it is cleaned");
+        let asked = controls.requests().len();
+        ui.send(Message::Scan);
+        ui.send(Message::Preview);
+        assert_eq!(controls.requests().len(), asked, "no scan while cleaning");
+        ui.run(task);
+        assert!(ui.app.cleaning.is_none());
+        assert_eq!(ui.app.pages.len(), frame + 1, "{}", ui.app.note);
+    }
+    ui.settle();
+    assert_eq!(ui.app.pages.len(), 2);
+    for (a, b) in ui.app.pages.iter().zip(&at_once.app.pages) {
+        assert!(a.raw.full == b.raw.full, "the frames in their order");
+    }
+}
+
+/// "Annulla" while a scan is cleaned drops it (and the frames still to scan); what the cleaning
+/// gives back afterwards goes nowhere, and a new scan works as ever. Closing the window while
+/// one is cleaned asks as during a scan, closes, and what comes back is dropped too.
+#[test]
+fn a_cleaning_cancelled_or_closed_on_is_dropped() {
+    let (mut ui, controls) = dusty_film();
+    ui.send(Message::Scan);
+    let done = ui.next_done();
+    let task = ui.app.update(Message::Worker(done));
+    assert!(ui.app.cleaning.is_some());
+    ui.click("Annulla");
+    assert_eq!(ui.app.note, "Scansione annullata");
+    assert!(ui.app.cleaning.is_none() && ui.app.jobs.is_empty());
+    let asked = controls.requests().len();
+    ui.run(task);
+    ui.settle();
+    assert!(ui.app.pages.is_empty(), "the cancelled frame not added");
+    assert_eq!(
+        controls.requests().len(),
+        asked,
+        "the next frame not scanned"
+    );
+    ui.scan(1);
+    assert_eq!(ui.app.pages.len(), 2, "{}", ui.app.note);
+
+    let (mut ui, controls) = dusty_film();
+    ui.send(Message::Scan);
+    let done = ui.next_done();
+    let task = ui.app.update(Message::Worker(done));
+    ui.send(Message::CloseRequested(iced::window::Id::unique()));
+    assert_eq!(ui.question(), Some("Chiudere durante la scansione?"));
+    for message in ui.click_messages("Chiudi") {
+        ui.send(message);
+    }
+    assert!(ui.closed);
+    let asked = controls.requests().len();
+    ui.run(task);
+    assert!(ui.app.pages.is_empty());
+    assert_eq!(controls.requests().len(), asked);
 }
 
 /// The same with a scanner that reads no infrared: no tick, nothing asked, nothing kept, even
