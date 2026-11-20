@@ -2198,7 +2198,7 @@ then our runs.
    for negatives, our own run, declared); **ICE at 600 dpi**, negatives and slides (first whether
    Epson Scan offers it there; if so captured, run, declared; if not, left out and said so). In
    the same sitting, for the dust: a slide scanned with ICE, blown clean, scanned again (who is
-   right where we and Epson differ on slides, item 9).
+   right where we and Epson differ on slides, item 10).
    **Captured** (20 November 2026, Matteo at Epson Scan; 132-137 in `05-catture.md`): Epson Scan
    offers ICE at 600 dpi too, negatives and slides, read at 600 (lead 128 in both passes); a
    slide at 1200 (132), at 600 (133), a negative at 600 (137); the dust pair: a slide with ICE
@@ -2232,27 +2232,29 @@ then our runs.
 6. **B&W slides** (silver: Agfa Scala, Fomapan R, any B&W reversed; general knowledge): a
    positive to the scanner; no ICE (item 4's safety); developed to grey in the app's film kind;
    one scan of ours to check if Matteo has one.
-7. **The medium format holder** (6 x 12 cm): captures with a 120 film when Matteo has one
+7. **B&W on the HP 3770 too** (moved up from the HP list, Matteo, 20 November 2026: B&W films
+   before the HP's own items): B&W negatives and slides with item 5's film kind, at the 3770's
+   600 and 1200 dpi only (to the scanner a negative or a positive as today, no new command; no
+   infrared on the 3770, so no ICE and no item 4 to apply); one scan of ours of each to check.
+8. **The medium format holder** (6 x 12 cm): captures with a 120 film when Matteo has one
    (preview, a frame without and with ICE); `Adapter` with frames of 6 x 4.5, 6 x 6, 6 x 7,
    6 x 9 and 6 x 12 (the contract's "medium format", planned in "Behind trait Scanner");
    `film::frames` taught them.
-8. **Epson Scan's other film settings**, to list from its window (Matteo's screenshots) before
+9. **Epson Scan's other film settings**, to list from its window (Matteo's screenshots) before
    deciding any: the film resolutions it offers below 600 (only the 300 dpi preview is
    captured), its "Dust Removal" (software), grain reduction, colour restoration, backlight
    correction, unsharp mask; each, if wanted, generic in `scan-imaging`, measured against Epson
    Scan's TIFFs of the same frame as the dust was.
-9. **The dust's own left items** (step 17, item 3 above): the slides against Epson (the pair
-   taken in item 2's sitting), the coloured dots in big specks, the removal off the app's thread
-   (software only, any time).
+10. **The dust's own left items** (step 17, item 3 above): the slides against Epson (the pair
+    taken in item 2's sitting), the coloured dots in big specks, the removal off the app's thread
+    (software only, any time).
 
 **The HP 3770, what is missing** (last, as Matteo asked; from this plan's phases 10, 13, 14 and
 the code review's list):
 
-10. **Films at other resolutions**: today 600 and 1200 dpi only (`NEGATIVE_RESOLUTIONS`; a film
+11. **Films at other resolutions**: today 600 and 1200 dpi only (`NEGATIVE_RESOLUTIONS`; a film
     preview at 200 dpi once ground the motor). Others only from HP's own driver captured doing
     them, guarded before anything moves; first: which ones HP's driver offers for the adapter.
-11. **B&W negatives and slides**: the same film kind as the 4490's item 5 (no infrared on the 3770: no
-    ICE).
 12. **Phase 13, left**: 4, an exposure per channel in the contract; 5, slides with more than one
     exposure (measured, set aside: back only with a sub-pixel alignment proven on slides); 7,
     the raw scan kept with its metadata and an IT8 profile per scanner; 8, the measuring box of
