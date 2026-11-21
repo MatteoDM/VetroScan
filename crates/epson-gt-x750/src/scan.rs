@@ -408,6 +408,51 @@ pub const LID_LAMP_WAIT: Duration = Duration::from_secs(60);
 /// unit; captures 72, 85, 115, 118, 121-123).
 pub const LID_LAMP_PARKS_AT: (u32, u32) = (crate::film::PARK, 1078);
 
+/// Where the lid unit's origin read leaves the carriages (carriage, lid unit: 8 steps, then 1920
+/// read and the 512-value ramp's): a film scan stopped there, its origin refused before the move
+/// back, leaves them so (capture 104; Matteo's app, 21 November 2026: a move back of 276 asked,
+/// refused, the next try found them there, the one after home: the scanner brings them home by
+/// itself within 15-30 s).
+pub const ORIGIN_READ_LEAVES: (u32, u32) = (crate::film::PARK, 8 + 1920 + 512);
+
+/// Whether the scanner brings the carriages home by itself from `at`: the two places a film
+/// scan finds them left out ([`LID_LAMP_PARKS_AT`], [`ORIGIN_READ_LEAVES`]).
+fn comes_home_from(at: (u32, u32)) -> bool {
+    at == LID_LAMP_PARKS_AT || at == ORIGIN_READ_LEAVES
+}
+
+/// Waits, asking only their positions every [`ICE_HOME_POLL`], at most [`ICE_HOME_WAIT`], for
+/// the scanner to bring the carriages home from `at` ([`comes_home_from`]); where they are then.
+fn wait_home(
+    g: &mut dyn Transport,
+    mut at: (u32, u32),
+    log: &mut dyn FnMut(String),
+    events: &mut dyn FnMut(Event) -> bool,
+) -> Result<(u32, u32)> {
+    log(format!(
+        "the carriages at {at:?}, left out: waiting for the scanner to bring them home (1E 86 \
+         every {} s, at most {} s)",
+        ICE_HOME_POLL.as_secs(),
+        ICE_HOME_WAIT.as_secs()
+    ));
+    let until = Instant::now() + ICE_HOME_WAIT;
+    while at != (0, 0) && Instant::now() < until {
+        if !events(Event::Calibrating) {
+            return Err(Error::Cancelled);
+        }
+        std::thread::sleep(ICE_HOME_POLL);
+        let a = ask(g, [0x1E, 0x86], 4)?;
+        at = (
+            u32::from(u16::from_le_bytes([a[0], a[1]])),
+            u32::from(u16::from_le_bytes([a[2], a[3]])),
+        );
+    }
+    if at == (0, 0) {
+        log("the carriages home".into());
+    }
+    Ok(at)
+}
+
 /// How long a Digital ICE pass waits for the scanner to bring the carriages home from
 /// [`LID_LAMP_PARKS_AT`] by itself: within 5 s when it is asked only every 5 s (capture 123),
 /// within a minute after our program closed it (115, 118); asked four times a second it kept them
@@ -760,34 +805,19 @@ fn film_calibration<T: Transport>(
         // Digital ICE: from home only (every capture); the infrared pass first moves the lid
         // unit's light on, then both read the holder's holes and park from there.
         let mut at = positions(ask(g, [0x1E, 0x86], 4)?);
-        let waited = at == LID_LAMP_PARKS_AT;
+        // The lid's lamp lit again took them out (after a power-on or an infrared pass), or a
+        // scan stopped after its origin read left them: the scanner brings them home by itself
+        // when it is not asked continuously.
+        let from = at;
+        let waited = comes_home_from(at);
         if waited {
-            // The lid's lamp lit again took them there (after a power-on or an infrared pass):
-            // the scanner brings them home by itself when it is not asked continuously.
-            log(format!(
-                "the carriages at {at:?}, where the lid's lamp left them: waiting for the \
-                 scanner to bring them home (1E 86 every {} s, at most {} s)",
-                ICE_HOME_POLL.as_secs(),
-                ICE_HOME_WAIT.as_secs()
-            ));
-            let until = Instant::now() + ICE_HOME_WAIT;
-            while at != (0, 0) && Instant::now() < until {
-                if !events(Event::Calibrating) {
-                    return Err(Error::Cancelled);
-                }
-                std::thread::sleep(ICE_HOME_POLL);
-                at = positions(ask(g, [0x1E, 0x86], 4)?);
-            }
-            if at == (0, 0) {
-                log("the carriages home".into());
-            }
+            at = wait_home(g, at, log, events)?;
         }
         let at2 = positions(ask(g, [0x1E, 0x86], 4)?);
         if at != (0, 0) || at2 != (0, 0) {
             let waited = if waited {
                 format!(
-                    "; the scanner did not bring them home from {LID_LAMP_PARKS_AT:?} within \
-                     {} s",
+                    "; the scanner did not bring them home from {from:?} within {} s",
                     ICE_HOME_WAIT.as_secs()
                 )
             } else {
@@ -840,7 +870,12 @@ fn film_calibration<T: Transport>(
             &setup::move_block(ice::PRE_PARK, 0, 0xFF, 0x10),
         )?;
     } else {
-        match positions(ask(g, [0x1E, 0x86], 4)?) {
+        let mut at = positions(ask(g, [0x1E, 0x86], 4)?);
+        if at == ORIGIN_READ_LEAVES {
+            // A scan stopped after its origin read: home first (the scanner's own move).
+            at = wait_home(g, at, log, events)?;
+        }
+        match at {
             (0, 0) => {
                 send(g, [0x1E, 0x25], &[0x00])?;
                 table(g, &setup::ramp_header(512), &ramp512)?;
@@ -2776,6 +2811,43 @@ pub(crate) mod tests {
     /// to the image read and the carriages home (the gamma and tone tables linear, the computed
     /// `1E 42` and shading any), its calibration reads made up from what the rules take from
     /// the real ones. The calibration alone stops before `1E 8B`, the image's.
+    #[test]
+    fn the_carriages_left_by_an_origin_read_are_waited_for() {
+        // Where a scan stopped after its origin read left them (1994 / 2440, the app's tries
+        // of 21 November 2026): the scanner brings them home, the scan then goes on as captured.
+        let out = "W 1e86\nA ca078809\n";
+        let film = include_str!("../testdata/74_film.txt");
+        let home = "W 1e86\nA 00000000\nW 1e25";
+        assert!(film.contains(home));
+        let text = film.replacen(home, &format!("{out}{home}"), 1);
+        let text: &'static str = Box::leak(text.into_boxed_str());
+        let reads = include_str!("../testdata/74_film_reads.txt");
+        let request = crate::film::tests::CAPTURED[2].1;
+        let (_, left) = film_scan("74", text, reads, &request, 10);
+        assert_eq!(left, 0, "lines of the capture left");
+        // A Digital ICE scan the same (capture 108).
+        let (_, ice_request, ..) = crate::ice::tests::ICE[1];
+        let ice = include_str!("../testdata/108_ice.txt");
+        let home = "W 1e86\nA 00000000\nW 1e86\nA 00000000\n";
+        let text = ice.replacen(home, &format!("{out}{home}"), 1);
+        let text: &'static str = Box::leak(text.into_boxed_str());
+        let mut g = Guarded::new(Follow::film(
+            "108",
+            text,
+            include_str!("../testdata/108_ice_reads.txt"),
+        ));
+        let mut said = Vec::new();
+        scan_ice(&mut g, &ice_request, 10, &mut |l| said.push(l), &mut |_| {
+            true
+        })
+        .unwrap_or_else(|e| panic!("{e}"));
+        assert!(
+            said.iter().any(|l| l.contains("(1994, 2440), left out")),
+            "{said:?}"
+        );
+        assert_eq!(g.inner().lines.len() - g.inner().at, 0);
+    }
+
     #[test]
     fn a_films_scan_writes_what_epson_scan_wrote() {
         let text = include_str!("../testdata/74_film.txt");

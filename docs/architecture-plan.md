@@ -2109,6 +2109,21 @@ never run by us (step 12).
           apart, more so at a slide's height); Epson does not correct it, nor do we (a possible
           later fix of the films' assembly). Still open: the colour tone tables of the ICE colour
           pass are linear (Epson's own curve doubles a negative's shadows), as every film of ours.
+       6. **The carriages at 1994 / 2440** (21 November 2026, Matteo's app, v0.11.0; `tasti.log`):
+          scans failing in turn, one with "a move back of 276 steps, none of those let out" (after
+          the origin read), the next with "the carriages at (1994, 2440): a Digital ICE pass
+          starts from home", the one after going on. (1994, 2440) is where the origin read leaves
+          them (park, then 8 + 1920 + 512 steps of the lid unit; capture 104 too): a scan refused
+          after it stops there, and the scanner takes them home by itself within 15-30 s when not
+          asked continuously, as from 1078. **Done**: `scan::ORIGIN_READ_LEAVES`; both openings
+          of `film_calibration` (ICE and plain film) wait for them from there as from 1994 / 1078
+          (`wait_home`: `1E 86` every 5 s, at most a minute, cancellable), nothing else sent;
+          test `the_carriages_left_by_an_origin_read_are_waited_for` (74 and 108 with the
+          carriages first out). **The 276** (an edge one line before 264's): it came again with
+          the lamp warm and went with the scanner switched off and on, so most likely the lid
+          unit's step count drifting (the origin read is there to make up for that; assumption,
+          not measured); what Epson Scan moves in that state was not captured (capture 145 if it
+          comes again). Not admitted: `FILM_BACK_MOVES` keeps 204-264, Matteo to decide.
        What the item said before it was built: the rules of the second pass (from the captures, as
        `filmsetup.py` did for colour: the unit's move, the exposure loop, the shading on the
        wider columns, the start move from the holes, the infrared columns), the hole pre-read

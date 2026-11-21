@@ -17,6 +17,12 @@ GitHub; here they are in English.
 
 ## [Unreleased]
 
+### Fixed
+- Epson Perfection 4490, films: a film scan stopped right after reading the lid's origin (a
+  move back never seen, such as 276 steps) left the carriages out, and the next scan refused to
+  start from there ("the carriages at (1994, 2440)"). Now the scan waits, up to a minute, for
+  the scanner to bring them home by itself, as it already did after the lid's lamp lit again.
+
 ## [0.11.0] - 2026-11-21
 
 ### Added
