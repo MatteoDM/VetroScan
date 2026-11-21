@@ -17,6 +17,8 @@ GitHub; here they are in English.
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-11-21
+
 ### Fixed
 - Epson Perfection 4490, films: a film scan stopped right after reading the lid's origin (a
   move back never seen, such as 276 steps) left the carriages out, and the next scan refused to
@@ -658,7 +660,8 @@ First version.
 - Texts with a run of spaces in the middle (note on RAW, on 16 bits and on the buttons in
   Windows); the button of the default folder uses the system's separator.
 
-[Unreleased]: https://github.com/MatteoDM/scanner/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/MatteoDM/scanner/compare/v0.11.1...HEAD
+[0.11.1]: https://github.com/MatteoDM/scanner/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/MatteoDM/scanner/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/MatteoDM/scanner/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/MatteoDM/scanner/compare/v0.8.0...v0.9.0
