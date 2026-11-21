@@ -2156,7 +2156,7 @@ never run by us (step 12).
        **Left**: the slides (half of Epson's changes: a pair of slide scans with and without
        dust, blown clean between them, would say who is right); the coloured dots in big
        specks; the removal runs on the app's thread (3 s for a frame at 2400 dpi; moved off it
-       20 November 2026, item 10 of the 4490's list); Matteo's first try on a real scan in the
+       20 November 2026, item 9 of the 4490's list); Matteo's first try on a real scan in the
        app.
 
 **Every film variant, to complete** (asked by Matteo on 19 November 2026, evening: "complete all
@@ -2199,7 +2199,7 @@ then our runs.
    for negatives, our own run, declared); **ICE at 600 dpi**, negatives and slides (first whether
    Epson Scan offers it there; if so captured, run, declared; if not, left out and said so). In
    the same sitting, for the dust: a slide scanned with ICE, blown clean, scanned again (who is
-   right where we and Epson differ on slides, item 10).
+   right where we and Epson differ on slides, item 9).
    **Captured** (20 November 2026, Matteo at Epson Scan; 132-137 in `05-catture.md`): Epson Scan
    offers ICE at 600 dpi too, negatives and slides, read at 600 (lead 128 in both passes); a
    slide at 1200 (132), at 600 (133), a negative at 600 (137); the dust pair: a slide with ICE
@@ -2243,79 +2243,71 @@ then our runs.
    (preview, a frame without and with ICE); `Adapter` with frames of 6 x 4.5, 6 x 6, 6 x 7,
    6 x 9 and 6 x 12 (the contract's "medium format", planned in "Behind trait Scanner");
    `film::frames` taught them.
-9. **Epson Scan's other film settings**, to list from its window (Matteo's screenshots) before
-   deciding any: the film resolutions it offers below 600 (only the 300 dpi preview is
-   captured), its "Dust Removal" (software), grain reduction, colour restoration, backlight
-   correction, unsharp mask; each, if wanted, generic in `scan-imaging`, measured against Epson
-   Scan's TIFFs of the same frame as the dust was.
-10. **The dust's own left items** (step 17, item 3 above): the slides against Epson (the pair
-    taken in item 2's sitting), the coloured dots in big specks, the removal off the app's thread
-    (software only, any time).
-    **The removal off the app's thread: done** (20 November 2026). Measured first (release, one
-    run each, the nine ICE captures' frames as the driver lays them): the dust 1.8-2.3 s a frame
-    at 2400 dpi (2080 x 3319 to 3519 x 2402), 0.55-0.58 s at 1200; the stripes filter on the same
-    frames 0.14-0.18 s and 0.04 s, on a made-up A4 at 600 dpi (4960 x 7016) 0.67 s, a made-up
-    strip at 1200 (2900 x 10800) 0.63 s: heavy too, so the whole cleaning moved, not the dust
-    alone. `App::on_scan` decides the cleaning on the app's thread (`Cleaning`: the stripes'
-    repeat, the glass's colour correction, the halving, the dust; the `doubled` flag taken there
-    as before) and runs it on a thread of its own (`away`, a oneshot channel: no runtime needed,
-    so the e2e's `block_on` runs it as iced does); nothing to clean, nothing changes. Meanwhile
-    the scan stays busy (no other scan, closing asks as during one) and the progress card says
-    *Pulizia della scansione*; the result comes back numbered (`Message::Cleaned`) and the rest
-    (frames, development, pages, saving, the next frame's scan) goes on in `on_cleaned` in the
-    same order as before. *Annulla* or closing the window drops the number: what comes back
-    goes nowhere. The `dust:` line in `tasti.log` as before (written when the result comes
-    back). e2e `the_scan_is_cleaned_away_from_the_window_and_its_frames_kept_in_order` and
-    `a_cleaning_cancelled_or_closed_on_is_dropped`.
-    **The slides against Epson, measured** (20 November 2026; 134 dusty, 136 blown clean,
-    `captures/epson4490/05-catture.md`): most of what either changes is still there after
-    blowing (stuck specks, which both take out well; hairs the infrared sees and the colours
-    hardly do, where Epson leaves artefacts and we do not); on the dust that blowing took away,
-    by the infrared's marks and away from the holder, we fix 67 %, Epson 72 %; what we leave is
-    mostly inside our mask, **divided** (the infrared passing more than `DEEP`) where the
-    colour's shadow is far deeper. `registration_on_the_captures` and `dust_on_the_captures`
-    take 134 now. **Tried and dropped** (same evening): filling also where the colour's own
-    contrast (its log over its 31 x 31 mean, the dust left out) is 10 % below what the infrared
-    predicts: the loose dust fixed 67.2 -> 67.5 %, but ten times the pixels filled on slides and
-    our changes where Epson changes nothing 112 -> 1115, 134 -> 930 (the colour's contrast holds
-    the picture: it filled texture); negatives a little worse too. On the loose dust the gap to
-    Epson is about twenty pixels a frame (we alone leave 71, Epson alone 49, both 82: the
-    comparison's own floor at the marks' edges): **slides settled as they are**.
-    **The coloured dots in big specks: the comparison's, not the removal's** (20 November 2026;
-    `captures/epson4490/06-formato-dati.md`, "I puntini colorati"; `tools/ice_dots.py`). The
-    three seen on 108 (red, yellow, dark), redone through the per-channel curves alone and
-    stretched: our result there is clean, as Epson's (on one Epson leaves a grey patch). They came
-    from `ice_dust.py`'s per-cell correction (32 x 32 x 32 of our values, added for the slides'
-    mixed colours), measured over the whole frame: a speck's unusual colours fall in cells made
-    mostly of dust, whose mean is Epson's own ICE change, which tinted the dust in the comparison.
-    The cells now measured away from the dust, each value corrected by its own: on the same
-    cleaned frames, negatives **93.7-99.5 %** of Epson's changes (they read 90.2-98.2 %), ours
-    alone 4-158 pixels a frame (108: 104 -> 18); slides 41-51 % (Epson's changes counted grow:
-    the dust's colours fall in cells with little clean film; the slides' comparison stays
-    ambiguous, the 134/136 pair judges them better). Also measured: a fill grown from the deep
-    dust while a colour is darker than the infrared says by 4 times its grain (a test on a made-up
-    rim): 30-280 pixels a frame, nothing measurable changed (108 98.9 % with and without); not
-    kept, `dust.rs` unchanged. **Left, real and small**: where a hair crosses a sharp edge of the
-    picture (108, a leaf's edge at 1345/1085), our fill leaves a thin dark line along the edge;
-    Epson there is clean.
+9. **The dust's own left items** (step 17, item 3 above): the slides against Epson (the pair
+   taken in item 2's sitting), the coloured dots in big specks, the removal off the app's thread
+   (software only, any time).
+   **The removal off the app's thread: done** (20 November 2026). Measured first (release, one
+   run each, the nine ICE captures' frames as the driver lays them): the dust 1.8-2.3 s a frame
+   at 2400 dpi (2080 x 3319 to 3519 x 2402), 0.55-0.58 s at 1200; the stripes filter on the same
+   frames 0.14-0.18 s and 0.04 s, on a made-up A4 at 600 dpi (4960 x 7016) 0.67 s, a made-up
+   strip at 1200 (2900 x 10800) 0.63 s: heavy too, so the whole cleaning moved, not the dust
+   alone. `App::on_scan` decides the cleaning on the app's thread (`Cleaning`: the stripes'
+   repeat, the glass's colour correction, the halving, the dust; the `doubled` flag taken there
+   as before) and runs it on a thread of its own (`away`, a oneshot channel: no runtime needed,
+   so the e2e's `block_on` runs it as iced does); nothing to clean, nothing changes. Meanwhile
+   the scan stays busy (no other scan, closing asks as during one) and the progress card says
+   *Pulizia della scansione*; the result comes back numbered (`Message::Cleaned`) and the rest
+   (frames, development, pages, saving, the next frame's scan) goes on in `on_cleaned` in the
+   same order as before. *Annulla* or closing the window drops the number: what comes back
+   goes nowhere. The `dust:` line in `tasti.log` as before (written when the result comes
+   back). e2e `the_scan_is_cleaned_away_from_the_window_and_its_frames_kept_in_order` and
+   `a_cleaning_cancelled_or_closed_on_is_dropped`.
+   **The slides against Epson, measured** (20 November 2026; 134 dusty, 136 blown clean,
+   `captures/epson4490/05-catture.md`): most of what either changes is still there after
+   blowing (stuck specks, which both take out well; hairs the infrared sees and the colours
+   hardly do, where Epson leaves artefacts and we do not); on the dust that blowing took away,
+   by the infrared's marks and away from the holder, we fix 67 %, Epson 72 %; what we leave is
+   mostly inside our mask, **divided** (the infrared passing more than `DEEP`) where the
+   colour's shadow is far deeper. `registration_on_the_captures` and `dust_on_the_captures`
+   take 134 now. **Tried and dropped** (same evening): filling also where the colour's own
+   contrast (its log over its 31 x 31 mean, the dust left out) is 10 % below what the infrared
+   predicts: the loose dust fixed 67.2 -> 67.5 %, but ten times the pixels filled on slides and
+   our changes where Epson changes nothing 112 -> 1115, 134 -> 930 (the colour's contrast holds
+   the picture: it filled texture); negatives a little worse too. On the loose dust the gap to
+   Epson is about twenty pixels a frame (we alone leave 71, Epson alone 49, both 82: the
+   comparison's own floor at the marks' edges): **slides settled as they are**.
+   **The coloured dots in big specks: the comparison's, not the removal's** (20 November 2026;
+   `captures/epson4490/06-formato-dati.md`, "I puntini colorati"; `tools/ice_dots.py`). The
+   three seen on 108 (red, yellow, dark), redone through the per-channel curves alone and
+   stretched: our result there is clean, as Epson's (on one Epson leaves a grey patch). They came
+   from `ice_dust.py`'s per-cell correction (32 x 32 x 32 of our values, added for the slides'
+   mixed colours), measured over the whole frame: a speck's unusual colours fall in cells made
+   mostly of dust, whose mean is Epson's own ICE change, which tinted the dust in the comparison.
+   The cells now measured away from the dust, each value corrected by its own: on the same
+   cleaned frames, negatives **93.7-99.5 %** of Epson's changes (they read 90.2-98.2 %), ours
+   alone 4-158 pixels a frame (108: 104 -> 18); slides 41-51 % (Epson's changes counted grow:
+   the dust's colours fall in cells with little clean film; the slides' comparison stays
+   ambiguous, the 134/136 pair judges them better). Also measured: a fill grown from the deep
+   dust while a colour is darker than the infrared says by 4 times its grain (a test on a made-up
+   rim): 30-280 pixels a frame, nothing measurable changed (108 98.9 % with and without); not
+   kept, `dust.rs` unchanged. **Left, real and small**: where a hair crosses a sharp edge of the
+   picture (108, a leaf's edge at 1345/1085), our fill leaves a thin dark line along the edge;
+   Epson there is clean.
 
 **The HP 3770, what is missing** (last, as Matteo asked; from this plan's phases 10, 13, 14 and
 the code review's list):
 
-11. **Films at other resolutions**: today 600 and 1200 dpi only (`NEGATIVE_RESOLUTIONS`; a film
-    preview at 200 dpi once ground the motor). Others only from HP's own driver captured doing
-    them, guarded before anything moves; first: which ones HP's driver offers for the adapter.
-12. **Phase 13, left**: 4, an exposure per channel in the contract; 5, slides with more than one
+10. **Phase 13, left**: 4, an exposure per channel in the contract; 5, slides with more than one
     exposure (measured, set aside: back only with a sub-pixel alignment proven on slides); 7,
     the raw scan kept with its metadata and an IT8 profile per scanner; 8, the measuring box of
     a film's levels ("not now").
-13. **Dust without infrared** (phase 13, step 7): found in software on the picture, generic, for
+11. **Dust without infrared** (phase 13, step 7): found in software on the picture, generic, for
     scanners that read no infrared; to measure first on the 3770's blue-sky strip.
-14. **Phase 14, left**: profiles on macOS and Linux (step 3), the IT8 profile (step 4), the
+12. **Phase 14, left**: profiles on macOS and Linux (step 3), the IT8 profile (step 4), the
     glass's profile tried by eye.
-15. **Error paths never tried** (code review of 13 November 2026): `head_park_home` with the chip
+13. **Error paths never tried** (code review of 13 November 2026): `head_park_home` with the chip
     still running after 15 s, and the others listed there.
-16. **Phase 8** (other HP scanners with an RTS88xx chip): postponed, as decided.
+14. **Phase 8** (other HP scanners with an RTS88xx chip): postponed, as decided.
 
 **F. Release** (milestone 7)
 
@@ -2330,7 +2322,10 @@ the code review's list):
 **Not planned**: the optional document feeder (Matteo does not have it); Epson Scan's draft
 preview mode (the app's preview at 200 dpi takes about 25 s for the whole glass, as WIA's
 capture 06); the 9600 dpi along of the user guide's "Micro Step Drive" (never seen in a capture,
-interpolated as far as known).
+interpolated as far as known); Epson Scan's other film settings (grain reduction, colour
+restoration, backlight correction, its software "Dust Removal", unsharp mask: Matteo, 21
+November 2026, "the features we have are enough"); the HP 3770's films at resolutions other
+than 600 and 1200 dpi (Matteo, same day: not wanted).
 
 **The contract and the app, in short**: for the glass nothing new (steps 1-11 fit today's
 `Capabilities`, `Progress`, `LampInfo`, cancelling); three new fields, all already planned below:
