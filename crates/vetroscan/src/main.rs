@@ -880,6 +880,7 @@ impl Settings {
             infrared: Some(self.infrared),
             roll_base: None,
             slides: false,
+            bw_negatives: None,
             adjust: prefs::StoredAdjust {
                 temperature: a.temperature,
                 tint: a.tint,
@@ -1276,8 +1277,10 @@ impl std::fmt::Display for StartMode {
 
 /// What lies in the film adapter's holder, as Pellicola asks it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Holder {
+pub(crate) enum Holder {
     Negatives,
+    /// Black and white negatives: read as negatives, made grey.
+    BwNegatives,
     Slides,
 }
 
@@ -1285,6 +1288,7 @@ impl std::fmt::Display for Holder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::Negatives => tr("Negativi"),
+            Self::BwNegatives => tr("Negativi B/N"),
             Self::Slides => tr("Diapositive"),
         })
     }
@@ -2183,8 +2187,8 @@ enum Message {
     LockBase,
     /// "Nuovo rullino": each strip measures its own base again.
     NewRoll,
-    /// Pellicola: slides in the holder (true) or negatives.
-    Slides(bool),
+    /// Pellicola: what lies in the holder.
+    Holder(Holder),
     /// "Misura le righe": a strip of a white sheet at each resolution.
     MeasureStripes,
     /// Back to the stripes the scanner's model declares.
@@ -2538,6 +2542,9 @@ struct App {
     /// negatives (asked only of an adapter that takes both, see
     /// `film_kind`).
     slides: bool,
+    /// "Negativi B/N" chosen in Pellicola: black and white negatives, read as
+    /// negatives and made grey.
+    bw: bool,
     /// The base of the roll in the adapter, locked: every strip scanned is
     /// measured from it, so the frames of one roll come out alike (their
     /// highlights and black stay their own). None: each strip its own.
@@ -2732,6 +2739,7 @@ impl App {
                 strips: Vec::new(),
                 frames: Vec::new(),
                 slides: stored.film.slides,
+                bw: stored.film.bw_negatives.unwrap_or(false),
                 roll_base: stored.film.roll_base.filter(|b| valid_base(*b)),
                 strip_base: None,
                 film_wanted: false,
@@ -3219,11 +3227,34 @@ impl App {
         self.caps.offers(Source::Negative) || self.caps.offers(Source::Slide)
     }
 
-    /// "Negativi" or "Diapositive" chosen. Measures, frames found and the
-    /// preview were of the other film: they go (the areas drawn by hand and
-    /// the photos scanned stay). Not during a scan.
-    fn set_slides(&mut self, slides: bool) {
-        if self.busy.is_some() || self.slides == slides {
+    /// "Negativi", "Negativi B/N" or "Diapositive" chosen. Between negatives and slides the
+    /// measures, frames found and the preview were of the other film: they go (the areas drawn
+    /// by hand and the photos scanned stay). Black and white negatives are read as negatives and
+    /// made grey: the film's colour becomes "Grigio", and "Colore" again when colour negatives
+    /// come back. Not during a scan.
+    fn set_holder(&mut self, holder: Holder) {
+        let slides = holder == Holder::Slides;
+        let bw = holder == Holder::BwNegatives;
+        if self.busy.is_some() || (self.slides == slides && self.bw == bw) {
+            return;
+        }
+        if bw {
+            self.film_settings.colour = Colour::Grey;
+        } else if self.bw && self.film_settings.colour == Colour::Grey {
+            self.film_settings.colour = Colour::Rgb;
+        }
+        self.bw = bw;
+        let note = match (slides, bw) {
+            (true, _) => tr("Diapositive nel supporto: ognuna diventa un'immagine"),
+            (false, true) => {
+                tr("Negativi in bianco e nero: ogni fotogramma diventa un'immagine in grigio")
+            }
+            (false, false) => tr("Negativi nel supporto: ogni fotogramma diventa un'immagine"),
+        };
+        if self.slides == slides {
+            if self.filming() {
+                self.note = note.into();
+            }
             return;
         }
         self.slides = slides;
@@ -3237,32 +3268,29 @@ impl App {
         self.film_preview = None;
         // The preview showed the other film, developed as such.
         self.preview = None;
-        self.note = match self.film_kind() {
-            Film::Slide => tr("Diapositive nel supporto: ognuna diventa un'immagine"),
-            Film::Negative => tr("Negativi nel supporto: ogni fotogramma diventa un'immagine"),
-        }
-        .into();
+        self.note = note.into();
     }
 
-    /// "Negativi" or "Diapositive", for an adapter that takes both.
+    /// "Negativi", "Negativi B/N" and, for an adapter that takes them too, "Diapositive".
     fn holder_view(&self) -> Option<Element<'_, Message>> {
-        if !(self.caps.offers(Source::Slide) && self.caps.offers(Source::Negative)) {
+        if !self.caps.offers(Source::Negative) {
             return None;
         }
         let chosen = match self.film_kind() {
             Film::Slide => Holder::Slides,
+            Film::Negative if self.bw => Holder::BwNegatives,
             Film::Negative => Holder::Negatives,
         };
-        // During a scan the choice stays (see `set_slides`).
+        let mut choices = vec![Holder::Negatives, Holder::BwNegatives];
+        if self.caps.offers(Source::Slide) {
+            choices.push(Holder::Slides);
+        }
+        // During a scan the choice stays (see `set_holder`).
         Some(labelled(
             tr("Nel supporto"),
-            pick_list(
-                [Holder::Negatives, Holder::Slides],
-                Some(chosen),
-                |h: Holder| Message::Slides(h == Holder::Slides),
-            )
-            .width(Length::Fill)
-            .into(),
+            pick_list(choices, Some(chosen), Message::Holder)
+                .width(Length::Fill)
+                .into(),
         ))
     }
 
@@ -4536,6 +4564,7 @@ impl App {
             film: prefs::StoredMode {
                 roll_base: self.roll_base,
                 slides: self.slides,
+                bw_negatives: self.bw.then_some(true),
                 ..self.film_settings.to_stored()
             },
             lamp_off_minutes: self.lamp_off,
@@ -5275,6 +5304,7 @@ impl App {
                 self.film_settings = Settings::film();
                 self.roll_base = None;
                 self.slides = false;
+                self.bw = false;
                 self.start_mode = StartMode::Last;
                 self.custom_folder = None;
                 self.document_name = d.document_name;
@@ -5427,7 +5457,7 @@ impl App {
                         tr("Base del rullino bloccata: le prossime strisce useranno questa").into();
                 }
             }
-            Message::Slides(slides) => self.set_slides(slides),
+            Message::Holder(holder) => self.set_holder(holder),
             Message::NewRoll => {
                 // The last strip belongs to the roll taken out.
                 self.strip_base = None;

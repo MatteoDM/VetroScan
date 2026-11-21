@@ -1912,7 +1912,7 @@ fn slides_too_have_their_preview_and_a_scan_each() {
     let (mut ui, controls) = with_slides();
     controls.load(scanner_api::fake::Holder::Slides);
     ui.click("Pellicola");
-    ui.send(Message::Slides(true));
+    ui.send(Message::Holder(crate::Holder::Slides));
     ui.click("Anteprima");
     let n = ui.app.shown_regions().len();
     assert_eq!(n, 2, "{}", ui.app.note);
@@ -2805,7 +2805,7 @@ fn slides_are_chosen_scanned_as_positives_and_remembered() {
     // Negatives first, as before; the choice is there.
     assert_eq!(ui.app.request().source, Source::Negative);
     assert!(ui.shows("Nel supporto") && ui.shows("Rullino"));
-    ui.send(Message::Slides(true));
+    ui.send(Message::Holder(crate::Holder::Slides));
     assert_eq!(ui.app.film_kind(), scan_imaging::film::Film::Slide);
     let request = ui.app.request();
     assert_eq!(request.source, Source::Slide);
@@ -2840,7 +2840,7 @@ fn slides_are_chosen_scanned_as_positives_and_remembered() {
     assert_eq!(reopened.app.request().source, Source::Slide);
     // Back to negatives (the strip put in the holder): the slides scanned
     // stay, the next scan is of the strip, in their place when asked.
-    ui.send(Message::Slides(false));
+    ui.send(Message::Holder(crate::Holder::Negatives));
     assert_eq!(ui.app.request().source, Source::Negative);
     assert_eq!(ui.app.pages.len(), 2);
     assert!(ui.shows("Rullino"));
@@ -2857,7 +2857,7 @@ fn slides_are_chosen_scanned_as_positives_and_remembered() {
     assert!(ui.app.strip_base.is_some(), "the strip's base");
     // Not during a scan: the choice stays.
     ui.app.busy = Some((crate::Purpose::Page, None));
-    ui.send(Message::Slides(true));
+    ui.send(Message::Holder(crate::Holder::Slides));
     assert!(!ui.app.slides);
 }
 
@@ -2873,7 +2873,7 @@ fn the_scanners_colour_correction_is_offered_for_slides() {
         ui.send(Message::Pane(crate::Pane::Scan));
         ui.click("Pellicola");
         assert!(!ui.shows(tick), "none declared for negatives");
-        ui.send(Message::Slides(true));
+        ui.send(Message::Holder(crate::Holder::Slides));
         assert!(ui.shows(tick));
         assert!(ui.shows("Togli le righe dello scanner"), "slides' stripes");
         assert!(ui.app.settings().scanner_colour, "on by default");
@@ -2944,14 +2944,21 @@ fn the_scanners_colour_correction_is_offered_for_the_glass() {
     assert_eq!(ui.app.colour_correction(), None);
 }
 
-/// Where the adapter takes one film only, there is no choice: its film.
+/// Where the adapter takes one film only, its film: for negatives the choice is only colour or
+/// black and white.
 #[test]
 fn an_adapter_for_one_film_has_no_choice() {
     use scanner_api::{Scanner, Source};
     let (mut ui, _) = with_adapter();
     ui.send(Message::Pane(crate::Pane::Scan));
     ui.click("Pellicola");
-    assert!(!ui.shows("Nel supporto"));
+    // The menu (a pick list: its text is not found by the simulator): black and white or
+    // colour negatives, slides not offered.
+    assert!(ui.shows("Nel supporto"));
+    ui.send(Message::Holder(crate::Holder::BwNegatives));
+    assert!(ui.app.bw);
+    ui.send(Message::Holder(crate::Holder::Negatives));
+    assert!(!ui.app.bw);
     // Slides chosen on another scanner: negatives here all the same.
     ui.app.slides = true;
     assert_eq!(ui.app.request().source, Source::Negative);
@@ -3035,7 +3042,7 @@ fn the_epson_4490_shows_what_its_backend_declares() {
     assert_eq!(ui.app.request().dpi, 600);
     ui.send(Message::Dpi(4800));
     assert_eq!(ui.app.request().dpi, 4800);
-    ui.send(Message::Slides(true));
+    ui.send(Message::Holder(crate::Holder::Slides));
     assert_eq!(ui.app.request().source, Source::Slide);
     ui.click("Foto");
     ui.send(Message::Pane(crate::Pane::Scan));
@@ -4205,4 +4212,50 @@ fn no_infrared_where_the_scanner_reads_none() {
     assert_eq!(ui.app.pages.len(), 2, "{}", ui.app.note);
     assert!(controls.requests().iter().all(|r| !r.infrared));
     assert!(ui.app.pages.iter().all(|p| p.infrared.is_none()));
+}
+
+/// "Negativi B/N": black and white negatives are read as negatives (the scanner asked nothing
+/// new) and made grey; remembered; colour negatives again in colour. On an adapter for negatives
+/// only too (the HP 3770's), and none on the glass.
+#[test]
+fn black_and_white_negatives_are_scanned_as_negatives_and_made_grey() {
+    use scanner_api::Source;
+    let (mut ui, _) = with_adapter();
+    ui.send(Message::Pane(crate::Pane::Scan));
+    assert!(!ui.shows("Negativi B/N"), "not on the glass");
+    ui.click("Pellicola");
+    ui.send(Message::Dpi(200));
+    ui.send(Message::Holder(crate::Holder::BwNegatives));
+    let request = ui.app.request();
+    assert_eq!(request.source, Source::Negative);
+    assert_eq!(ui.app.settings().colour, crate::Colour::Grey);
+    assert!(ui.app.note.contains("bianco e nero"), "{}", ui.app.note);
+    let prefs = ui.app.prefs();
+    assert_eq!(prefs.film.bw_negatives, Some(true));
+    assert_eq!(prefs.film.colour, "grigio");
+    ui.click("Scansiona foto");
+    assert!(!ui.app.pages.is_empty(), "{}", ui.app.note);
+    let shared = *ui.app.settings();
+    for page in &ui.app.pages {
+        let file = page.finished(&shared);
+        assert!(
+            file.format == scan_imaging::Format::Grey
+                || file
+                    .data
+                    .chunks_exact(3)
+                    .all(|p| p[0] == p[1] && p[1] == p[2]),
+            "a grey picture: {:?}",
+            file.format
+        );
+    }
+    // Remembered: the app opened again has black and white negatives, in grey.
+    let (mut reopened, _) = with_adapter();
+    assert!(reopened.app.bw);
+    reopened.click("Pellicola");
+    assert_eq!(reopened.app.settings().colour, crate::Colour::Grey);
+    // Colour negatives again: in colour.
+    ui.send(Message::Holder(crate::Holder::Negatives));
+    assert_eq!(ui.app.settings().colour, crate::Colour::Rgb);
+    assert_eq!(ui.app.prefs().film.bw_negatives, None);
+    assert_eq!(ui.app.request().source, Source::Negative);
 }

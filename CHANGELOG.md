@@ -18,6 +18,10 @@ GitHub; here they are in English.
 ## [Unreleased]
 
 ### Added
+- **Negativi B/N** in *Pellicola*'s holder menu: black and white negatives, scanned as negatives
+  (nothing new asked of the scanner) and made grey, the colour set to *Grigio* by itself and
+  remembered; for every scanner with an adapter for negatives (the HP 3770 too). Tried with
+  Digital ICE on a chromogenic film (Kodak BW400CN) on the Epson Perfection 4490.
 - **Leggi l'infrarosso** in *Pellicola*, for scanners that read an infrared channel from a
   film (Digital ICE): a second reading in infrared light, which goes through the film but not
   through dust and scratches. The channel is kept with each frame and saved beside its 16-bit

@@ -116,8 +116,11 @@ VetroScan scans both **negatives** and **slides** with it:
 1. put the strip or the slides in their holder and the holder on the glass, as the HP manual
    shows, and plug the adapter's cable in at the back of the scanner;
 2. choose **Film** (with the cable unplugged a message says so) and, in the **Scan** tab,
-   what is **In the holder**: **Negatives** or **Slides** (the choice shows only for an
-   adapter that takes both; VetroScan remembers it);
+   what is **In the holder**: **Negatives**, **B&W negatives** or **Slides** (slides only for
+   an adapter that takes them; VetroScan remembers it). **B&W negatives** are scanned as
+   negatives and made grey: the colour becomes **Grey** by itself, and **Colour** again with
+   **Negatives**. A chromogenic black and white film (Kodak BW400CN, Ilford XP2, developed as
+   colour film) is one of these, with Digital ICE where the scanner has it;
 3. **Preview**: the whole holder at the lowest resolution the adapter scans at (600 dpi on
    the HP 3770 and on the Epson 4490). The negatives are shown as positives with their natural
    colours (slides are positives already: they are only stretched to the full range, one black

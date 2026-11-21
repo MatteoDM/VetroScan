@@ -2233,6 +2233,22 @@ at the very end, date to be decided, the medium format, the silver films and the
    HP 3770 too** (Matteo, 20 November 2026; its B&W slides with item 14): B&W negatives with this
    film kind at its 600 and 1200 dpi only (to the scanner a negative as today, no new command; no
    infrared, so no ICE); one scan of ours to check.
+   **Measured and built** (21 November 2026; 144 in `captures/epson4490/05-catture.md`): Epson
+   Scan's "B&W negative" type, in grey too, has the scanner read in colour; its film type `00`
+   only changes the calibration to the slides' (gains `18 1b 18`, an exposure per channel),
+   which suits a grey-based silver film; the BW400CN's base is orange, its colour channels
+   balanced by our colour-negative calibration (twice the green and three times the blue
+   signal): so the driver stays as it is (no capability; a silver film may want the slides'
+   calibration, to measure when there is one). Epson's grey is mostly green (rank correlation
+   0.996 with 0.1 R 0.7 G 0.2 B; the mean 0.995: all nearly alike): the app's grey kept. **In the
+   app**: "Negativi B/N" in *Nel supporto* (for every adapter that takes negatives, the HP
+   3770's too): a negative to the scanner, the colour set to *Grigio* (and *Colore* again with
+   "Negativi"), remembered (`StoredMode::bw_negatives`, a test of an older file); e2e
+   `black_and_white_negatives_are_scanned_as_negatives_and_made_grey`. The dust's odd
+   per-colour shifts on three equal channels (141, 142, and the app's scan): no visible harm;
+   a grey film could take one shift for the three (not done). **Tried** by Matteo on the
+   BW400CN (21 November 2026), without and with *Leggi l'infrarosso*: right. Left: the HP 3770
+   scan to check.
 5. **The dust's own left items** (step 17, item 3 above): the slides against Epson (the pair
    taken in item 2's sitting), the coloured dots in big specks, the removal off the app's thread
    (software only, any time).

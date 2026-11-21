@@ -147,6 +147,9 @@ pub struct StoredMode {
     /// Films: slides in the holder rather than negatives ("Diapositive";
     /// absent: negatives).
     pub slides: bool,
+    /// Films: the negatives are black and white ("Negativi B/N": read as negatives, made
+    /// grey; absent: colour).
+    pub bw_negatives: Option<bool>,
     pub adjust: StoredAdjust,
 }
 
@@ -175,6 +178,7 @@ impl Default for StoredMode {
             infrared: None,
             roll_base: None,
             slides: false,
+            bw_negatives: None,
             adjust: StoredAdjust::default(),
         }
     }
@@ -608,5 +612,26 @@ mod tests {
         let epson: Prefs =
             serde_json::from_str(r#"{"theme":"scuro","epson_firmware":"C:\\esfw54.bin"}"#).unwrap();
         assert_eq!(epson.theme, "scuro");
+    }
+
+    /// A film's settings from before "Negativi B/N" (v0.10): colour negatives; the choice
+    /// kept once made, and left out of the file when it is not.
+    #[test]
+    fn black_and_white_negatives_are_remembered() {
+        let old = r#"{"film": {"dpi": 1200, "colour": "colore", "threshold": 128,
+                        "output": "jpeg", "pdf_size": "scansione", "pdf_sheet": "auto",
+                        "pdf_fit": "reale", "auto_save": false, "slides": false,
+                        "adjust": {}}}"#;
+        let p = serde_json::from_str::<Prefs>(old).unwrap().migrated();
+        assert_eq!(p.film.bw_negatives, None, "colour negatives");
+        let mut bw = Prefs::default();
+        bw.film.bw_negatives = Some(true);
+        bw.film.colour = "grigio".into();
+        let text = serde_json::to_string(&bw).unwrap();
+        let back = serde_json::from_str::<Prefs>(&text).unwrap().migrated();
+        assert_eq!(
+            (back.film.bw_negatives, back.film.colour.as_str()),
+            (Some(true), "grigio")
+        );
     }
 }
