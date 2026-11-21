@@ -300,8 +300,25 @@ fn lamp_error(answer: u8) -> Error {
 /// again by the scan's `1E A2 01`), `02` the lid's (after films, capture 25, or after the
 /// scanner was reset with `1B 40`, captures 66 and 68: switched back with `1E 77`).
 fn lamp_at_opening(t: &mut dyn Transport) -> Result<u8> {
-    match lamp_in_use(t)? {
+    let mut a = lamp_in_use(t)?;
+    // The lid's infrared light (`04`, `05` its dark read's) still in use: a Digital ICE scan
+    // stopped in its infrared pass left it so (Matteo's app on Linux, 21 November 2026: after
+    // the guard refused the infrared plan, the next try 26 and 28 s later found `04`, the one
+    // after, 11 and 84 s later, `02`). Asked again, only that and only every [`ICE_HOME_POLL`]
+    // (asked continuously the scanner keeps its carriages out, capture 121), at most
+    // [`ICE_HOME_WAIT`].
+    let until = Instant::now() + ICE_HOME_WAIT;
+    while matches!(a, 0x04 | 0x05) && Instant::now() < until {
+        std::thread::sleep(ICE_HOME_POLL);
+        a = lamp_in_use(t)?;
+    }
+    match a {
         a @ (0x00..=0x02) => Ok(a),
+        0x04 | 0x05 => Err(other(format!(
+            "1E A1 answered {a:02X} for {} s: the lid's infrared light still in use (after a \
+             Digital ICE scan stopped in its infrared pass); switch the scanner off and on",
+            ICE_HOME_WAIT.as_secs()
+        ))),
         other_ => Err(other(format!(
             "1E A1 answered {other_:02X}: neither the glass's lamp (01), the lid's (02) nor none (00)"
         ))),
@@ -2811,6 +2828,28 @@ pub(crate) mod tests {
     /// to the image read and the carriages home (the gamma and tone tables linear, the computed
     /// `1E 42` and shading any), its calibration reads made up from what the rules take from
     /// the real ones. The calibration alone stops before `1E 8B`, the image's.
+    #[test]
+    fn the_infrared_light_left_in_use_is_waited_for() {
+        // A Digital ICE scan stopped in its infrared pass: the next opening finds `04` and asks
+        // again until the scanner is back to the lid's lamp, then goes on as captured (108).
+        let (_, request, ..) = crate::ice::tests::ICE[1];
+        let text = include_str!("../testdata/108_ice.txt");
+        let reads = include_str!("../testdata/108_ice_reads.txt");
+        let first = "W 1ea1\nR 02\n";
+        let waited = text.replacen(first, "W 1ea1\nR 04\nW 1ea1\nR 04\nW 1ea1\nR 02\n", 1);
+        let waited: &'static str = Box::leak(waited.into_boxed_str());
+        let mut g = Guarded::new(Follow::film("108", waited, reads));
+        scan_ice(&mut g, &request, 10, &mut |_| {}, &mut |_| true)
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(g.inner().lines.len() - g.inner().at, 0);
+        // Another answer: refused at once, as before.
+        let odd = text.replacen(first, "W 1ea1\nR 07\n", 1);
+        let odd: &'static str = Box::leak(odd.into_boxed_str());
+        let mut g = Guarded::new(Follow::film("108", odd, reads));
+        let e = scan_ice(&mut g, &request, 10, &mut |_| {}, &mut |_| true).unwrap_err();
+        assert!(e.to_string().contains("answered 07"), "{e}");
+    }
+
     #[test]
     fn the_carriages_left_by_an_origin_read_are_waited_for() {
         // Where a scan stopped after its origin read left them (1994 / 2440, the app's tries

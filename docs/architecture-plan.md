@@ -2085,6 +2085,15 @@ never run by us (step 12).
           power cycle; captures 127, 128 in `05-catture.md`): Epson Scan right after the power-on
           took **+45** (its own rule on its holes, the infrared holes higher then); ours a few
           minutes later +42. Matteo's decision: `ICE_START_DELTAS` 39-45, only what Epson did.
+          **Widened to 35-45** (21 November 2026, Matteo's decision): his app on Linux (v0.11.1)
+          computed 37 and 38 three times on a negative at 2400 dpi near the strip's bottom (the
+          28 ICE scans captured, Epson Scan's and ours: 40-45; D, the colour holes' lines less
+          the infrared ones', 12-35 4800ths there, 40-47 on Linux); a step is a hundredth of a
+          millimetre and the registration measures the shift on the image. Why the holes read
+          so there (the 2400 dpi colour pass before, the host's reading speed): not measured; a
+          capture of Epson Scan on that frame would say. The same sitting showed a refused
+          infrared pass leaves `1E A1` answering `04` for some tens of seconds: the opening now
+          asks again every 5 s, at most a minute (`scan::lamp_at_opening`).
           And 127 showed **the image read's lead follows the line time** (Epson's interpreter's
           rule for every read, `0x41e760`: 32 below 151 steps a second, 128 below 5,500; every
           film capture fits it; ours at 1200 dpi had sent 32 at 163 steps a second): now

@@ -17,6 +17,16 @@ GitHub; here they are in English.
 
 ## [Unreleased]
 
+### Fixed
+- Epson Perfection 4490, *Leggi l'infrarosso*: a negative at 2400 dpi stopped before its
+  infrared pass with "the infrared read would start 37 (or 38) steps after the colour one,
+  never captured (39-45)". The scanner places its infrared pass from the holder's holes read
+  twice, and the two reads differed by a few hundredths of a millimetre more than ever seen;
+  the driver now lets out a start from 35 steps (a step is a hundredth of a millimetre).
+- Epson Perfection 4490: after a Digital ICE scan stopped in its infrared pass, the next scan
+  stopped at once with "1E A1 answered 04" (the infrared light still in use for a few tens of
+  seconds). It now waits, up to a minute, for the scanner to go back to its lid's lamp.
+
 ## [0.11.1] - 2026-11-21
 
 ### Fixed

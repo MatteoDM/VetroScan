@@ -39,7 +39,7 @@
 //!   [`Guarded::permit_infrared_pass`] has switched to the infrared pass: the infrared `1E 57`
 //!   (mode `20`, source `03`), its light (`1E A2 04`, `05`), the lid unit's 705 steps, `1E 87 01`,
 //!   the origin read's ramp at T 8064, window line times up to [`ice::IR_MAX_LINE_TIME`], and its
-//!   plan only with a start move 39-45 steps after the colour pass's ([`ICE_START_DELTAS`]) and
+//!   plan only with a start move 35-45 steps after the colour pass's ([`ICE_START_DELTAS`]) and
 //!   its columns near the colour read's ([`check_infrared_plan`]).
 //!
 //! What a scan may ask ([`check_request`], [`check_plan`]): the glass, colour,
@@ -236,8 +236,14 @@ pub const ICE_COVERED: [(u32, u32, u8, &[Film]); 3] = [
 /// The infrared pass's start move less the colour pass's, as captured (`ice::start_delta`): 39-44
 /// in captures 18 and 108-126, 45 by Epson Scan right after a power-on (127, 19 November 2026:
 /// the infrared holes read higher then); another one is refused (Matteo's decision: only what a
-/// capture showed; our 46 after a power-on, 18 November, was never seen from Epson Scan).
-pub const ICE_START_DELTAS: std::ops::RangeInclusive<i64> = 39..=45;
+/// capture showed; our 46 after a power-on, 18 November, was never seen from Epson Scan). Since
+/// 21 November 2026 (Matteo's decision) from 35: his app on Linux computed 37 and 38 three times
+/// on a negative at 2400 dpi near the strip's bottom (40-45 in all 28 ICE scans captured, Epson
+/// Scan's and ours), the infrared holes read a few 4800ths lower; a step is a hundredth of a
+/// millimetre, Epson's rule computed it, and the registration measures the shift on the image;
+/// two below the lowest seen. The top stays 45: a later start would cut more of an area at the
+/// holder's bottom ([`ice_reachable`]).
+pub const ICE_START_DELTAS: std::ops::RangeInclusive<i64> = 35..=45;
 
 /// How far the infrared read's first column may lie from the colour read's, 4800ths of an inch:
 /// the captures' -53 to -26 (`ice::infrared_plan`), and room for a frame anywhere in the window
@@ -2057,6 +2063,12 @@ mod tests {
         let mut far = ir.clone();
         far.geometry.start_steps += 10;
         assert!(t.permit_film_plan(&far).is_err());
+        // 108's start is 44 after the colour one: 37 (seen on Linux) let out, 34 not.
+        let mut low = ir.clone();
+        low.geometry.start_steps -= 10;
+        assert!(t.permit_film_plan(&low).is_err());
+        low.geometry.start_steps += 3;
+        check_infrared_plan(&colour, &low).unwrap();
         let mut wide = ir.clone();
         wide.geometry.pixels += 512;
         assert!(t.permit_film_plan(&wide).is_err());
