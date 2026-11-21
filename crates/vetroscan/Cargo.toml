@@ -21,7 +21,8 @@ notify-rust = "4"
 dirs = "6"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# The local date and time in the names of saved files.
+jiff = "1"
 vetroscan-export.workspace = true
 sys-locale = "0.3"
 # The screen's colours (phase 14): Firefox's colour management, pure Rust.

@@ -4720,7 +4720,7 @@ impl App {
     fn stamped(prefix: &str, extension: &str) -> String {
         format!(
             "{prefix}-{}.{extension}",
-            chrono::Local::now().format("%Y-%m-%d-%H%M%S")
+            jiff::ZonedDateTime::now().strftime("%Y-%m-%d-%H%M%S")
         )
     }
 
