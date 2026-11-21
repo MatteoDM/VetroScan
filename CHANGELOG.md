@@ -17,6 +17,8 @@ GitHub; here they are in English.
 
 ## [Unreleased]
 
+## [0.11.2] - 2026-11-21
+
 ### Fixed
 - Epson Perfection 4490, *Leggi l'infrarosso*: a negative at 2400 dpi stopped before its
   infrared pass with "the infrared read would start 37 (or 38) steps after the colour one,
@@ -670,7 +672,8 @@ First version.
 - Texts with a run of spaces in the middle (note on RAW, on 16 bits and on the buttons in
   Windows); the button of the default folder uses the system's separator.
 
-[Unreleased]: https://github.com/MatteoDM/scanner/compare/v0.11.1...HEAD
+[Unreleased]: https://github.com/MatteoDM/scanner/compare/v0.11.2...HEAD
+[0.11.2]: https://github.com/MatteoDM/scanner/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/MatteoDM/scanner/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/MatteoDM/scanner/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/MatteoDM/scanner/compare/v0.9.0...v0.10.0
