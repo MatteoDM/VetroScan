@@ -2156,7 +2156,7 @@ never run by us (step 12).
        **Left**: the slides (half of Epson's changes: a pair of slide scans with and without
        dust, blown clean between them, would say who is right); the coloured dots in big
        specks; the removal runs on the app's thread (3 s for a frame at 2400 dpi; moved off it
-       20 November 2026, item 9 of the 4490's list); Matteo's first try on a real scan in the
+       20 November 2026, item 5 of the 4490's list); Matteo's first try on a real scan in the
        app.
 
 **Every film variant, to complete** (asked by Matteo on 19 November 2026, evening: "complete all
@@ -2190,7 +2190,9 @@ is fresh; (c) B&W may need a mode never captured (grey, one channel) and a new f
 and less certain; (d) the silver safety protects a feature not yet released (*Leggi
 l'infrarosso* is under `[Unreleased]`), so it must come before the next release, not before the
 colour gaps. One sitting at the scanner can take several items: Epson Scan's captures first,
-then our runs.
+then our runs. Reordered again on 21 November 2026 (Matteo): the B&W negative kind (on
+BW400CN, chromogenic) now; the HP 3770 after, first judged on whether it really needs more;
+at the very end, date to be decided, the medium format, the silver films and the B&W slides.
 
 1. **Close the open ICE round**: done (commit `8883ec6`, 20 November 2026): the dust by the
    holder's edge (the film found as all but the opaque holder and its blurred edge, not 30 pixels
@@ -2199,7 +2201,7 @@ then our runs.
    for negatives, our own run, declared); **ICE at 600 dpi**, negatives and slides (first whether
    Epson Scan offers it there; if so captured, run, declared; if not, left out and said so). In
    the same sitting, for the dust: a slide scanned with ICE, blown clean, scanned again (who is
-   right where we and Epson differ on slides, item 9).
+   right where we and Epson differ on slides, item 5).
    **Captured** (20 November 2026, Matteo at Epson Scan; 132-137 in `05-catture.md`): Epson Scan
    offers ICE at 600 dpi too, negatives and slides, read at 600 (lead 128 in both passes); a
    slide at 1200 (132), at 600 (133), a negative at 600 (137); the dust pair: a slide with ICE
@@ -2211,53 +2213,27 @@ then our runs.
    scanner; 138-140): a negative at 600 dpi (lead 128 in both passes, the moves of 137), a
    slide at 1200 (those of 132) and at 600 (those of 133), each whole and laid (lines 0.05-0.76,
    columns -0.24-0.21); **declared**: the 4490's `Capabilities::infrared` has negatives and
-   slides at 600, 1200 and 2400 dpi. Item 2 done but its dust pair (134-136), which is item 9's.
-   A classic B&W negative for item 4: asked, not answered.
+   slides at 600, 1200 and 2400 dpi. Item 2 done but its dust pair (134-136), which is item 5's.
+   A classic B&W negative for item 13: asked, not answered.
 3. **ICE "at 4800"**: the scanner reads 2400 with ICE (110, 113), Epson Scan enlarges. Matteo
    to choose: offer 4800 with ICE as Epson does (read 2400, enlarge, said so in the app), or
    keep ICE at 2400 at most. Nothing to capture.
-4. **Silver films and ICE: the safety, before the next release.** General knowledge: a classic
-   B&W film's image is silver, which stops infrared as dust does (Epson Scan and others switch
-   ICE off for it); Kodachrome's dyes take infrared too. `scan_imaging::dust` would take parts of
-   such a picture for dust. Measure first, with no new command (to the scanner a B&W negative is
-   a negative; it can be scanned in item 2's sitting): our own ICE scan of a B&W negative at
-   1200 dpi (and, if Matteo has one, a Kodachrome at 2400): how much of the infrared the picture
-   explains (the crosstalk's R², 0.10-0.28 on the nine colour films). Then: above a threshold set
-   from that measure the removal does nothing and says so (in the log, and to the user), for
-   every scanner.
-   **The control case, measured** (21 November 2026, Matteo at the scanner; 141-143 in
-   `captures/epson4490/05-catture.md`): a Kodak BW400CN (chromogenic: dyes) at 1200 dpi, Epson
-   Scan's ICE (141) and ours (142): the picture explains **R² 0.29** of the infrared (the colour
-   films 0.10-0.28): it behaves as a colour negative. Our removal on it: 1.6 % of the frame
-   changed, 183 pixels (0.01 %) by us alone: the picture is not taken for dust; 58 % of Epson's
-   changes made (colour negatives 96-98 %: what Epson changes and we do not are specks the
-   colours hardly show), the colours' shifts measured on the dust odd (up to 2.6 columns across,
-   ~0 on colour negatives) with three equal channels. So the silver threshold lies above 0.29;
-   a classic silver negative is still needed to set it.
-5. **B&W negatives, Epson Scan's own type**: captures 1200 dpi without ICE, then with ICE (does
+4. **B&W negatives, Epson Scan's own type**: captures 1200 dpi without ICE, then with ICE (does
    Epson Scan send another `1E 57` mode, grey, one channel? does it read infrared at all, and what
    does its ICE do to silver?). Then in the app a film kind "B&W negative" (no orange mask,
    developed to grey, its own base), generic in `scan_imaging::film` and the same for the HP
    3770; and, from the captures, whether the 4490 is asked differently for it (a capability if
    so). **Chromogenic B&W** (Ilford XP2, Kodak BW400CN; general knowledge: dyes, so ICE works):
    a colour negative to the scanner, developed to grey; checked with ICE if Matteo has one:
-   **scanned with ICE** (141, 142: as above, item 4). **Epson Scan's "B&W negative" type**
+   **scanned with ICE** (141, 142: item 13). **Epson Scan's "B&W negative" type**
    (143, the same BW400CN, with ICE, which it offers): the scanner reads in **colour**, as for
    a colour negative (mode `13`, three channels, 16 bits, the infrared pass the same), only the
    `1E 57`'s film type `00` (as a slide) for `01`; the grey and the inversion are Epson Scan's,
-   on the computer; its TIFF RGB at 48 bits. So no new scanner mode for B&W: it is the app's.
-6. **B&W slides** (silver: Agfa Scala, Fomapan R, any B&W reversed; general knowledge): a
-   positive to the scanner; no ICE (item 4's safety); developed to grey in the app's film kind;
-   one scan of ours to check if Matteo has one.
-7. **B&W on the HP 3770 too** (moved up from the HP list, Matteo, 20 November 2026: B&W films
-   before the HP's own items): B&W negatives and slides with item 5's film kind, at the 3770's
-   600 and 1200 dpi only (to the scanner a negative or a positive as today, no new command; no
-   infrared on the 3770, so no ICE and no item 4 to apply); one scan of ours of each to check.
-8. **The medium format holder** (6 x 12 cm): captures with a 120 film when Matteo has one
-   (preview, a frame without and with ICE); `Adapter` with frames of 6 x 4.5, 6 x 6, 6 x 7,
-   6 x 9 and 6 x 12 (the contract's "medium format", planned in "Behind trait Scanner");
-   `film::frames` taught them.
-9. **The dust's own left items** (step 17, item 3 above): the slides against Epson (the pair
+   on the computer; its TIFF RGB at 48 bits. So no new scanner mode for B&W: it is the app's. **The
+   HP 3770 too** (Matteo, 20 November 2026; its B&W slides with item 14): B&W negatives with this
+   film kind at its 600 and 1200 dpi only (to the scanner a negative as today, no new command; no
+   infrared, so no ICE); one scan of ours to check.
+5. **The dust's own left items** (step 17, item 3 above): the slides against Epson (the pair
    taken in item 2's sitting), the coloured dots in big specks, the removal off the app's thread
    (software only, any time).
    **The removal off the app's thread: done** (20 November 2026). Measured first (release, one
@@ -2308,20 +2284,56 @@ then our runs.
    picture (108, a leaf's edge at 1345/1085), our fill leaves a thin dark line along the edge;
    Epson there is clean.
 
-**The HP 3770, what is missing** (last, as Matteo asked; from this plan's phases 10, 13, 14 and
-the code review's list):
+6. **Before the next release, without a silver film.** Item 13's threshold cannot be measured
+until Matteo has a classic silver negative, maybe never (Matteo, 21 November 2026). To decide
+with him how *Leggi l'infrarosso* stands meanwhile (for instance its description saying it is
+for colour and chromogenic films, not silver B&W: general knowledge), then the release.
 
-10. **Phase 13, left**: 4, an exposure per channel in the contract; 5, slides with more than one
-    exposure (measured, set aside: back only with a sub-pixel alignment proven on slides); 7,
-    the raw scan kept with its metadata and an IT8 profile per scanner; 8, the measuring box of
-    a film's levels ("not now").
-11. **Dust without infrared** (phase 13, step 7): found in software on the picture, generic, for
-    scanners that read no infrared; to measure first on the 3770's blue-sky strip.
-12. **Phase 14, left**: profiles on macOS and Linux (step 3), the IT8 profile (step 4), the
-    glass's profile tried by eye.
-13. **Error paths never tried** (code review of 13 November 2026): `head_park_home` with the chip
+**The HP 3770, what is missing** (after the 4490; Matteo, 21 November 2026: first judge whether any
+is really needed or the 3770 stays as it is; from this plan's phases 10, 13, 14 and the code
+review's list):
+
+7. **Phase 13, left**: 4, an exposure per channel in the contract; 5, slides with more than one
+   exposure (measured, set aside: back only with a sub-pixel alignment proven on slides); 7,
+   the raw scan kept with its metadata and an IT8 profile per scanner; 8, the measuring box of
+   a film's levels ("not now").
+8. **Dust without infrared** (phase 13, step 7): found in software on the picture, generic, for
+   scanners that read no infrared; to measure first on the 3770's blue-sky strip.
+9. **Phase 14, left**: profiles on macOS and Linux (step 3), the IT8 profile (step 4), the
+   glass's profile tried by eye.
+10. **Error paths never tried** (code review of 13 November 2026): `head_park_home` with the chip
     still running after 15 s, and the others listed there.
-14. **Phase 8** (other HP scanners with an RTS88xx chip): postponed, as decided.
+11. **Phase 8** (other HP scanners with an RTS88xx chip): postponed, as decided.
+
+**At the end, date to be decided** (Matteo, 21 November 2026: the medium format when he has a
+120 film, the silver films perhaps never):
+
+12. **The medium format holder** (6 x 12 cm): captures with a 120 film when Matteo has one
+    (preview, a frame without and with ICE); `Adapter` with frames of 6 x 4.5, 6 x 6, 6 x 7,
+    6 x 9 and 6 x 12 (the contract's "medium format", planned in "Behind trait Scanner");
+    `film::frames` taught them.
+13. **Silver films and ICE: the threshold** (moved here 21 November 2026; item 6 before the
+    release). General knowledge: a classic B&W film's image is silver, which stops infrared as dust
+    does (Epson Scan and others switch ICE off for it); Kodachrome's dyes take infrared too.
+    `scan_imaging::dust` would take parts of such a picture for dust. Measure first, with no new
+    command (to the scanner a B&W negative is a negative; it can be scanned in item 2's sitting):
+    our own ICE scan of a B&W negative at 1200 dpi (and, if Matteo has one, a Kodachrome at 2400):
+    how much of the infrared the picture explains (the crosstalk's R², 0.10-0.28 on the nine colour
+    films). Then: above a threshold set from that measure the removal does nothing and says so (in
+    the log, and to the user), for every scanner. **The control case, measured** (21 November 2026,
+    Matteo at the scanner; 141-143 in `captures/epson4490/05-catture.md`): a Kodak BW400CN
+    (chromogenic: dyes) at 1200 dpi, Epson Scan's ICE (141) and ours (142): the picture explains
+    **R² 0.29** of the infrared (the colour films 0.10-0.28): it behaves as a colour negative. Our
+    removal on it: 1.6 % of the frame changed, 183 pixels (0.01 %) by us alone: the picture is not
+    taken for dust; 58 % of Epson's changes made (colour negatives 96-98 %: what Epson changes and
+    we do not are specks the colours hardly show), the colours' shifts measured on the dust odd (up
+    to 2.6 columns across, ~0 on colour negatives) with three equal channels. So the silver
+    threshold lies above 0.29; a classic silver negative is still needed to set it.
+
+14. **B&W slides** (silver: Agfa Scala, Fomapan R, any B&W reversed; general knowledge): a
+    positive to the scanner; no ICE (item 13's safety); developed to grey in the app's film kind;
+    one scan of ours to check if Matteo has one. The HP 3770's B&W slides
+    too, with the same film kind, at 600 and 1200 dpi.
 
 **F. Release** (milestone 7)
 
