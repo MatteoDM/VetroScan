@@ -17,6 +17,8 @@ GitHub; here they are in English.
 
 ## [Unreleased]
 
+## [0.11.3] - 2026-11-21
+
 ### Changed
 - The README, the install guides and the usage guide describe both scanners, the HP Scanjet
   3770 and the Epson Perfection 4490 Photo, with films and Digital ICE; the Linux menu entry and
@@ -680,7 +682,8 @@ First version.
 - Texts with a run of spaces in the middle (note on RAW, on 16 bits and on the buttons in
   Windows); the button of the default folder uses the system's separator.
 
-[Unreleased]: https://github.com/MatteoDM/VetroScan/compare/v0.11.2...HEAD
+[Unreleased]: https://github.com/MatteoDM/VetroScan/compare/v0.11.3...HEAD
+[0.11.3]: https://github.com/MatteoDM/VetroScan/compare/v0.11.2...v0.11.3
 [0.11.2]: https://github.com/MatteoDM/VetroScan/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/MatteoDM/VetroScan/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/MatteoDM/VetroScan/compare/v0.10.0...v0.11.0
