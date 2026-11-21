@@ -3,3 +3,7 @@
 
 # Shell scripts run in WSL from the Windows working copy: never CRLF.
 *.sh text eol=lf
+
+# The captures the tests read: their tests look for "\n" in them, so a Windows checkout
+# with core.autocrlf (GitHub's runners) must not turn them into CRLF.
+**/testdata/*.txt text eol=lf
