@@ -21,6 +21,9 @@ GitHub; here they are in English.
 - The README, the install guides and the usage guide describe both scanners, the HP Scanjet
   3770 and the Epson Perfection 4490 Photo, with films and Digital ICE; the Linux menu entry and
   the packages' descriptions name the 4490 and films too.
+- The GitHub repository is now called VetroScan (github.com/MatteoDM/VetroScan): the download
+  links, the Windows installer's links, the Linux packages' home page and the AUR package point
+  there. The old `MatteoDM/scanner` links and clones keep working, as GitHub forwards them.
 
 ## [0.11.2] - 2026-11-21
 
@@ -677,20 +680,20 @@ First version.
 - Texts with a run of spaces in the middle (note on RAW, on 16 bits and on the buttons in
   Windows); the button of the default folder uses the system's separator.
 
-[Unreleased]: https://github.com/MatteoDM/scanner/compare/v0.11.2...HEAD
-[0.11.2]: https://github.com/MatteoDM/scanner/compare/v0.11.1...v0.11.2
-[0.11.1]: https://github.com/MatteoDM/scanner/compare/v0.11.0...v0.11.1
-[0.11.0]: https://github.com/MatteoDM/scanner/compare/v0.10.0...v0.11.0
-[0.10.0]: https://github.com/MatteoDM/scanner/compare/v0.9.0...v0.10.0
-[0.9.0]: https://github.com/MatteoDM/scanner/compare/v0.8.0...v0.9.0
-[0.8.0]: https://github.com/MatteoDM/scanner/compare/v0.7.0...v0.8.0
-[0.7.0]: https://github.com/MatteoDM/scanner/compare/v0.6.0...v0.7.0
-[0.6.0]: https://github.com/MatteoDM/scanner/compare/v0.5.0...v0.6.0
-[0.5.0]: https://github.com/MatteoDM/scanner/compare/v0.4.0...v0.5.0
-[0.4.0]: https://github.com/MatteoDM/scanner/compare/v0.3.1...v0.4.0
-[0.3.1]: https://github.com/MatteoDM/scanner/compare/v0.3.0...v0.3.1
-[0.3.0]: https://github.com/MatteoDM/scanner/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/MatteoDM/scanner/compare/v0.1.2...v0.2.0
-[0.1.2]: https://github.com/MatteoDM/scanner/compare/v0.1.1...v0.1.2
-[0.1.1]: https://github.com/MatteoDM/scanner/compare/v0.1.0...v0.1.1
-[0.1.0]: https://github.com/MatteoDM/scanner/releases/tag/v0.1.0
+[Unreleased]: https://github.com/MatteoDM/VetroScan/compare/v0.11.2...HEAD
+[0.11.2]: https://github.com/MatteoDM/VetroScan/compare/v0.11.1...v0.11.2
+[0.11.1]: https://github.com/MatteoDM/VetroScan/compare/v0.11.0...v0.11.1
+[0.11.0]: https://github.com/MatteoDM/VetroScan/compare/v0.10.0...v0.11.0
+[0.10.0]: https://github.com/MatteoDM/VetroScan/compare/v0.9.0...v0.10.0
+[0.9.0]: https://github.com/MatteoDM/VetroScan/compare/v0.8.0...v0.9.0
+[0.8.0]: https://github.com/MatteoDM/VetroScan/compare/v0.7.0...v0.8.0
+[0.7.0]: https://github.com/MatteoDM/VetroScan/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/MatteoDM/VetroScan/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/MatteoDM/VetroScan/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/MatteoDM/VetroScan/compare/v0.3.1...v0.4.0
+[0.3.1]: https://github.com/MatteoDM/VetroScan/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/MatteoDM/VetroScan/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/MatteoDM/VetroScan/compare/v0.1.2...v0.2.0
+[0.1.2]: https://github.com/MatteoDM/VetroScan/compare/v0.1.1...v0.1.2
+[0.1.1]: https://github.com/MatteoDM/VetroScan/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/MatteoDM/VetroScan/releases/tag/v0.1.0

@@ -17,7 +17,7 @@ The **Epson Perfection 4490** (USB `04b8:0119`) works with the same app and the 
 | Windows 10 and 11 (x64) | the maker's driver (HP's, Epson's) already installed, **or** WinUSB | `-setup.exe` or `-portable.zip` |
 | macOS 11 or newer | nothing | `.dmg` |
 
-All the files are on the [Releases](https://github.com/MatteoDM/scanner/releases/latest)
+All the files are on the [Releases](https://github.com/MatteoDM/VetroScan/releases/latest)
 page, with names like `vetroscan-vX.Y.Z-linux-x86_64.deb`. `SHA256SUMS.txt` has the checksums
 to check them. The macOS and Linux `aarch64` files are built only by the release workflow on
 GitHub: a release built elsewhere has none.

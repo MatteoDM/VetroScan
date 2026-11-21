@@ -21,7 +21,7 @@ description: |
   VetroScan: desktop scanning app for documents, photos and films, with free drivers
   for the HP Scanjet 3770 and the Epson Perfection 4490 Photo.
   Talks to the scanners directly over USB, without SANE or kernel modules.
-homepage: https://github.com/MatteoDM/scanner
+homepage: https://github.com/MatteoDM/VetroScan
 license: GPL-2.0-or-later
 # The AUR package built from git installs the same files.
 # Before v0.3.0 the package was called hp3770: the new one takes its place.

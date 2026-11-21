@@ -54,7 +54,7 @@ new in each version: [CHANGELOG.md](CHANGELOG.md).
 ## Installing
 
 Download the file for your system from the
-[latest release](https://github.com/MatteoDM/scanner/releases/latest). Every package holds the
+[latest release](https://github.com/MatteoDM/VetroScan/releases/latest). Every package holds the
 `vetroscan` application and the `hp3770` command (the HP 3770 driver's tool); the 4490 needs
 nothing else. Installing it over an older `hp3770` package or installer replaces it, and the
 settings come along. The full instructions, driver included, system by system (install, check,

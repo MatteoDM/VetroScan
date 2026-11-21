@@ -20,7 +20,7 @@ L'app parla italiano e inglese: nelle **Preferenze**, *Lingua* sceglie fra *Auto
 
 ## Installare
 
-Scarica il file per il tuo sistema dall'[ultima release](https://github.com/MatteoDM/scanner/releases/latest):
+Scarica il file per il tuo sistema dall'[ultima release](https://github.com/MatteoDM/VetroScan/releases/latest):
 
 | Sistema | File | Come |
 |---|---|---|

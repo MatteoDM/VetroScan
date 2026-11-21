@@ -116,9 +116,9 @@ workflow).
    git -C C:\Users\white\Desktop\Driver_Software_hp3770\repo tag vX.Y.Z
    git -C C:\Users\white\Desktop\Driver_Software_hp3770\repo push origin vX.Y.Z
    cd C:\Users\white\Desktop\Driver_Software_hp3770\repo\dist\vX.Y.Z
-   gh release create vX.Y.Z -R MatteoDM/scanner --title vX.Y.Z --notes-file ..\vX.Y.Z-notes.md vetroscan-vX.Y.Z-windows-x86_64-setup.exe vetroscan-vX.Y.Z-windows-x86_64-portable.zip vetroscan-vX.Y.Z-linux-x86_64.deb vetroscan-vX.Y.Z-linux-x86_64.rpm vetroscan-vX.Y.Z-linux-x86_64.pkg.tar.zst vetroscan-vX.Y.Z-linux-x86_64.AppImage SHA256SUMS.txt
+   gh release create vX.Y.Z -R MatteoDM/VetroScan --title vX.Y.Z --notes-file ..\vX.Y.Z-notes.md vetroscan-vX.Y.Z-windows-x86_64-setup.exe vetroscan-vX.Y.Z-windows-x86_64-portable.zip vetroscan-vX.Y.Z-linux-x86_64.deb vetroscan-vX.Y.Z-linux-x86_64.rpm vetroscan-vX.Y.Z-linux-x86_64.pkg.tar.zst vetroscan-vX.Y.Z-linux-x86_64.AppImage SHA256SUMS.txt
    ```
-   Afterwards `gh release view vX.Y.Z -R MatteoDM/scanner` must list 7 files.
+   Afterwards `gh release view vX.Y.Z -R MatteoDM/VetroScan` must list 7 files.
 
 ## Installing the new version on this PC
 

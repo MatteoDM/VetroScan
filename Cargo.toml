@@ -17,7 +17,7 @@ version = "0.11.2"
 edition = "2021"
 rust-version = "1.85"
 license = "GPL-2.0-or-later"
-repository = "https://github.com/MatteoDM/scanner"
+repository = "https://github.com/MatteoDM/VetroScan"
 authors = ["Matteo"]
 
 [workspace.dependencies]

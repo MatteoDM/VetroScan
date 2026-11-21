@@ -11,7 +11,7 @@ scanner directly (the 4490's firmware is inside the app).
 
 > **There is a shorter way.** This guide builds the app from source, which is why Rust and a
 > few minutes of waiting are needed. Since the first published version, the
-> [Releases](https://github.com/MatteoDM/scanner/releases/latest) page has the ready-made
+> [Releases](https://github.com/MatteoDM/VetroScan/releases/latest) page has the ready-made
 > package for Omarchy/Arch (`vetroscan-vX.Y.Z-linux-x86_64.pkg.tar.zst`): download it and
 > install it with `sudo pacman -U` followed by the file's name. It does steps 3, 4 and 6 by
 > itself (udev rule included); then skip to step 5 to check. The instructions for every
@@ -69,11 +69,11 @@ open the terminal once more; if that is not enough, log out of the session and b
 ```sh
 mkdir -p ~/Work
 cd ~/Work
-git clone https://github.com/MatteoDM/scanner.git
-cd scanner
+git clone https://github.com/MatteoDM/VetroScan.git
+cd VetroScan
 ```
 
-This way the program ends up in the `Work/scanner` folder in your home folder.
+This way the program ends up in the `Work/VetroScan` folder in your home folder.
 
 ---
 
@@ -189,11 +189,15 @@ problems) is explained in the **[usage guide](usage.md)**.
 ## Updating to a new version
 
 ```sh
-cd ~/Work/scanner
+cd ~/Work/VetroScan
 git pull
 cargo install --path crates/vetroscan --locked
 cargo install --path crates/hp3770-cli --locked
 ```
+
+If you downloaded the code before November 2026, when the repository was still called
+`scanner`, it is in `~/Work/scanner`: use that folder instead. `git pull` keeps working there,
+because GitHub forwards the old address to the new one.
 
 The app's settings stay: they are saved in `~/.config/vetroscan`.
 
@@ -260,7 +264,7 @@ cargo uninstall hp3770-cli
 rm ~/.local/share/applications/vetroscan.desktop
 rm ~/.local/share/icons/hicolor/scalable/apps/vetroscan.svg
 sudo rm /etc/udev/rules.d/70-hp3770.rules /etc/udev/rules.d/70-epson-4490.rules
-rm -r ~/Work/scanner          # the downloaded code
+rm -r ~/Work/VetroScan        # the downloaded code (~/Work/scanner if older)
 rm -r ~/.config/vetroscan     # the settings (optional)
 ```
 

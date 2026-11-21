@@ -12,7 +12,7 @@ pkgver=r0
 pkgrel=1
 pkgdesc="VetroScan: scanning app with free drivers for the HP Scanjet 3770 and the Epson Perfection 4490"
 arch=('x86_64' 'aarch64')
-url="https://github.com/MatteoDM/scanner"
+url="https://github.com/MatteoDM/VetroScan"
 license=('GPL-2.0-or-later')
 depends=('gcc-libs' 'glibc' 'hicolor-icon-theme' 'libxkbcommon' 'vulkan-icd-loader'
          'wayland' 'xdg-desktop-portal')
@@ -25,36 +25,36 @@ optdepends=('xdg-desktop-portal-gtk: the "Save" dialog, if no other portal backe
             'libxrandr: running under X11')
 provides=('vetroscan' 'hp3770' 'hp3770-git')
 conflicts=('vetroscan' 'hp3770' 'hp3770-git')
-source=("scanner::git+https://github.com/MatteoDM/scanner.git")
+source=("VetroScan::git+https://github.com/MatteoDM/VetroScan.git")
 sha256sums=('SKIP')
 options=('!lto')
 
 pkgver() {
-  cd scanner
+  cd VetroScan
   printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
 }
 
 prepare() {
-  cd scanner
+  cd VetroScan
   export RUSTUP_TOOLCHAIN=stable
   cargo fetch --locked --target "$(rustc -vV | sed -n 's/^host: //p')"
 }
 
 build() {
-  cd scanner
+  cd VetroScan
   export RUSTUP_TOOLCHAIN=stable
   export CARGO_TARGET_DIR=target
   cargo build --frozen --release --bin vetroscan --bin hp3770
 }
 
 check() {
-  cd scanner
+  cd VetroScan
   export RUSTUP_TOOLCHAIN=stable
   cargo test --frozen --release --workspace
 }
 
 package() {
-  cd scanner
+  cd VetroScan
   install -Dm755 target/release/vetroscan "$pkgdir/usr/bin/vetroscan"
   install -Dm755 target/release/hp3770 "$pkgdir/usr/bin/hp3770"
   install -Dm644 packaging/linux/70-hp3770.rules "$pkgdir/usr/lib/udev/rules.d/70-hp3770.rules"
