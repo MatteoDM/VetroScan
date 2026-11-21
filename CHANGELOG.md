@@ -43,8 +43,25 @@ GitHub; here they are in English.
   lid's lamp, lit again, has left the carriages out, it waits for the scanner to bring them home
   (at most a minute) instead of stopping. `epson4490 lid-lamp --watch SECONDS` then reads where the
   carriages are, for that long (`--every SECONDS`: that often).
+- **Firmware mancante**: a scanner that needs its firmware sent at every power-on (the Epson
+  Perfection 4490, `esfw54.bin`) and finds no copy of it is shown as found, with an orange dot,
+  not as *Scanner non trovato*: the **Scansione** tab names the file, where it was looked for,
+  and has a button that opens the settings folder, where to copy it. Copied there, the file is
+  taken without restarting the app (it was looked for only when the app started). The builds
+  of the releases carry the 4490's firmware inside, so this shows only in a build without it.
+  For drivers, a new error kind in the contract, `Error::FirmwareMissing`.
+- Under **Leggi l'infrarosso**, what it is for: colour films and chromogenic black and white
+  ones (Ilford XP2, Kodak BW400CN); on a classic, silver black and white film the dust removal
+  may take parts of the picture for dust (general knowledge: not yet tried on such a film).
+- The user's guide names the Epson Perfection 4490 among the scanners, and the install guide
+  says what it needs on each system and where its firmware is looked for.
 
 ### Changed
+- Films: the preview stays to go back to after a scan, as on the glass: the **Anteprima**
+  button on the viewer shows it again with its frames, to choose others and scan them without a
+  new preview; the **Anteprima** button at the top redoes it, only when pressed. Before, in
+  *Pellicola* the viewer had no way back to the preview, and the only way to choose other frames
+  was to scan the whole holder again.
 - A scan is cleaned away from the window: the dust the infrared shows (about 2 s a frame at
   2400 dpi), the scanner's stripes (0.6 s for an A4 page at 600 dpi), its colour correction and
   the halving of a scan at twice the resolution no longer freeze VetroScan while they run. The

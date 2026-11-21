@@ -118,6 +118,34 @@ impl Ui {
         ui.into_messages().collect()
     }
 
+    /// The messages a click on each text `label` on the screen gives, in the order they are
+    /// drawn (the same label on two buttons).
+    fn click_each(&mut self, label: &str) -> Vec<Vec<Message>> {
+        use iced_test::selector::{Candidate, Target};
+        let mut all = Vec::new();
+        for n in 1.. {
+            let mut ui = iced_test::Simulator::with_size(
+                iced::Settings::default(),
+                Size::new(1360.0, 900.0),
+                self.app.view(),
+            );
+            let wanted = label.to_string();
+            let mut seen = 0;
+            let nth = move |c: Candidate<'_>| match c {
+                Candidate::Text { content, .. } if content == wanted => {
+                    seen += 1;
+                    (seen == n).then(|| Target::from(c))
+                }
+                _ => None,
+            };
+            if ui.click(nth).is_err() {
+                return all;
+            }
+            all.push(ui.into_messages().collect());
+        }
+        all
+    }
+
     /// Clicks the text `label`, then lets any scan it started finish.
     fn click(&mut self, label: &str) {
         for message in self.click_messages(label) {
@@ -1847,6 +1875,56 @@ fn the_preview_of_films_finds_the_frames_and_each_is_scanned_on_its_own() {
     }
 }
 
+/// Films, as on the glass: after a scan the preview is still there to go back to, on its own
+/// tab, with its frames; another choice of frames is scanned without a new preview, and the
+/// "Anteprima" button redoes the preview only when pressed.
+#[test]
+fn after_a_film_scan_the_preview_is_gone_back_to_without_scanning_it_again() {
+    use crate::Tab;
+    use iced::keyboard::key::Named;
+    let (mut ui, controls) = with_adapter();
+    ui.click("Pellicola");
+    ui.click("Anteprima");
+    assert_eq!(ui.app.shown_regions().len(), 2, "{}", ui.app.note);
+    ui.click("Scansiona 2 foto");
+    assert_eq!(ui.app.pages.len(), 2, "{}", ui.app.note);
+    assert_eq!(ui.app.tab, Tab::Result);
+    assert_eq!(controls.requests().len(), 3, "the preview, then one each");
+    // Two "Anteprima": the button that redoes it, and the tab that shows it.
+    let clicks = ui.click_each("Anteprima");
+    assert_eq!(clicks.len(), 2, "the preview's tab on films too");
+    let tab = clicks
+        .iter()
+        .find(|m| matches!(m[..], [Message::Tab(Tab::Preview)]))
+        .expect("a click on the tab shows the preview")
+        .clone();
+    for message in tab {
+        ui.send(message);
+    }
+    assert_eq!(ui.app.tab, Tab::Preview);
+    assert!(ui.app.preview.is_some());
+    assert_eq!(ui.app.shown_regions().len(), 2, "its frames still there");
+    assert_eq!(controls.requests().len(), 3, "nothing scanned to show it");
+    // The second frame left out, the first scanned again at another resolution: no preview.
+    ui.send(Message::Area(crate::areas::AreaMsg::Choose(1)));
+    arrow(&mut ui, Named::Delete, NONE);
+    ui.send(Message::Save);
+    ui.send(Message::Dpi(600));
+    ui.click("Scansiona foto");
+    let asked = controls.requests();
+    assert_eq!(asked.len(), 4, "{asked:?}");
+    assert_eq!(asked[3].dpi, 600);
+    assert_eq!(ui.app.pages.len(), 1, "{}", ui.app.note);
+    // The button above redoes the preview, when pressed.
+    ui.send(Message::Save);
+    ui.send(Message::Preview);
+    ui.settle();
+    let asked = controls.requests();
+    assert_eq!(asked.len(), 5);
+    assert_eq!(asked[4].area, asked[0].area, "the whole holder again");
+    assert_eq!(ui.app.tab, Tab::Preview);
+}
+
 #[test]
 fn on_the_preview_of_films_a_frame_is_left_out_corrected_or_drawn() {
     use crate::areas::AreaMsg;
@@ -3301,6 +3379,89 @@ fn tour() {
     }
 }
 
+// ---------------------------------------------------------- the firmware
+
+/// A scanner that needs its firmware sent at every power-on, with no copy found: shown as
+/// there, not "not found", with the file, where to put it and the button that opens that
+/// folder; once a copy is in place it opens by itself, and the card goes.
+#[test]
+fn a_scanner_that_needs_its_firmware_is_shown_there_with_what_to_do() {
+    use scanner_api::fake::FIRMWARE_FILE;
+    let scanner = FakeScanner::flatbed().needing_firmware();
+    let controls = scanner.controls();
+    let name = scanner_api::Scanner::capabilities(&scanner).name();
+    let mut ui = Ui::with_scanners(vec![scanner]);
+    ui.settle();
+    assert!(matches!(ui.app.status, Some(Err(_))));
+    let (device, missing) = ui
+        .app
+        .firmware_missing
+        .clone()
+        .expect("the firmware's state");
+    assert_eq!(device.name, name);
+    assert_eq!(missing.file, FIRMWARE_FILE);
+    ui.send(Message::Pane(crate::Pane::Scan));
+    assert!(ui.shows("Firmware mancante"), "the state, not an error");
+    assert!(!ui.shows("Scanner non trovato"));
+    let folder = crate::prefs::config_dir().expect("the settings folder");
+    let said = crate::i18n::trf(
+        "{scanner} è collegato, ma a ogni accensione ha bisogno del suo firmware ({file}), e non \
+         l'ho trovato.",
+        &[("scanner", &name), ("file", &FIRMWARE_FILE)],
+    );
+    assert!(ui.shows(&said), "{said}");
+    assert!(ui.shows(&format!(
+        "Lo cerco anche in: {}",
+        std::path::Path::new("/made-up/firmware").display()
+    )));
+    crate::testing::take_effects();
+    ui.click("Apri la cartella delle impostazioni");
+    assert!(folder.is_dir());
+    assert_eq!(
+        crate::testing::take_effects(),
+        vec![format!("cartella aperta: {}", folder.display())]
+    );
+    // A copy put in place: the scanner opens by itself (the idle thread tries again).
+    controls.firmware_missing(false);
+    while !matches!(ui.app.status, Some(Ok(_))) {
+        let event = ui
+            .events
+            .recv_timeout(Duration::from_secs(20))
+            .expect("the scanner opened");
+        ui.send(Message::Worker(event));
+    }
+    ui.settle();
+    assert!(ui.app.firmware_missing.is_none());
+    assert!(!ui.shows("Firmware mancante"));
+    assert!(!ui.shows("Apri la cartella delle impostazioni"));
+    ui.scan(1);
+    assert_eq!(ui.app.pages.len(), 1, "{}", ui.app.note);
+}
+
+/// A scanner that needs no firmware, unplugged: "not found" as before, no firmware card.
+#[test]
+fn a_scanner_without_firmware_to_send_is_never_shown_missing_it() {
+    let scanner = FakeScanner::flatbed();
+    let controls = scanner.controls();
+    let mut ui = Ui::with_scanners(vec![scanner]);
+    ui.send(Message::Pane(crate::Pane::Scan));
+    assert!(ui.app.firmware_missing.is_none());
+    assert!(!ui.shows("Firmware mancante"));
+    controls.unplug(true);
+    ui.send(Message::RefreshStatus);
+    while !matches!(ui.app.status, Some(Err(_))) {
+        let event = ui
+            .events
+            .recv_timeout(Duration::from_secs(20))
+            .expect("the scanner state");
+        ui.send(Message::Worker(event));
+    }
+    ui.settle();
+    assert!(ui.shows("Scanner non trovato"));
+    assert!(!ui.shows("Firmware mancante"));
+    assert!(!ui.shows("Apri la cartella delle impostazioni"));
+}
+
 // ---------------------------------------------------------- the folder
 
 #[test]
@@ -3975,6 +4136,10 @@ fn the_infrared_is_offered_asked_kept_and_saved_where_the_scanner_reads_it() {
     ui.click("Pellicola");
     ui.send(Message::Dpi(600));
     assert!(ui.shows(tick));
+    // Said with the tick (general knowledge, no silver film measured): not for silver B&W.
+    let silver = "Funziona su pellicole a colori e B/N cromogeniche (XP2, BW400CN); sulle B/N \
+                  all'argento può scambiare parti della foto per polvere.";
+    assert!(ui.shows(silver));
     assert!(!ui.app.settings().infrared, "off by default");
     assert!(!ui.app.request().infrared);
     ui.send(Message::Infrared(true));

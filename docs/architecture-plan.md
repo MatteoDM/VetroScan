@@ -2304,6 +2304,10 @@ at the very end, date to be decided, the medium format, the silver films and the
 until Matteo has a classic silver negative, maybe never (Matteo, 21 November 2026). To decide
 with him how *Leggi l'infrarosso* stands meanwhile (for instance its description saying it is
 for colour and chromogenic films, not silver B&W: general knowledge), then the release.
+**Decided** (Matteo, 21 November 2026): a line under the tick, *Funziona su pellicole a colori e
+B/N cromogeniche (XP2, BW400CN); sulle B/N all'argento può scambiare parti della foto per
+polvere.*, marked general knowledge in the code; in `usage.md` too. No threshold, nothing
+switched off: item 13 when a silver film is measured.
 
 **The HP 3770, what is missing** (after the 4490; Matteo, 21 November 2026: first judge whether any
 is really needed or the 3770 stays as it is; from this plan's phases 10, 13, 14 and the code
@@ -2360,6 +2364,32 @@ review's list):
     packages and in the install guides (`docs/install.md`, `install-linux.md`). Left: "firmware
     missing" as a state of its own, the 4490 in the user's guide (`docs/usage.md` does not name
     it), the release.
+    **"Firmware missing": done** (21 November 2026). Before, a build without the firmware failed
+    to open the 4490 with `Error::Other` in English, shown as *Scanner non trovato*, and tried
+    again every 3 s; the settings folder's copy was looked for only at the app's start. Now the
+    contract has `Error::FirmwareMissing { file, looked_in, detail }`; the 4490's
+    `firmware_loader` gives it when `firmware::find` finds no known copy (a path named that is
+    not there is "not there" in the detail); the worker passes it on as
+    `Event::FirmwareMissing(device, missing)` and looks in the settings folder at every opening.
+    The app: the chip *Firmware mancante* (orange), the bar *<scanner> · firmware mancante*, and
+    in *Scansione* a card with the file, the settings folder, the driver's other places and
+    *Apri la cartella delle impostazioni*; it goes once the scanner opens (the idle thread's
+    retry). No scanner name in the app: the file and places come from the driver, the name from
+    its listing. `FakeScanner::needing_firmware` and `Controls::firmware_missing`; e2e
+    `a_scanner_that_needs_its_firmware_is_shown_there_with_what_to_do` and
+    `a_scanner_without_firmware_to_send_is_never_shown_missing_it`. Not tried on the scanner:
+    every build from this repository embeds the firmware. **The guides**: `usage.md` already
+    described the 4490's films, holders, ICE and B&W negatives; it now names it in its opening,
+    says ICE is not for silver B&W, and has a "Firmware missing" problem; `install.md` has a
+    section for the 4490 (udev rule, Windows with Epson's driver or WinUSB, untried, its
+    firmware and where it is looked for).
+    **The preview reachable after a film scan** (asked by Matteo before the release, 21 November
+    2026: as Epson Scan, the preview stays and is redone only by choice, so that other frames or
+    parts are chosen after a scan without a new preview). The glass had it already (the viewer's
+    *Anteprima* tab, the preview and its areas kept per bed); on films the tab was hidden, a
+    leftover of phase 10's "no preview for films", though the film preview and its frames were
+    kept: shown now on films too. e2e
+    `after_a_film_scan_the_preview_is_gone_back_to_without_scanning_it_again`.
 
 **Not planned**: the optional document feeder (Matteo does not have it); Epson Scan's draft
 preview mode (the app's preview at 200 dpi takes about 25 s for the whole glass, as WIA's

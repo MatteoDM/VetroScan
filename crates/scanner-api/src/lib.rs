@@ -482,6 +482,25 @@ pub enum Error {
     InvalidRequest(String),
     /// Anything else, as the backend tells it.
     Other(String),
+    /// The scanner is there, but it needs its firmware sent before it does
+    /// anything, and no copy of it was found: not an error of the scanner,
+    /// a file the user has to put in place (see [`FirmwareMissing`]).
+    FirmwareMissing(FirmwareMissing),
+}
+
+/// What a scanner that needs its firmware says when no copy was found:
+/// enough for the application to tell the user what to do, without
+/// knowing the scanner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FirmwareMissing {
+    /// The file's name, as the user will find it in the maker's driver
+    /// (`esfw54.bin`).
+    pub file: String,
+    /// Where the driver looks for it on this system, besides what the
+    /// application gives it (its settings folder); may be empty.
+    pub looked_in: Vec<std::path::PathBuf>,
+    /// What was tried and why each copy was refused, for the log.
+    pub detail: String,
 }
 
 impl fmt::Display for Error {
@@ -493,6 +512,11 @@ impl fmt::Display for Error {
             | Self::InvalidRequest(why)
             | Self::Other(why) => write!(f, "{why}"),
             Self::Unsupported(what) => write!(f, "not supported by this scanner: {what}"),
+            Self::FirmwareMissing(m) => write!(
+                f,
+                "the scanner needs its firmware ({}) and none was found: {}",
+                m.file, m.detail
+            ),
         }
     }
 }

@@ -4,6 +4,9 @@ The **HP Scanjet 3770** (USB `03f0:2505`) works with an app, **VetroScan** (`vet
 and a command (`hp3770`) that talk to the scanner directly over USB. **No SANE, no kernel
 modules, no HP software are needed**: the "driver" is inside the app. What changes from one
 system to another is only **how the system lets a normal program open the scanner**.
+The **Epson Perfection 4490** (USB `04b8:0119`) works with the same app and the same packages
+(and its own command, `epson4490`): what it needs besides is in
+[The Epson Perfection 4490](#the-epson-perfection-4490).
 
 | System | What the scanner needs | Package to download |
 |---|---|---|
@@ -32,6 +35,7 @@ program at a time can use the scanner.
   - [From source](#from-source)
 - [Windows](#windows)
 - [macOS](#macos)
+- [The Epson Perfection 4490](#the-epson-perfection-4490)
 - [Where the settings are](#where-the-settings-are)
 
 ---
@@ -342,6 +346,36 @@ Then, with the scanner plugged in, `hp3770 list` and `hp3770 status`.
 - **Uninstalling:** drag **VetroScan** from Applications to the Bin, and
   `sudo rm /usr/local/bin/hp3770` if you had made the link.
 - **The photocopy** prints on the Mac's default printer.
+
+---
+
+## The Epson Perfection 4490
+
+The 4490 is installed as above, with the same package; on each system:
+
+- **Linux**: the packages also carry its udev rule, `70-epson-4490.rules`; with the AppImage
+  the app's **Allow access to the scanner** button installs it, as for the HP 3770.
+- **Windows**: with Epson's driver installed (Epson Scan), the app opens the scanner through
+  it, next to Epson Scan, as it does with the HP driver; nothing to change. Without Epson's
+  driver, WinUSB with Zadig should work as for the HP 3770 (choose USB ID **`04B8 0119`**), but
+  has not been tried with the 4490 yet.
+- **macOS**: nothing, as for the HP 3770 (not yet tried with a real scanner).
+
+**Its firmware.** The 4490 needs a file of its own, `esfw54.bin`, sent to it every time it is
+switched on; VetroScan sends it by itself. The packages of the releases carry it inside: there
+is nothing to do. A build without it inside (made from sources without the file) looks for it,
+in this order:
+
+1. `esfw54.bin` in the settings folder ([Where the settings are](#where-the-settings-are));
+2. on Windows `C:\Windows\System32\esfw54.bin`, where Epson's driver puts it; on Linux
+   `/usr/lib/firmware/epson/esfw54.bin` (Fedora's `iscan-firmware` package) and
+   `/usr/share/iscan/esfw54.bin` (Epson's `iscan` plugin); on macOS nowhere else.
+
+Only the two known copies are sent, checked by their SHA-256: the one of Epson's Windows driver
+and the one of Epson's Linux plugin (AVASYS licence); another file with the same name is
+refused. With none, the app shows the scanner as found with *Firmware missing* and what to do
+(see the [usage guide](usage.md#firmware-missing)); copied into the settings folder, the file
+is taken without restarting the app.
 
 ---
 

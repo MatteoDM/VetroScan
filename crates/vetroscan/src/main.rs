@@ -2132,6 +2132,8 @@ enum Message {
     /// Install the udev rule (Linux, scanner there but not openable).
     GrantAccess,
     GrantDone(Result<(), String>),
+    /// Open the settings folder, where a scanner's missing firmware goes.
+    ShowSettingsFolder,
     ChooseFolder,
     /// Open the folder of the scans in the file manager (made if missing).
     ShowFolder,
@@ -2495,6 +2497,9 @@ struct App {
     /// The scanner is plugged in but this user may not open it (Linux,
     /// udev rule missing).
     access_denied: bool,
+    /// The scanner is there but needs its firmware, and no copy was found:
+    /// which scanner and what its driver said (none once one opens).
+    firmware_missing: Option<(DeviceInfo, scanner_api::FirmwareMissing)>,
     /// The USB ids of every scanner the drivers know, for Linux's
     /// permission when none can be opened yet.
     known_usb: Vec<scanner_api::UsbId>,
@@ -2710,6 +2715,7 @@ impl App {
                 device: None,
                 devices: Vec::new(),
                 access_denied: false,
+                firmware_missing: None,
                 system_dark: false,
                 theme,
                 finding_monitor: screen_choice == screen::Choice::Auto,
@@ -5271,6 +5277,15 @@ impl App {
                     w.send(Command::Choose(device));
                 }
             }
+            Message::ShowSettingsFolder => {
+                if let Some(folder) = prefs::config_dir() {
+                    if let Err(e) = std::fs::create_dir_all(&folder) {
+                        self.note = trf("Cartella non creata: {e}", &[("e", &e)]);
+                    } else {
+                        open_folder(&folder);
+                    }
+                }
+            }
             Message::ShowFolder => {
                 let folder = self.folder();
                 if let Err(e) = std::fs::create_dir_all(&folder) {
@@ -6373,6 +6388,7 @@ impl App {
                 self.send_lamp_timer();
             }
             Event::Opened(device, caps, devices) => {
+                self.firmware_missing = None;
                 self.caps = *caps;
                 self.device = Some(device);
                 self.devices = devices;
@@ -6417,6 +6433,9 @@ impl App {
                 return task;
             }
             Event::Button(button) => self.on_button(button),
+            Event::FirmwareMissing(device, missing) => {
+                self.firmware_missing = Some((device, missing));
+            }
         }
         Task::none()
     }
@@ -7169,6 +7188,10 @@ impl App {
                     (true, None) => tr("Pronto").to_string(),
                 },
             ),
+            (Some(Err(_)), None) if self.firmware_missing.is_some() => (
+                iced::Color::from_rgb(0.95, 0.65, 0.2),
+                tr("Firmware mancante").to_string(),
+            ),
             (Some(Err(_)), None) => (
                 iced::Color::from_rgb(0.94, 0.36, 0.33),
                 tr("Scanner non trovato").to_string(),
@@ -7688,15 +7711,15 @@ impl App {
             Kind::Document => tr("Pagina"),
             Kind::Photo => tr("Foto"),
         };
+        // The preview stays to go back to, on the glass and on films alike: other areas
+        // chosen on it after a scan without scanning it again («Anteprima» above redoes it).
         let views = card(
             row![]
-                .push((!self.filming()).then(|| {
-                    small(
-                        tr("Anteprima"),
-                        Some(Message::Tab(Tab::Preview)),
-                        self.tab == Tab::Preview,
-                    )
-                }))
+                .push(small(
+                    tr("Anteprima"),
+                    Some(Message::Tab(Tab::Preview)),
+                    self.tab == Tab::Preview,
+                ))
                 .push(small(
                     result_label,
                     Some(Message::Tab(Tab::Result)),
@@ -8022,6 +8045,7 @@ impl App {
         let memory = self.memory();
         let mut pane = column![
             self.access_card(),
+            self.firmware_card(),
             heading(tr("Originale")),
             labelled(
                 tr("Risoluzione"),
@@ -8220,6 +8244,16 @@ impl App {
                                  tempo. La polvere e i peli che mostra si tolgono dalla \
                                  scansione; l'infrarosso si salva accanto ai file a 16 bit e \
                                  RAW.",
+                            ))
+                            .size(11),
+                        )
+                        // General knowledge, not measured (no silver film yet): a classic
+                        // B&W film's silver stops infrared as dust does.
+                        .push(
+                            text(tr(
+                                "Funziona su pellicole a colori e B/N cromogeniche (XP2, \
+                                 BW400CN); sulle B/N all'argento può scambiare parti della \
+                                 foto per polvere.",
                             ))
                             .size(11),
                         );
@@ -8736,6 +8770,64 @@ impl App {
             }
         })
         .into()
+    }
+
+    /// When the scanner is there but needs its firmware and no copy was
+    /// found: which file, where to put it, and the button that opens that
+    /// folder. The scanner opens by itself once the file is there.
+    fn firmware_card(&self) -> Element<'_, Message> {
+        let (Some((device, missing)), Some(Err(_))) = (&self.firmware_missing, &self.status) else {
+            return Space::new().into();
+        };
+        let folder = prefs::config_dir()
+            .map(|d| d.display().to_string())
+            .unwrap_or_default();
+        let mut card = column![
+            text(trf(
+                "{scanner} è collegato, ma a ogni accensione ha bisogno del suo firmware \
+                 ({file}), e non l'ho trovato.",
+                &[("scanner", &device.name), ("file", &missing.file)],
+            ))
+            .size(13),
+            text(trf(
+                "Il file è nel driver del produttore dello scanner: copialo nella cartella \
+                 delle impostazioni ({folder}). Lo scanner si apre da solo appena il file c'è.",
+                &[("folder", &folder)],
+            ))
+            .size(11),
+        ]
+        .spacing(6);
+        if !missing.looked_in.is_empty() {
+            let places = missing
+                .looked_in
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            card = card
+                .push(text(trf("Lo cerco anche in: {places}", &[("places", &places)])).size(11));
+        }
+        card = card.push(
+            button(text(tr("Apri la cartella delle impostazioni")).size(13))
+                .padding([6, 12])
+                .on_press(Message::ShowSettingsFolder),
+        );
+        container(card)
+            .padding(10)
+            .width(Length::Fill)
+            .style(|theme: &Theme| {
+                let palette = theme.extended_palette();
+                container::Style {
+                    background: Some(palette.warning.weak.color.into()),
+                    text_color: Some(palette.warning.weak.text),
+                    border: iced::Border {
+                        radius: 8.0.into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }
+            })
+            .into()
     }
 
     /// Whether Windows opens its own scan app on a button press, and the
@@ -9258,7 +9350,10 @@ impl App {
                     .map_or_else(|| tr("collegato").to_string(), |(l, v)| format!("{l} {v}"));
                 format!("{} · {detail}", self.caps.name())
             }
-            Some(Err(_)) => tr("non collegato").to_string(),
+            Some(Err(_)) => match &self.firmware_missing {
+                Some((device, _)) => format!("{} · {}", device.name, tr("firmware mancante")),
+                None => tr("non collegato").to_string(),
+            },
             None => "…".to_string(),
         };
         let fact = |label: &'static str, value: String| {

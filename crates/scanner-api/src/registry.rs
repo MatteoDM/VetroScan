@@ -125,7 +125,10 @@ impl Registry {
 fn most_telling(errors: Vec<(String, Error)>) -> Error {
     let rank = |e: &Error| match e {
         Error::Busy(_) => 0,
-        Error::Other(_) | Error::InvalidRequest(_) | Error::Unsupported(_) => 1,
+        Error::Other(_)
+        | Error::InvalidRequest(_)
+        | Error::Unsupported(_)
+        | Error::FirmwareMissing(_) => 1,
         Error::Disconnected(_) => 2,
         Error::Cancelled => 3,
     };

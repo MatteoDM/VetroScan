@@ -1,7 +1,7 @@
 # Using VetroScan
 
-This guide explains how to use **VetroScan** (`vetroscan`) with the HP Scanjet 3770 to acquire
-documents and photos: what each button does, which format to choose, how to correct a scan
+This guide explains how to use **VetroScan** (`vetroscan`) with the scanners it knows, the HP
+Scanjet 3770 and the Epson Perfection 4490, to acquire documents, photos and films: what each button does, which format to choose, how to correct a scan
 already made and what to do when something goes wrong. It applies to Linux, Windows and
 macOS; where a system behaves differently, it says so.
 
@@ -72,7 +72,7 @@ The **scanner's state**, at the top right:
 A click on the state reads it again from the scanner.
 
 On the viewer there are two buttons, **Preview** and **Page** (or **Photo**), to go from the
-glass to the scan made. Next to them there are **Edit…** (opens the
+glass (or the film holder) to the scan made and back. Next to them there are **Edit…** (opens the
 [editor](#editing-a-scan-already-made)), **Eyedropper** and **Clear selection**; at the top
 right **Before** / **After**; at the bottom right the zoom, with **Fit** (the whole image in
 the window) and **1:1** (one pixel of the image per pixel of the screen).
@@ -159,7 +159,11 @@ scan: light dust is divided by what it took (the grain under it stays), a speck 
 lets little through is filled from around it, in each colour where its shadow lies. What is not
 dust (the picture's edges, a hair out of focus) is left alone; a mark wider than a few tenths of
 a millimetre stays. While it is taken out, the progress card says *Pulizia della scansione* and
-the window stays free. To see what was found, open the `…-infrarosso` file beside the scan. After a
+the window stays free. To see what was found, open the `…-infrarosso` file beside the scan.
+It is for colour films and for chromogenic black and white ones (Ilford XP2, Kodak BW400CN,
+tried on the latter), as the tick's description says: a classic black and white film's picture
+is made of silver, which stops infrared as dust does, so there the removal may take parts of the
+picture for dust (general knowledge, not yet tried on such a film); leave the tick off for them. After a
 film, the next scan of the glass switches back to the glass's lamp and warms it
 up first.
 
@@ -228,6 +232,12 @@ press **New roll** and each strip measures its own again.
 seconds. It is for seeing where the originals are, choosing the areas and trying the
 adjustments before the real scan. It is not compulsory: without a preview an A4 sheet is
 acquired (in Film, the whole holder).
+
+The preview stays until you redo it, with its areas: after a scan the viewer shows what was
+scanned, and the **Preview** button on the viewer takes you back to the preview (in Film too),
+to choose other areas or frames and scan them, without scanning the preview again. Only the
+**Preview** button at the top acquires it again, when you want (another original on the glass,
+another strip in the holder).
 
 ### Choosing the areas
 
@@ -964,7 +974,8 @@ The dot at the top is red and the bar at the bottom says *Scanner not connected*
    properly, preferably directly in the computer (a hub is fine only if it has its own power
    supply)? Try another port.
 2. **Only one program at a time** can use the scanner. Close another window of this app, the
-   `hp3770` command in a terminal, and on Windows the scanning app of Windows or HP.
+   `hp3770` or `epson4490` command in a terminal, and on Windows the scanning app of Windows,
+   HP or Epson.
 3. Click on the state at the top to try again. The app also tries again by itself: when the
    scanner comes back, the dot turns green again without restarting anything.
 4. If that is not enough:
@@ -977,6 +988,21 @@ The dot at the top is red and the bar at the bottom says *Scanner not connected*
      [install.md](install.md#1-the-driver-check-what-is-already-there).
    - **macOS**: if the system asked to allow access to a USB accessory, it must have been
      granted.
+
+### "Firmware missing"
+
+The dot at the top is orange and says *Firmware missing*; the bar at the bottom names the
+scanner. Some scanners (the Epson Perfection 4490) need a file of their own, their firmware, sent
+to them every time they are switched on, and VetroScan found no copy of it. The scanner is
+there: only the file is missing. The **Scan** tab says which file (`esfw54.bin` for the 4490)
+and where else it was looked for.
+
+1. Take the file from the scanner maker's driver (for the 4490 see
+   [install.md](install.md#the-epson-perfection-4490)).
+2. Press **Open the settings folder** and copy the file there.
+3. Nothing else: the app tries again by itself, and the dot turns green as soon as the file is
+   there. Only a known copy of the file is sent; another file with the same name is refused,
+   and the reason is in `tasti.log` in the same folder.
 
 ### The scanner was unplugged during a scan
 

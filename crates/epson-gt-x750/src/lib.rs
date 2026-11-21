@@ -523,7 +523,8 @@ impl EpsonBackend {
 }
 
 /// What gives [`Gt4490::start`] the firmware: none when `upload` is not
-/// allowed (an error saying so), else [`firmware::find`].
+/// allowed (an error saying so), else [`firmware::find`]; with no copy
+/// found, [`Error::FirmwareMissing`]: the scanner is there, the file is not.
 pub fn firmware_loader(
     upload: bool,
     path: Option<PathBuf>,
@@ -536,8 +537,18 @@ pub fn firmware_loader(
                     .into(),
             ));
         }
-        firmware::find(path.as_deref()).map_err(Error::Other)
+        firmware::find(path.as_deref()).map_err(firmware_missing)
     }
+}
+
+/// No copy of the firmware found ([`firmware::find`]'s `detail`): the
+/// application tells the user where to put one.
+fn firmware_missing(detail: String) -> Error {
+    Error::FirmwareMissing(scanner_api::FirmwareMissing {
+        file: firmware::FILE_NAME.into(),
+        looked_in: firmware::search_paths(),
+        detail,
+    })
 }
 
 impl scanner_api::Backend for EpsonBackend {
@@ -1247,6 +1258,27 @@ P 1b03 1881
         // Running: it opens anyway.
         let t = Mock::answering(&[&IDLE, &IDLE]);
         assert!(Gt4490::start(Box::new(t), firmware_loader(false, None)).is_ok());
+    }
+
+    #[test]
+    fn with_no_copy_of_the_firmware_the_scanner_says_it_is_missing() {
+        // Firmware stopped and no copy found: the scanner is there, the file is not.
+        let t = Mock::answering(&[&NO_FW, &NO_FW]);
+        let e = Gt4490::start(Box::new(t), || {
+            Err(firmware_missing("esfw54.bin: not there".into()))
+        })
+        .unwrap_err();
+        match e {
+            Error::FirmwareMissing(m) => {
+                assert_eq!(m.file, firmware::FILE_NAME);
+                assert_eq!(m.looked_in, firmware::search_paths());
+                assert!(m.detail.contains("not there"), "{}", m.detail);
+            }
+            e => panic!("{e}"),
+        }
+        // Running already: no copy is needed.
+        let t = Mock::answering(&[&IDLE, &IDLE]);
+        assert!(Gt4490::start(Box::new(t), || Err(firmware_missing(String::new()))).is_ok());
     }
 
     #[test]

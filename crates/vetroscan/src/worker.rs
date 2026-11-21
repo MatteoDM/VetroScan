@@ -76,6 +76,9 @@ pub enum Event {
     Done(Purpose, Result<Arc<ScanResult>, String>),
     /// A front-panel button was pressed: its index in the capabilities.
     Button(usize),
+    /// This scanner is there but did not open: it needs its firmware and
+    /// no copy was found (it opens by itself once one is put in place).
+    FirmwareMissing(DeviceInfo, scanner_api::FirmwareMissing),
 }
 
 /// How the interface reaches the thread.
@@ -112,10 +115,10 @@ pub fn registry() -> Registry {
     }
     // The Epson 4490's firmware: `esfw54.bin` in the settings folder, the
     // same place on every system, if one is put there (the backend then
-    // tries the embedded copy and where Epson's drivers put it).
-    let epson_firmware = crate::prefs::config_dir()
-        .map(|d| d.join(epson_gt_x750::firmware::FILE_NAME))
-        .filter(|p| p.exists());
+    // tries the embedded copy and where Epson's drivers put it). Looked at
+    // at every opening: a copy put there while the app runs is taken.
+    let epson_firmware =
+        crate::prefs::config_dir().map(|d| d.join(epson_gt_x750::firmware::FILE_NAME));
     Registry::new()
         .with(hp3770_usb::UsbBackend)
         .with(epson_gt_x750::EpsonBackend::new().with_firmware_path(epson_firmware))
@@ -284,7 +287,16 @@ impl Worker {
                     Err(e) => error_text(e),
                 });
             };
-            let scanner = self.registry.open(&device).map_err(error_text)?;
+            let scanner = match self.registry.open(&device) {
+                Ok(scanner) => scanner,
+                Err(scanner_api::Error::FirmwareMissing(missing)) => {
+                    let text = scanner_api::Error::FirmwareMissing(missing.clone()).to_string();
+                    self.output
+                        .send(Event::FirmwareMissing(device.clone(), missing));
+                    return Err(text);
+                }
+                Err(e) => return Err(error_text(e)),
+            };
             let caps = Box::new(scanner.capabilities().clone());
             self.output.send(Event::Opened(device, caps, devices));
             self.scanner = Some(scanner);

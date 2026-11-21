@@ -267,6 +267,9 @@ pub struct Controls {
     two_strips: Arc<AtomicBool>,
     /// Every scan asked of it, in order (the scans refused too).
     requests: Arc<Mutex<Vec<ScanRequest>>>,
+    /// A scanner that needs its firmware sent, and no copy of it found:
+    /// it is listed but does not open ([`FakeScanner::needing_firmware`]).
+    firmware_missing: Arc<AtomicBool>,
 }
 
 impl Controls {
@@ -289,6 +292,12 @@ impl Controls {
     /// with one.
     pub fn unplug_adapter(&self, unplugged: bool) {
         self.adapter_out.store(unplugged, Ordering::SeqCst);
+    }
+
+    /// Takes away (or puts in place) the copy of the firmware a scanner
+    /// [`FakeScanner::needing_firmware`] needs.
+    pub fn firmware_missing(&self, missing: bool) {
+        self.firmware_missing.store(missing, Ordering::SeqCst);
     }
 
     /// Puts stripes on its scans, of the glass and of films (as the HP
@@ -523,6 +532,15 @@ impl FakeScanner {
         self
     }
 
+    /// A scanner that needs its firmware sent at every power-on, as the
+    /// Epson 4490 does, with no copy of it found: listed, but opening it
+    /// says [`Error::FirmwareMissing`] until
+    /// [`Controls::firmware_missing`]`(false)` puts one in place.
+    pub fn needing_firmware(self) -> Self {
+        self.controls.firmware_missing(true);
+        self
+    }
+
     /// The handle on its buttons, lamp and cable.
     pub fn controls(&self) -> Controls {
         self.controls.clone()
@@ -670,6 +688,9 @@ impl Scanner for FakeScanner {
     }
 }
 
+/// The file a scanner [`FakeScanner::needing_firmware`] needs.
+pub const FIRMWARE_FILE: &str = "made-up-firmware.bin";
+
 /// The made-up scanners as a backend: one device each.
 #[derive(Debug, Clone)]
 pub struct FakeBackend {
@@ -711,6 +732,13 @@ impl Backend for FakeBackend {
             .ok()
             .and_then(|i| self.scanners.get(i))
             .ok_or_else(|| Error::Disconnected(format!("no made-up scanner {}", device.id)))?;
+        if scanner.controls.firmware_missing.load(Ordering::SeqCst) {
+            return Err(Error::FirmwareMissing(crate::FirmwareMissing {
+                file: FIRMWARE_FILE.into(),
+                looked_in: vec![std::path::PathBuf::from("/made-up/firmware")],
+                detail: format!("/made-up/firmware/{FIRMWARE_FILE}: not there"),
+            }));
+        }
         Ok(Box::new(scanner.clone()))
     }
 }
@@ -755,6 +783,29 @@ mod tests {
         assert_eq!(&r.image.data[..3], &LID);
         let at = |x: usize, y: usize| &r.image.data[(y * 400 + x) * 3..][..3];
         assert_ne!(at(350, 280), &LID[..], "an original");
+    }
+
+    #[test]
+    fn a_scanner_without_its_firmware_is_listed_but_does_not_open() {
+        let scanner = FakeScanner::flatbed().needing_firmware();
+        let controls = scanner.controls();
+        let registry = Registry::new().with(FakeBackend::new(vec![scanner]));
+        let devices = registry.list();
+        assert_eq!(devices.len(), 1, "it is there");
+        match registry.open(&devices[0]) {
+            Err(Error::FirmwareMissing(m)) => {
+                assert_eq!(m.file, FIRMWARE_FILE);
+                assert!(!m.looked_in.is_empty());
+            }
+            other => panic!("{:?}", other.map(|_| ())),
+        }
+        // The first scanner there is says the same, not "not there".
+        assert!(matches!(
+            registry.open_first().map(|_| ()),
+            Err(Error::FirmwareMissing(_))
+        ));
+        controls.firmware_missing(false);
+        assert!(registry.open(&devices[0]).is_ok(), "a copy put in place");
     }
 
     #[test]

@@ -214,10 +214,16 @@ fn find_in(
     paths: &[PathBuf],
 ) -> Result<Firmware, String> {
     let mut tried = Vec::new();
+    // A path the user named may not be there yet (the application's
+    // settings folder, until a copy is put there).
     if let Some(path) = preferred {
-        match Firmware::read(path) {
-            Ok(fw) => return Ok(fw),
-            Err(e) => tried.push(e),
+        if !path.exists() {
+            tried.push(format!("{}: not there", path.display()));
+        } else {
+            match Firmware::read(path) {
+                Ok(fw) => return Ok(fw),
+                Err(e) => tried.push(e),
+            }
         }
     }
     match embedded {
@@ -288,6 +294,9 @@ mod tests {
         let missing = scratch("missing.bin");
         let e = find_in(Some(&bad), None, std::slice::from_ref(&missing)).unwrap_err();
         assert!(e.contains("not-firmware.bin"), "{e}");
+        assert!(e.contains("missing.bin: not there"), "{e}");
+        // A path named that is not there yet (the settings folder's copy).
+        let e = find_in(Some(&missing), None, &[]).unwrap_err();
         assert!(e.contains("missing.bin: not there"), "{e}");
         // A bad embedded copy (impossible after build.rs, but checked) is
         // named too.
