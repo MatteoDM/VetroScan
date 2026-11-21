@@ -13,7 +13,7 @@ on the hardware are in `docs/architecture-plan.md`; read the phase you work on f
 | `hp3770-core` | the 3770's driver: profile, registers, calibration, motor (`profile.rs`, `rts8822.rs`) |
 | `hp3770-usb`, `hp3770-capture` | USB access; replay of the HP driver's captures as tests |
 | `hp3770-cli` | the `hp3770` command (`tma-scan`, `develop`, `lamp`…) |
-| `epson-gt-x750` | the Epson Perfection 4490 (phase 12: the glass in the app; films, Linux and ICE to come) |
+| `epson-gt-x750` | the Epson Perfection 4490 (phase 12): firmware, glass, films, Digital ICE; the `epson4490` command |
 | `vetroscan`, `vetroscan-export` | the iced app; PDF/TIFF/JPEG export |
 
 ## Talking and writing
@@ -34,8 +34,8 @@ on the hardware are in `docs/architecture-plan.md`; read the phase you work on f
   drivers), and everything the app does with it comes from what it declares. What only one
   scanner needs becomes a capability, or stays in its driver; never an
   `if backend == …` or a text that names a brand in the app. Before adding a feature, ask how
-  it works on a scanner without it and on a different scanner (the Epson 4490 is next; the
-  made-up scanners in `fake.rs` stand in for others in the e2e). Scanner-specific facts the app
+  it works on a scanner without it and on a different scanner (the HP 3770 and the Epson 4490
+  are the real ones; the made-up scanners in `fake.rs` stand in for others in the e2e). Scanner-specific facts the app
   needs are declared, as `Capabilities::usb` (the Windows buttons row, Linux's udev rule) and
   `LampInfo::switches_off_after` (the lamp's choices) are. Still from the HP 3770, as generic
   defaults: `scan_imaging::convert::HP_SHARPEN` and `DEFAULT_THRESHOLD` (tuned against HP's
@@ -80,7 +80,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
 
-- The app's e2e (`crates/vetroscan/src/e2e.rs`, about 120 tests) takes about 5 minutes: run the
+- The app's e2e (`crates/vetroscan/src/e2e.rs`, about 130 tests) takes about 5 minutes: run the
   tests in the background and read their real exit code; never pipe cargo through `grep`, it
   hides a failure.
 - **The other systems**, while GitHub Actions cannot run (they test Linux, Windows and macOS):

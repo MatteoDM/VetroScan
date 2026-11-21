@@ -17,6 +17,11 @@ GitHub; here they are in English.
 
 ## [Unreleased]
 
+### Changed
+- The README, the install guides and the usage guide describe both scanners, the HP Scanjet
+  3770 and the Epson Perfection 4490 Photo, with films and Digital ICE; the Linux menu entry and
+  the packages' descriptions name the 4490 and films too.
+
 ## [0.11.2] - 2026-11-21
 
 ### Fixed

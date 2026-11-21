@@ -1,13 +1,13 @@
 # Installing the scanner on a new computer with Omarchy
 
 A step-by-step guide, also for people who have never used the terminal. At the end the
-**HP Scanjet 3770** works with its app, **VetroScan**, which opens from the applications
-menu like any other program.
+scanner (the **HP Scanjet 3770** or the **Epson Perfection 4490**) works with its app,
+**VetroScan**, which opens from the applications menu like any other program.
 
 Time: about 15 minutes, almost all of it waiting while the computer compiles.
 
-No HP drivers, SANE or other scanning programs are needed: the app talks to the scanner
-directly.
+No HP or Epson drivers, SANE or other scanning programs are needed: the app talks to the
+scanner directly (the 4490's firmware is inside the app).
 
 > **There is a shorter way.** This guide builds the app from source, which is why Rust and a
 > few minutes of waiting are needed. Since the first published version, the
@@ -108,6 +108,9 @@ The programs go to `~/.cargo/bin`, which the terminal already knows after step 1
 
 ## Step 5 — Checking that the computer sees the scanner
 
+`hp3770` talks to the HP 3770 only. With the **Epson 4490**, `lsusb | grep 04b8:0119` must
+show a line; then skip to step 6, and the app says whether it can open the scanner.
+
 ```sh
 hp3770 status
 ```
@@ -150,7 +153,8 @@ Done: from here on the terminal is no longer needed.
 The app follows the system's language (Italian or English); it can be changed in the
 **Preferences** under *Language*.
 
-1. At the top choose **Document** (sheets, also several pages in one PDF) or **Photo**.
+1. At the top choose **Document** (sheets, also several pages in one PDF), **Photo** or
+   **Film** (negatives and slides in the scanner's film holder).
 2. Put the original on the glass, **face down**, and close the lid.
 3. Press **Preview**: after a few seconds you see the glass. The first time the lamp has to
    warm up and it takes a little longer.
@@ -162,7 +166,8 @@ The app follows the system's language (Italian or English); it can be changed in
 6. In the **Output** tab choose the format, then press the button at the bottom right
    (**Save PDF…**, **Save JPEG…**) and choose where to save.
 
-The **scanner buttons** work with the app open in the background too:
+The **scanner buttons** work with the app open in the background too; the HP 3770's (the
+Epson 4490's four work the same way, see the usage guide):
 
 | Button | In Document | In Photo |
 | --- | --- | --- |

@@ -5,7 +5,7 @@ and a command (`hp3770`) that talk to the scanner directly over USB. **No SANE, 
 modules, no HP software are needed**: the "driver" is inside the app. What changes from one
 system to another is only **how the system lets a normal program open the scanner**.
 The **Epson Perfection 4490** (USB `04b8:0119`) works with the same app and the same packages
-(and its own command, `epson4490`): what it needs besides is in
+(its own command, `epson4490`, is only built from source): what it needs besides is in
 [The Epson Perfection 4490](#the-epson-perfection-4490).
 
 | System | What the scanner needs | Package to download |
@@ -14,12 +14,13 @@ The **Epson Perfection 4490** (USB `04b8:0119`) works with the same app and the 
 | Debian, Ubuntu, Mint | udev rule (in the package) | `.deb` |
 | Fedora, openSUSE | udev rule (in the package) | `.rpm` |
 | Any Linux | udev rule (the app installs it with a button) | `.AppImage` |
-| Windows 10 and 11 (x64) | the HP driver already installed, **or** WinUSB | `-setup.exe` or `-portable.zip` |
+| Windows 10 and 11 (x64) | the maker's driver (HP's, Epson's) already installed, **or** WinUSB | `-setup.exe` or `-portable.zip` |
 | macOS 11 or newer | nothing | `.dmg` |
 
 All the files are on the [Releases](https://github.com/MatteoDM/scanner/releases/latest)
-page, with names like `vetroscan-v0.3.0-linux-x86_64.deb`. `SHA256SUMS.txt` has the checksums
-to check them.
+page, with names like `vetroscan-vX.Y.Z-linux-x86_64.deb`. `SHA256SUMS.txt` has the checksums
+to check them. The macOS and Linux `aarch64` files are built only by the release workflow on
+GitHub: a release built elsewhere has none.
 
 How to use the app, once installed: **[usage guide](usage.md)**.
 
@@ -211,7 +212,8 @@ missing:
 ## Windows
 
 Windows 10 or 11, 64-bit. The app talks to the scanner in one of two ways, and tries them by
-itself in this order:
+itself in this order (what follows is for the HP 3770; the Epson 4490 is the same with
+Epson's driver, see [its section](#the-epson-perfection-4490)):
 
 1. **HP driver** (`usbscan.sys`): if the scanner is already installed with the HP driver, the
    app uses it. Nothing changes in the system and the other scanning apps keep working.

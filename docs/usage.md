@@ -54,7 +54,7 @@ The rest of this guide is about doing these same things better.
 
 | Where | What is there |
 |---|---|
-| **At the top** | the app's name and version, the **Document** and **Photo** modes, the scanner's state, the **Preview** and **Scan…** buttons, the choice of theme (**System**, **Light**, **Dark**) |
+| **At the top** | the app's name and version, the **Document** and **Photo** modes (and **Film**, with a scanner that has a film adapter), the scanner's state, the **Preview** and **Scan…** buttons, the choice of theme (**System**, **Light**, **Dark**) |
 | **On the left** | the column of the **pages** (always in Document, in Photo and Film from the first photo) |
 | **In the middle** | the **viewer**: the preview of the glass or the scan made |
 | **On the right** | four tabs: **Scan**, **Adjust**, **Output**, **Preferences**; below them, the **Save …** and **Open the folder** buttons |
@@ -326,8 +326,9 @@ All in the **Scan** tab, *Original* section.
 
 ### Resolution
 
-The choice is the scanner's: for the HP 3770 **200, 300, 600, 1200 and 2400 dpi** (dots per
-inch). More dpi = more detail, but larger files and slower scans. A resolution chosen on a
+The choice is the scanner's: on the glass, for the HP 3770 **200, 300, 600, 1200 and
+2400 dpi** (dots per inch), for the Epson 4490 **100, 200, 300, 400, 600, 1200, 2400 and
+4800 dpi**; for films see [Film](#document-and-photo). More dpi = more detail, but larger files and slower scans. A resolution chosen on a
 scanner and not offered by another stays saved; meanwhile the app uses the nearest one the
 scanner in use has.
 
@@ -337,7 +338,7 @@ scanner in use has.
 | Text to give to a recognition (OCR) program | 300 |
 | Photos to look at on screen or print at the same size | 300–600 |
 | Photos to enlarge, quality archive | 1200 |
-| Stamps, small details (only with an area selected) | 2400 |
+| Stamps, small details (only with an area selected) | 2400 (4800 on the Epson 4490) |
 
 ### Colour
 
@@ -362,7 +363,7 @@ the sensor reads them. It applies from the next scan.
 
 ### Depth: 8 or 16 bits
 
-Only for scanners that give 16 bits, like the HP 3770.
+Only for scanners that give 16 bits, like the HP 3770 and the Epson 4490.
 
 - **8 bits per channel**: smaller files. Fine for documents.
 - **16 bits per channel**: the scanner sends 65,536 shades per colour instead of 256. Shadows
@@ -661,7 +662,8 @@ already filled in, for instance `documento-2026-11-08-153012.pdf`, in the
 [scans folder](#the-preferences). Name and folder can be changed.
 
 - In **Document** all the pages are saved.
-- In **Photo** all the photos of the left column are saved (just one, if there is one).
+- In **Photo** and **Film** all the photos of the left column are saved (just one, if there
+  is one), or only the [photos picked](#picking-several-photos).
 
 ### Document
 
@@ -749,7 +751,7 @@ Quality and limit are remembered, separately for Document and Photo.
 - **PNG 16 bit** and **TIFF 16 bit** (in both modes, with the 16-bit depth, in colour or
   grey): the finished image, **with** all the adjustments, but with 65,536 shades per colour.
   For whoever goes on retouching in a photo editor without losing quality.
-- **RAW** (only in Photo, only in colour): the scanner's samples as the chip reads them,
+- **RAW** (only in Photo and Film, only in colour): the scanner's samples as the chip reads them,
   **without** adjustments, with the highlights intact. Crop, straightening, rotation and size
   apply; the colours, curves and other sliders of the app only serve to look at the preview.
   The photo is then "developed" in Lightroom, Camera Raw or Photoshop, like a camera's RAW
@@ -788,9 +790,9 @@ question saves them all in the same way, mode by mode.
 **Black and white** is not saved as JPEG or AVIF (they would spoil the edges of the letters),
 nor at 16 bits: the **Output** tab does not offer them.
 
-### Automatic saving (Photo)
+### Automatic saving (Photo and Film)
 
-With **Save each photo to the folder by itself** (**Output** tab, only in Photo) each photo is
+With **Save each photo to the folder by itself** (**Output** tab, only in Photo and Film) each photo is
 saved as soon as it is acquired, in the scans folder and with the automatic name, without
 windows. The bar at the bottom and a notification say where.
 
@@ -813,7 +815,9 @@ Other choices: in Document *Open the folder* and *Nothing*; in Photo *Open the f
 *Nothing*.
 
 Another scanner shows its own buttons, with the labels printed on it; until you choose, each
-does what its maker meant it for (scan, copy, send). The choices are remembered for each
+does what its maker meant it for (scan, copy, send). The Epson 4490 has four: by default **Start** and
+**Scan to PDF** do what **Scan** does above, **Scan to E-mail** what **Instant Share** does,
+and **Copy** what **Copy** does. The choices are remembered for each
 model of scanner.
 
 - **Add a page** / **Scan the photo**: like the app's **Scan** button, with the area and
@@ -893,9 +897,10 @@ The fourth tab on the right. Every change is saved by itself.
   soon as the scan is over* (actually after 15 seconds, so that photos acquired one after the
   other do not each wait for the lamp), after 1, 2 (default), 5 or 10 minutes, or, for a
   scanner that switches its lamp off by itself, after that time (*the scanner switches it
-  off*: 13 minutes on the HP 3770). When it closes the app always switches it off. A lamp
-  switched off switches on again by itself at the next scan, with the warm-up the scanner
-  declares (about 10 seconds on the HP 3770), as the note below the choice says. A scanner
+  off*: 13 minutes on the HP 3770, about 15 on the Epson 4490). When it closes the app always
+  switches it off. A lamp switched off switches on again by itself at the next scan, with the
+  warm-up the scanner declares (about 10 seconds on the HP 3770, up to two and a half minutes
+  on the Epson 4490), as the note below the choice says. A scanner
   with its own timer switches the lamp off anyway, even if the app closes badly. Only for a
   scanner with a lamp.
 - **Settings**: says which file they are saved in; **Restore factory settings** puts
@@ -1014,9 +1019,10 @@ the green dot and repeat the scan (for a page that came out half, use **Redo**).
 
 - Look at the bottom left: **USB 1.1** means a slow port or hub. Plug the scanner into another
   port, directly on the computer.
-- 1200 and 2400 dpi on a whole sheet take minutes and a lot of memory: select only the area
+- 1200 dpi and more on a whole sheet take minutes and a lot of memory: select only the area
   needed or lower the resolution.
-- The first scan after some rest waits for the lamp to warm up (about 10 seconds). If it
+- The first scan after some rest waits for the lamp to warm up (about 10 seconds on the HP
+  3770, up to two and a half minutes on the Epson 4490). If it
   happens too often, in **Preferences → Lamp** let the lamp switch off later.
 
 ### The preview does not find the photos on the glass

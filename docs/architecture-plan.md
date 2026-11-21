@@ -1,12 +1,21 @@
 # Plan: from "an app for the HP 3770" to "an app for scanners"
 
-Status: **phases 0–7 done and published (v0.1.2, v0.2.0, v0.3.0), with the double final
-check; phases 8–9 postponed until there is hardware; phases 10–11 (films on the 3770,
-precise moves from the keyboard) planned** (plan written on 8 November 2026, after v0.1.1;
-updated the same day with the languages, the new name, the postponed phases and phases
-10–11; on 9 November phase 12, the Epson Perfection 4490 Photo, researched before it arrives,
-and the code of its milestone 1 written without it: see "Where it stands" there).
-Each phase ends with a commit, green tests and a version; what is done is marked here.
+Status on 21 November 2026, **v0.11.2**:
+
+- **done and released**: phases 0–7 (the refactoring, the languages, the new name), 10 (films on
+  the HP 3770's adapter), 11 (moves from the keyboard);
+- **phase 12, the Epson Perfection 4490 Photo**: the firmware, the buttons, the lamp, the glass
+  (v0.8.0), the films (v0.9.0) and Digital ICE (v0.11.0) are in the app and released; what is
+  left is under "The 4490, in order" in that phase;
+- **phase 13, films done professionally**: done but steps 4, 5.3, 7 and 8;
+- **phase 14, colour profiles**: done (v0.10.0) but step 3 on macOS and Linux, step 4 and the
+  4490's glass by eye;
+- **postponed** until there is hardware: phases 8–9 (other RTS88xx scanners, other brands).
+
+The plan was written on 8 November 2026, after v0.1.1, and grew with every phase. Each section
+keeps the date it was written on and says what was true then: a phase's latest state is at its
+end, and the [Summary](#summary) at the bottom gives them all. Each phase ends with a commit,
+green tests and a version.
 
 Order: first the refactoring (phases 1–4), then languages, the project in English and the
 new name (phases 5–7), which need no hardware; the other scanners (phases 8–9) are
@@ -3166,6 +3175,6 @@ the three photos, in reading order (tried in the app); the two previews of the 3
 | 9 · other brands (postponed) | to be decided | medium | eSCL yes, with a network scanner |
 | 10 · slides and negatives on the 3770 (done: negatives; slides through phase 13 step 5.2; open: blue on the base, light along the strip, lower resolutions) | 0.5.0 (negatives), 0.6.0 (slides) | medium | yes: the 3770's own adapter |
 | 11 · precise moves from the keyboard (done) | 0.4.0 | low | yes |
-| 12 · Epson Perfection 4490 Photo, native, plug and play (milestone 1 written without the scanner; arrived 11 November 2026, the firmware upload confirmed by a capture; buttons; native glass scans at 100-1200 dpi, 8 and 16 bits, in the app with the lamp, cancelling and a scan left half-way stopped at the opening, 12-13 November; open: steps 10-18 of "What is left, in order", and "Open after the code review") | 0.5.0 (milestone 1, experimental); the glass in the app after v0.7.0, not released yet; the rest to be decided | high: protocol unknown, two carriages | no: the scanner (firmware inside the program) |
+| 12 · Epson Perfection 4490 Photo, native, plug and play (arrived 11 November 2026; done: firmware upload, buttons, lamp, glass at 100-4800 dpi, 8 and 16 bits, films at 600-4800 dpi, Digital ICE at 600-2400 dpi, "Firmware missing"; open: "The 4490, in order" and "Open after the code review") | 0.5.0 (milestone 1, experimental), 0.8.0 (the glass), 0.9.0 (films), 0.11.0 (Digital ICE) | high: protocol unknown, two carriages | no: the scanner (firmware inside the program) |
 | 13 · films done professionally, for every scanner (done: 1-3, 5.1-5.2, 6 for slides; 5.3 set aside; 4 stalled without HP's captures; open: 7, 8) | 0.6.0 (1-3, 5.1-5.2, 6); 7, 8 to be decided | low (1-3, 5.1-5.2, 6, 7 in software, 8), medium (4, 5.3: the motor) | 1-3, 5.1-5.2, 6, 7 in software, 8 yes; 4 needs the 3770's captures |
-| 14 · colour profiles in the files, then the screen managed (decided 15 November 2026; done: 1 (the 4490's glass by eye to try), 2, 3 on Windows; open: 3 on macOS and Linux, 4) | to be decided | low (1, 2), medium (3) | yes |
+| 14 · colour profiles in the files, then the screen managed (decided 15 November 2026; done: 1 (the 4490's glass by eye to try), 2, 3 on Windows; open: 3 on macOS and Linux, 4) | 0.10.0 (1-3 on Windows); the rest to be decided | low (1, 2), medium (3) | yes |

@@ -1,6 +1,6 @@
 [package]
 name = "epson-gt-x750"
-description = "Backend for the Epson Perfection 4490 Photo (GT-X750): firmware upload, state, buttons and glass scans over USB"
+description = "Backend for the Epson Perfection 4490 Photo (GT-X750): firmware upload, state, buttons, glass and film scans, Digital ICE over USB"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

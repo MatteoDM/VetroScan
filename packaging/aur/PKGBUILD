@@ -1,16 +1,16 @@
 # Maintainer: Matteo Dal Molin <matteodalmo at gmail dot com>
 #
-# VetroScan: desktop scanning app with a free driver for the HP Scanjet 3770, from the git
-# repository.
-# Installs the app, the hp3770 command, the udev rule that lets the user
-# at the seat open the scanner, the launcher entry and the icon. pacman's
+# VetroScan: desktop scanning app with free drivers for the HP Scanjet 3770 and the Epson
+# Perfection 4490 Photo, from the git repository.
+# Installs the app, the hp3770 command, the udev rules that let the user
+# at the seat open the scanners, the launcher entry and the icon. pacman's
 # udev hook reloads the rules and applies them to a scanner already
 # plugged in: no need to unplug it.
 
 pkgname=vetroscan-git
 pkgver=r0
 pkgrel=1
-pkgdesc="VetroScan: desktop scanning app with a free driver for the HP Scanjet 3770"
+pkgdesc="VetroScan: scanning app with free drivers for the HP Scanjet 3770 and the Epson Perfection 4490"
 arch=('x86_64' 'aarch64')
 url="https://github.com/MatteoDM/scanner"
 license=('GPL-2.0-or-later')

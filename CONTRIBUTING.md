@@ -19,9 +19,9 @@ cargo test --workspace --locked
 ```
 
 All three must pass. The tests include the app's e2e (`cargo test -p vetroscan`), the
-comparisons with the HP driver's USB captures and a golden test of the adjustments. With the
-scanner plugged in and no other program using it, run the smoke tests too when you touch the
-driver:
+comparisons with the HP driver's USB captures, the Epson 4490's captured sequences and a golden
+test of the adjustments. With the HP 3770 plugged in and no other program using it, run its
+smoke tests too when you touch its driver:
 
 ```bash
 cargo test -p hp3770-cli --test hardware -- --ignored --test-threads 1

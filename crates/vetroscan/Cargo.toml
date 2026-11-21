@@ -1,6 +1,6 @@
 [package]
 name = "vetroscan"
-description = "VetroScan: desktop scanning application (HP Scanjet 3770 and more)"
+description = "VetroScan: desktop scanning application for documents, photos and films (HP Scanjet 3770, Epson Perfection 4490 Photo)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
