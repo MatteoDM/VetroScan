@@ -33,10 +33,11 @@
 //! 6. **the fill**: where the dust still lets most of the light through
 //!    ([`DEEP`] of the infrared or more) the colour is divided by what it took,
 //!    which keeps the grain and the picture under it; under deeper dust, and a
-//!    pixel round it, the colour is filled along the line through the pixel,
-//!    of four, whose two ends outside the mask agree best (a hair is bridged
-//!    across, a speck by an edge of the picture filled along the edge; a mark
-//!    wider than the window stays as it is).
+//!    pixel round it, the colour is filled along the lines through the pixel,
+//!    of four, whose two ends outside the mask agree best and that are not
+//!    much longer than the shortest (a hair is bridged across, along an edge
+//!    of the picture each side from its own; a speck by an edge filled along
+//!    the edge; a mark wider than the window stays as it is), then softened.
 
 use crate::{Format, Image};
 
@@ -67,6 +68,10 @@ const EDGE: usize = 2;
 
 /// Lines and columns each colour's dust is looked for around the infrared's.
 const SEARCH: i32 = 3;
+
+/// Pixels beyond the shortest line through a pixel to fill over which a longer
+/// line's weight falls by e ([`fill`]).
+const LONGER: f32 = 1.0;
 
 /// The furthest a pixel is filled from.
 const FILL_REACH: usize = 2 * REACH + 2;
@@ -793,11 +798,18 @@ fn moved(mask: &[bool], w: usize, h: usize, shift: [f32; 2]) -> Vec<bool> {
 
 /// Fills colour `c` of `data` (three samples a pixel) under `mask`: along
 /// each of four lines through the pixel (across, along, both diagonals), the
-/// nearest pixel outside the mask on either side, interpolated by distance;
-/// the lines weighted by how well their two ends agree and how short they
-/// are, so that a hair is bridged across and a speck by an edge of the
-/// picture is filled along the edge, not from both sides of it. Returns the
-/// pixels filled and those left (nothing outside within [`FILL_REACH`]).
+/// nearest pixel outside the mask on either side, the nearer counting more
+/// (one over the distance cubed); the lines weighted by how well their two
+/// ends agree, by how short they are, and, beyond the shortest line there,
+/// by a weight that falls by e every [`LONGER`] pixels. A speck by an edge of
+/// the picture is filled along the edge (the line whose ends agree); a hair
+/// along an edge, across it, each side from its own (the long line along a
+/// curved edge runs off it into the other side, with two ends that agree).
+/// Returns the pixels filled and those left (nothing outside within
+/// [`FILL_REACH`]).
+///
+/// (21 November 2026, capture 108's leaf: weighed by agreement alone, the long
+/// line along a hair on a curved edge drew the far side over the near one.)
 fn fill<T: Copy>(
     data: &mut [T],
     w: usize,
@@ -809,7 +821,7 @@ fn fill<T: Copy>(
 ) -> (usize, usize) {
     const AXES: [(isize, isize); 4] = [(0, 1), (1, 0), (1, 1), (1, -1)];
     let (mut filled, mut left) = (0, 0);
-    // The nearest value outside the mask from `i` in direction (dy, dx), and how far.
+    // The nearest value outside the mask from (y, x) in direction (dy, dx), and how far.
     let end = |data: &[T], y: isize, x: isize, dy: isize, dx: isize| -> Option<(f32, f32)> {
         let step = if dy != 0 && dx != 0 {
             std::f32::consts::SQRT_2
@@ -828,34 +840,59 @@ fn fill<T: Copy>(
         }
         None
     };
+    let mut lines: Vec<(f32, f32, f32)> = Vec::with_capacity(4);
     for i in 0..w * h {
         if !mask[i] {
             continue;
         }
         let (y, x) = ((i / w) as isize, (i % w) as isize);
-        let (mut sum, mut weights) = (0f32, 0f32);
+        lines.clear();
         for (dy, dx) in AXES {
-            let (value, spread, length) = match (end(data, y, x, dy, dx), end(data, y, x, -dy, -dx))
-            {
+            let line = match (end(data, y, x, dy, dx), end(data, y, x, -dy, -dx)) {
                 (Some((a, da)), Some((b, db))) => {
-                    ((a * db + b * da) / (da + db), (a - b).abs(), da + db)
+                    let (wa, wb) = (1.0 / (da * da * da), 1.0 / (db * db * db));
+                    ((a * wa + b * wb) / (wa + wb), (a - b).abs(), da + db)
                 }
                 // One side only (an edge of the image): trusted less.
                 (Some((a, da)), None) | (None, Some((a, da))) => (a, 0.1 * a, 2.0 * da),
                 (None, None) => continue,
             };
+            lines.push(line);
+        }
+        let Some(shortest) = lines.iter().map(|l| l.2).min_by(f32::total_cmp) else {
+            left += 1;
+            continue;
+        };
+        let (mut sum, mut weights) = (0f32, 0f32);
+        for &(value, spread, length) in &lines {
             // A level, or a hundredth of the value: what two ends that agree still differ by.
             let agree = spread + 1.0 + 0.01 * value.abs();
-            let weight = 1.0 / (agree * agree * length);
+            let weight = (-(length - shortest) / LONGER).exp() / (agree * agree * length);
             sum += weight * value;
             weights += weight;
         }
-        if weights > 0.0 {
-            data[i * 3 + c] = put(sum / weights);
-            filled += 1;
-        } else {
-            left += 1;
-        }
+        data[i * 3 + c] = put(sum / weights);
+        filled += 1;
+    }
+    // Then one pass of a 3 x 3 mean over the pixels filled (the values read
+    // before any is written): a fill is a little smoother than a lens's picture,
+    // and so is the scanner maker's (closer to its ICE on the nine captures).
+    let soft: Vec<(usize, f32)> = (0..w * h)
+        .filter(|&i| mask[i])
+        .map(|i| {
+            let (y, x) = (i / w, i % w);
+            let (mut sum, mut count) = (0f32, 0f32);
+            for yy in y.saturating_sub(1)..=(y + 1).min(h - 1) {
+                for xx in x.saturating_sub(1)..=(x + 1).min(w - 1) {
+                    sum += get(data[(yy * w + xx) * 3 + c]);
+                    count += 1.0;
+                }
+            }
+            (i, sum / count)
+        })
+        .collect();
+    for (i, v) in soft {
+        data[i * 3 + c] = put(v);
     }
     (filled, left)
 }
@@ -1071,6 +1108,97 @@ mod tests {
             let i = (y * 120 + 30) * 3;
             assert_eq!(samples[i..i + 3], f.samples[i..i + 3], "{y}");
         }
+    }
+
+    /// A hair lying along a curved edge of the picture (a light disc on a dark ground, the hair
+    /// on its rim for a third of the way round): the hair's pixels on the light side come back
+    /// light. A long line along the hair runs straight off the curve into the dark, and its two
+    /// ends agree; the short line across has one end each side: weighed by agreement first, the
+    /// fill took the long one and drew the dark over the light (21 November 2026, capture 108, a
+    /// leaf's edge).
+    #[test]
+    fn a_hair_along_a_curved_edge_keeps_the_edge() {
+        let (cy, cx, radius) = (80.0f32, 80.0f32, 40.0f32);
+        let disc = move |y: f32, x: f32| {
+            let v = if (y - cy).hypot(x - cx) <= radius {
+                0.8
+            } else {
+                0.25
+            };
+            [v, v, v]
+        };
+        let hair = move |y: f32, x: f32| {
+            let r = (y - cy).hypot(x - cx);
+            let angle = (y - cy).atan2(x - cx).abs();
+            if (r - radius).abs() <= 1.5 && angle < 1.0 {
+                0.3
+            } else {
+                1.0
+            }
+        };
+        let mut f = film(170, 160, disc, hair, [[0.0; 2]; 3], 0.0);
+        let mut samples = f.samples.clone();
+        remove(&mut f.image, Some(&mut samples), &f.infrared).unwrap();
+        // The hair's pixels inside the disc, a pixel in from the rim (the rim's own pixel is
+        // either), against the clean film.
+        let (mut sum, mut count) = (0f32, 0);
+        for y in 0..f.h {
+            for x in 0..f.w {
+                let (fy, fx) = (y as f32, x as f32);
+                let r = (fy - cy).hypot(fx - cx);
+                if hair(fy, fx) < 1.0 && r <= radius - 1.0 {
+                    let i = (y * f.w + x) * 3 + 1;
+                    sum += (f32::from(samples[i]) / f32::from(f.clean[i]) - 1.0).abs();
+                    count += 1;
+                }
+            }
+        }
+        assert!(count > 30, "{count}");
+        let off = sum / count as f32;
+        // (40 % weighed by agreement alone; a few % left by the last softening pass)
+        assert!(off < 0.15, "the light side filled {:.0} % off", off * 100.0);
+    }
+
+    /// A speck just under a sharp edge of the picture (a dark band above, the speck's top two
+    /// lines below the edge): filled from the light it lies in, the edge where it was (the
+    /// application's dusty strip has one, `the_dust_the_infrared_shows_is_taken_out_of_the_scan`).
+    #[test]
+    fn a_speck_under_an_edge_is_filled_from_its_own_side() {
+        let band = |y: f32, _: f32| {
+            let v = if y < 40.0 {
+                0.15
+            } else if y < 41.0 {
+                0.35
+            } else {
+                0.6
+            };
+            [v, v, v]
+        };
+        let speck = |y: f32, x: f32| {
+            if (y - 45.0).hypot(x - 60.0) <= 3.0 {
+                0.25
+            } else {
+                1.0
+            }
+        };
+        let mut f = film(120, 100, band, speck, [[0.0; 2]; 3], 0.0);
+        let mut samples = f.samples.clone();
+        remove(&mut f.image, Some(&mut samples), &f.infrared).unwrap();
+        let mut worst = 0f32;
+        for y in 41..50 {
+            for x in 55..66 {
+                if speck(y as f32, x as f32) < 1.0 {
+                    let i = (y * f.w + x) * 3 + 1;
+                    let off = (f32::from(samples[i]) / f32::from(f.clean[i]) - 1.0).abs();
+                    worst = worst.max(off);
+                }
+            }
+        }
+        assert!(
+            worst < 0.08,
+            "the speck filled {:.0} % off at worst",
+            worst * 100.0
+        );
     }
 
     #[test]

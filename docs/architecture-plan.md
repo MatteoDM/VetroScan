@@ -2299,6 +2299,25 @@ at the very end, date to be decided, the medium format, the silver films and the
    kept, `dust.rs` unchanged. **Left, real and small**: where a hair crosses a sharp edge of the
    picture (108, a leaf's edge at 1345/1085), our fill leaves a thin dark line along the edge;
    Epson there is clean.
+   **The line along sharp edges: done** (21 November 2026, Matteo: "La linea scura sul bordo";
+   `captures/epson4490/06-formato-dati.md`, "La linea sul bordo"; `tools/ice_edges.py`). Measured
+   first: the lines we bring in on an edge of the picture (pixels we changed, on an edge of
+   Epson's, farther from Epson than before by 3 points and more than 6 %): 1-9 a negative, 117-203
+   a slide, 108 on the BW400CN. 108's leaf: the hair lies along the edge of a light patch, the
+   edge curves; the long line along the hair runs off the curve into the dark with two ends that
+   agree, and weighed by agreement first the fill took it and drew the dark over the light patch
+   (the line across, one end each side, was down-weighed for its disagreeing ends). Tried: the
+   length weighed more (nothing changed), a weighted median of the eight ends (the leaf right,
+   but a speck just under an edge filled from the edge's far side: the application's e2e 0.8 ->
+   6.8 levels off). Kept (`dust::fill`): the four lines, each end weighed by one over its
+   distance cubed, each line by its ends' agreement and by a weight falling by e every pixel
+   beyond the shortest line there, then one 3 x 3 mean over the pixels filled. Two tests on
+   made-up films (a hair along a curved edge: 40 % off -> under 15 %; a speck under an edge).
+   Against Epson on the eleven captures, before -> after: the lines brought in 112 2135 -> 1805
+   pixels, 113 2004 -> 1745, 134 3610 -> 2851, 126 63 -> 33, the negatives' within a few; Epson's
+   changes made by ours 112 50.8 -> 52.1 %, 134 50.0 -> 55.0, 126 93.8 -> 95.2, 141 58.3 -> 60.0,
+   none lower; ours alone 112 89 -> 38, 134 224 -> 120, 126 16 -> 6, none higher. The leaf now as
+   Epson's, softer (`scansioni/ice_polvere_20261119/ice_108_foglia_axsoft.png`).
 
 6. **Before the next release, without a silver film.** Item 13's threshold cannot be measured
 until Matteo has a classic silver negative, maybe never (Matteo, 21 November 2026). To decide
