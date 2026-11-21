@@ -495,9 +495,14 @@ pub const FILM_LINE_TIMES: std::ops::RangeInclusive<u32> = 6144..=27_264;
 /// scans, 87 asked 264; the unit then stops at 1200 or 1152, inside the travel it has just
 /// made from 0 to 2440); and 204, a line short of 216 (Matteo's decision, 15 November 2026: the
 /// lid's lamp, brighter as it warms, moved the edge by a line between our scans 70 and 90 s
-/// after it was lit, capture 104; the unit then stops at 1212). A computed origin outside them
-/// is refused.
-pub const FILM_BACK_MOVES: [u32; 6] = [204, 216, 228, 240, 252, 264];
+/// after it was lit, capture 104; the unit then stops at 1212). Since 21 November 2026 (Matteo's
+/// decision) every line of the read from 180 to 312: the edge moves by whole lines between
+/// scans, both lights alike (capture 146: our colour passes 240 then 264, their infrared 228
+/// then 252, nine minutes apart; Matteo's app the same day asked 276, an edge one line further),
+/// the rule follows it by design and Epson Scan moves what the rule says in every capture (145
+/// too); two lines past the 204-276 seen either side, the unit stopping at 2128-2260, inside the
+/// travel it has just made. A computed origin outside them, a read gone wrong, is refused.
+pub const FILM_BACK_MOVES: [u32; 12] = [180, 192, 204, 216, 228, 240, 252, 264, 276, 288, 300, 312];
 
 /// The film path's moves before its plan (every film capture): the park from home (1994 less
 /// the 512 ramp's 1024), the lid unit back from where the scanner put it when it lit its lamp
@@ -1930,11 +1935,12 @@ mod tests {
         assert_eq!(ice_reachable(&lowest).unwrap(), (lowest, 0));
         assert!(check_infrared_reach(MAX_FILM_UNIT_END + 1).is_err());
         // The same frame as the application found it (19 November 2026, refused then): 13 lines
-        // lower than 131's; a few lines cut at its bottom, counted for the worst case, and let
+        // lower than 131's; a few lines cut at its bottom, counted for the worst case (the
+        // shortest move back let out, 180: 38 and 25 lines, 12 more than with 204), and let
         // out; so is 131's own area, by fewer.
         for (r, most) in [
             (frame(1888, 9420, 1228, 1776), 40),
-            (frame(1888, 9399, 1188, 1784), 20),
+            (frame(1888, 9399, 1188, 1784), 30),
         ] {
             let (cut, lines) = ice_reachable(&r).unwrap_or_else(|e| panic!("{r:?}: {e}"));
             assert!(lines > 0 && lines <= most, "{r:?}: {lines}");
@@ -2081,15 +2087,15 @@ mod tests {
         t.bulk_out(&[0x1E, 0x01]).unwrap();
         assert!(t.bulk_out(&setup::move_block(971, 0, 0x1FF, 0x10)).is_err());
         assert!(t.bulk_out(&[0x1E, 0x05]).is_err());
-        // Moves back outside those let out, and their 1E 8A: refused; a line either side of
-        // the captured ones (216, 264) and a line short of 216 (204) let out.
-        for n in [192, 276, 300] {
+        // Moves back outside those let out, and their 1E 8A: refused (a line beyond either end,
+        // or not a whole line of the read); every line from 180 to 312 let out.
+        for n in [168, 324, 270] {
             t.bulk_out(&[0x1E, 0x01]).unwrap();
             assert!(t.bulk_out(&setup::move_block(n, 0, 0x1FF, 0x30)).is_err());
             t.bulk_out(&[0x1E, 0x8A]).unwrap();
             assert!(t.bulk_out(&film_origin_block(n)).is_err());
         }
-        for n in [204, 216, 240, 264] {
+        for n in [180, 204, 216, 240, 264, 276, 312] {
             t.bulk_out(&[0x1E, 0x01]).unwrap();
             t.bulk_out(&setup::move_block(n, 0, 0x1FF, 0x30)).unwrap();
             t.bulk_out(&[0x1E, 0x8A]).unwrap();

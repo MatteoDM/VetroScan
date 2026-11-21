@@ -22,6 +22,13 @@ GitHub; here they are in English.
   move back never seen, such as 276 steps) left the carriages out, and the next scan refused to
   start from there ("the carriages at (1994, 2440)"). Now the scan waits, up to a minute, for
   the scanner to bring them home by itself, as it already did after the lid's lamp lit again.
+- Epson Perfection 4490, films: the light's edge the scanner finds in its lid at the start of
+  every film scan moves by a line or two from one scan to the next (two lines in nine minutes,
+  measured), and the scan stopped when it moved a little further than seen before ("a move
+  back of 276 steps, none of those let out"). The driver now follows it as Epson Scan does,
+  over a wider margin (moves back of 180 to 312 steps; a read gone wrong is still refused).
+  With *Leggi l'infrarosso* an area reaching the holder's bottom now loses its last millimetre
+  or less (a quarter of a millimetre more), to stay within the reach Epson Scan was seen using.
 
 ## [0.11.0] - 2026-11-21
 

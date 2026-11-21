@@ -2123,7 +2123,14 @@ never run by us (step 12).
           the lamp warm and went with the scanner switched off and on, so most likely the lid
           unit's step count drifting (the origin read is there to make up for that; assumption,
           not measured); what Epson Scan moves in that state was not captured (capture 145 if it
-          comes again). Not admitted: `FILM_BACK_MOVES` keeps 204-264, Matteo to decide.
+          comes again). **Then measured** (captures 145-146, `05-catture.md`): Epson Scan's
+          three origin reads (preview, colour, infrared) moved exactly what the rule says (240,
+          240, 228); our own two ICE scans nine minutes apart found the edge two lines earlier
+          in the second, both lights alike (colour 240 then 264, infrared 228 then 252), the
+          fall of the light the same, only moved: the edge wanders by whole lines and 276 is one
+          more. **Admitted** (Matteo's decision, 21 November 2026): `FILM_BACK_MOVES` every
+          line from 180 to 312 (two past the 204-276 seen either side); the ICE reach's worst
+          case, now from 180, cuts 12 more lines (0.25 mm) of an area at the holder's bottom.
        What the item said before it was built: the rules of the second pass (from the captures, as
        `filmsetup.py` did for colour: the unit's move, the exposure loop, the shading on the
        wider columns, the start move from the holes, the infrared columns), the hole pre-read
