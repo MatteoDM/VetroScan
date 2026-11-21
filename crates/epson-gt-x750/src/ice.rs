@@ -1106,9 +1106,30 @@ pub(crate) mod tests {
                 None,
             ),
         ));
+        // 141: a Kodak BW400CN (chromogenic black and white, C-41) as a negative at 1200 dpi
+        // (21 November 2026): how much of the infrared its picture explains.
+        cases.push((
+            "141",
+            (
+                FilmRequest {
+                    dpi: 1200,
+                    ydpi: 1200,
+                    x: 163,
+                    y: 8082,
+                    width: 1165,
+                    height: 1784,
+                    bits: 16,
+                    film: Film::Negative,
+                },
+                -151,
+                [710, 542, 144, 142, 650, 512, 150, 142],
+                [654, 526, 138, 138, 684, 496, 146, 134],
+                None,
+            ),
+        ));
         // Where our infrared start is one column before Epson Scan's (its reads are laid by the
         // columns they were read at).
-        let read_at = [("134", 2743u32)];
+        let read_at = [("134", 2743u32), ("141", 2357)];
         for (k, (req, corr, ch, ih, lead)) in cases {
             if !std::path::Path::new(&format!("{dir}/{k}_col.bin")).exists() {
                 println!("{k}: no reads, skipped");

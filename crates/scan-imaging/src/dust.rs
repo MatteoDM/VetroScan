@@ -1101,7 +1101,7 @@ mod tests {
                 .collect()
         };
         for k in [
-            "18", "108", "109", "110", "112", "113", "126", "127", "130", "134",
+            "18", "108", "109", "110", "112", "113", "126", "127", "130", "134", "141",
         ] {
             let Ok(size) = std::fs::read_to_string(format!("{dir}/{k}_size.txt")) else {
                 println!("{k}: no frame, skipped");

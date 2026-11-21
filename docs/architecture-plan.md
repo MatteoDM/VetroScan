@@ -2225,13 +2225,27 @@ then our runs.
    explains (the crosstalk's R², 0.10-0.28 on the nine colour films). Then: above a threshold set
    from that measure the removal does nothing and says so (in the log, and to the user), for
    every scanner.
+   **The control case, measured** (21 November 2026, Matteo at the scanner; 141-143 in
+   `captures/epson4490/05-catture.md`): a Kodak BW400CN (chromogenic: dyes) at 1200 dpi, Epson
+   Scan's ICE (141) and ours (142): the picture explains **R² 0.29** of the infrared (the colour
+   films 0.10-0.28): it behaves as a colour negative. Our removal on it: 1.6 % of the frame
+   changed, 183 pixels (0.01 %) by us alone: the picture is not taken for dust; 58 % of Epson's
+   changes made (colour negatives 96-98 %: what Epson changes and we do not are specks the
+   colours hardly show), the colours' shifts measured on the dust odd (up to 2.6 columns across,
+   ~0 on colour negatives) with three equal channels. So the silver threshold lies above 0.29;
+   a classic silver negative is still needed to set it.
 5. **B&W negatives, Epson Scan's own type**: captures 1200 dpi without ICE, then with ICE (does
    Epson Scan send another `1E 57` mode, grey, one channel? does it read infrared at all, and what
    does its ICE do to silver?). Then in the app a film kind "B&W negative" (no orange mask,
    developed to grey, its own base), generic in `scan_imaging::film` and the same for the HP
    3770; and, from the captures, whether the 4490 is asked differently for it (a capability if
    so). **Chromogenic B&W** (Ilford XP2, Kodak BW400CN; general knowledge: dyes, so ICE works):
-   a colour negative to the scanner, developed to grey; checked with ICE if Matteo has one.
+   a colour negative to the scanner, developed to grey; checked with ICE if Matteo has one:
+   **scanned with ICE** (141, 142: as above, item 4). **Epson Scan's "B&W negative" type**
+   (143, the same BW400CN, with ICE, which it offers): the scanner reads in **colour**, as for
+   a colour negative (mode `13`, three channels, 16 bits, the infrared pass the same), only the
+   `1E 57`'s film type `00` (as a slide) for `01`; the grey and the inversion are Epson Scan's,
+   on the computer; its TIFF RGB at 48 bits. So no new scanner mode for B&W: it is the app's.
 6. **B&W slides** (silver: Agfa Scala, Fomapan R, any B&W reversed; general knowledge): a
    positive to the scanner; no ICE (item 4's safety); developed to grey in the app's film kind;
    one scan of ours to check if Matteo has one.
