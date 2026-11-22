@@ -2858,6 +2858,79 @@ fn the_base_of_a_roll_is_locked_used_and_remembered() {
     );
 }
 
+/// Colour and black and white negatives are two films, with bases far apart (orange, near
+/// grey): switching between them forgets what was measured on the other (its preview, measures,
+/// frames and the last strip's base, which kept gave the colour frames a blue cast), and a
+/// roll's base locked on one is unlocked, saying so.
+#[test]
+fn switching_between_colour_and_bw_negatives_forgets_the_other_film() {
+    let lock = "Blocca la base dell'ultima striscia";
+    let (mut ui, _) = with_adapter();
+    ui.send(Message::Pane(crate::Pane::Scan));
+    ui.click("Pellicola");
+    ui.click("Anteprima");
+    assert!(ui.app.measures.is_some(), "{}", ui.app.note);
+    assert!(!ui.app.frames.is_empty() && !ui.app.shown_regions().is_empty());
+    let base = ui.app.strip_base.expect("the base between the frames");
+    ui.click(lock);
+    assert_eq!(ui.app.roll_base, Some(base));
+    // Black and white negatives in the holder: another film, another roll.
+    ui.send(Message::Holder(crate::Holder::BwNegatives));
+    assert!(ui.app.measures.is_none() && ui.app.preview.is_none());
+    assert!(ui.app.frames.is_empty() && ui.app.strips.is_empty());
+    assert!(ui.app.shown_regions().is_empty());
+    assert_eq!(ui.app.strip_base, None);
+    assert_eq!(ui.app.roll_base, None);
+    assert_eq!(ui.app.prefs().film.roll_base, None);
+    assert!(ui.app.note.contains("bianco e nero"), "{}", ui.app.note);
+    assert!(ui.app.note.contains("sbloccata"), "{}", ui.app.note);
+    assert!(ui.click_messages(lock).is_empty(), "nothing of it to lock");
+    // Its own preview: its own base.
+    ui.click("Anteprima");
+    assert!(ui.app.measures.is_some(), "{}", ui.app.note);
+    assert!(ui.app.strip_base.is_some());
+    // Colour again: forgotten again; nothing was locked, so nothing said of it.
+    ui.send(Message::Holder(crate::Holder::Negatives));
+    assert!(ui.app.measures.is_none() && ui.app.preview.is_none());
+    assert_eq!(ui.app.strip_base, None);
+    assert!(!ui.app.note.contains("sbloccata"), "{}", ui.app.note);
+}
+
+/// "Blocca la base dell'ultima striscia" locks only the strip just measured: a preview of a
+/// strip with no gap between its frames leaves no base to lock, not the one before's.
+#[test]
+fn a_strip_without_gaps_leaves_no_base_to_lock() {
+    let lock = "Blocca la base dell'ultima striscia";
+    let (mut ui, controls) = with_slides();
+    controls.load(scanner_api::fake::Holder::Strip);
+    ui.send(Message::Pane(crate::Pane::Scan));
+    ui.click("Pellicola");
+    assert_eq!(ui.app.film_kind(), scan_imaging::film::Film::Negative);
+    ui.click("Anteprima");
+    assert!(ui.app.strip_base.is_some(), "{}", ui.app.note);
+    assert!(!ui.click_messages(lock).is_empty());
+    // The slides' mounts read as negatives: no bare film between frames.
+    controls.load(scanner_api::fake::Holder::Slides);
+    ui.click("Anteprima");
+    assert_eq!(ui.app.strip_base, None, "{}", ui.app.note);
+    assert!(ui.click_messages(lock).is_empty());
+    // "Senza elaborazioni": the strip seen, not measured, no base either.
+    controls.load(scanner_api::fake::Holder::Strip);
+    ui.click("Anteprima");
+    assert!(ui.app.strip_base.is_some(), "{}", ui.app.note);
+    assert!(ui.app.measures.is_some());
+    ui.send(Message::Untouched(true));
+    ui.click("Anteprima");
+    assert_eq!(ui.app.strip_base, None);
+    // Nor the strip before's measures, which a scan developed after would use.
+    assert!(ui.app.measures.is_none() && ui.app.frames.is_empty());
+    assert!(
+        !ui.app.note.contains("nessuna pellicola"),
+        "{}",
+        ui.app.note
+    );
+}
+
 /// The made-up flatbed whose adapter takes slides and negatives, two
 /// slides in its holder, and the handle on it.
 fn with_slides() -> (Ui, scanner_api::fake::Controls) {

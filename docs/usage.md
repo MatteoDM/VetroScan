@@ -120,7 +120,9 @@ VetroScan scans both **negatives** and **slides** with it:
    an adapter that takes them; VetroScan remembers it). **B&W negatives** are scanned as
    negatives and made grey: the colour becomes **Grey** by itself, and **Colour** again with
    **Negatives**. A chromogenic black and white film (Kodak BW400CN, Ilford XP2, developed as
-   colour film) is one of these, with Digital ICE where the scanner has it;
+   colour film) is one of these, with Digital ICE where the scanner has it. Choosing another
+   film is choosing another roll: the preview and what was measured on it go (the photos
+   scanned stay), and a roll's base locked is unlocked, so make a new preview after the switch;
 3. **Preview**: the whole holder at the lowest resolution the adapter scans at (600 dpi on
    the HP 3770 and on the Epson 4490). The negatives are shown as positives with their natural
    colours (slides are positives already: they are only stretched to the full range, one black
@@ -212,7 +214,9 @@ follow the scenes. It matters most for a strip with a single frame, or with no g
 without a locked base its base is guessed from the darkest shadows of the picture, and on
 real negatives that gave casts of up to 12-16 levels of 255 in one colour; with the roll's
 base, one or two. VetroScan remembers the base locked, even after closing; for another film
-press **New roll** and each strip measures its own again.
+press **New roll** and each strip measures its own again. **Lock the base of the last strip**
+locks only the strip just previewed or scanned whole: if it showed no gap between its frames
+there is no base to lock (the button is greyed), never the base of a strip seen before.
 
 **Take care:**
 

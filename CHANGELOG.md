@@ -17,6 +17,17 @@ GitHub; here they are in English.
 
 ## [Unreleased]
 
+### Fixed
+- Switching between **Negatives** and **B&W negatives** kept the preview, its measures and
+  the base of the strip measured as the other film: a colour negative developed on a black and
+  white strip's base came out with a strong blue cast, and the frames found could be the other
+  strip's. Choosing another film now forgets them, as switching to slides already did, and
+  unlocks a roll's base locked on the other film, saying so.
+- **Lock the base of the last strip** could lock an older strip's base when the last one
+  previewed showed no gap between its frames, or was previewed with **No processing**: there is
+  now no base to lock then. A preview with **No processing** also forgets the measures of the
+  strip previewed before, which a scan made after turning it off used to develop with.
+
 ## [0.11.3] - 2026-11-21
 
 ### Changed

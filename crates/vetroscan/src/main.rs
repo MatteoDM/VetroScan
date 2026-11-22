@@ -2452,6 +2452,11 @@ struct Developed {
     measures: Option<Measures>,
     /// For negatives, the base found between its frames.
     gaps: Option<[f32; 3]>,
+    /// For negatives, the strip's base measured on this scan itself (not
+    /// with the preview's measures, nor an area drawn by hand, nor a roll's
+    /// base locked): `gaps` is then the last strip's base, or none if it
+    /// showed no gap.
+    own_strip: bool,
     /// For negatives, each strip's own measures, in pixels of this scan:
     /// strips side by side may be of different rolls (their bases).
     strips: StripMeasures,
@@ -2555,7 +2560,8 @@ struct App {
     /// highlights and black stay their own). None: each strip its own.
     roll_base: Option<[f32; 3]>,
     /// The base measured in the gaps between the frames of the last strip
-    /// developed, what "Blocca la base" locks.
+    /// measured, what "Blocca la base" locks: none when that strip showed
+    /// no gap, never an older strip's.
     strip_base: Option<[f32; 3]>,
     /// "Pellicola" was chosen with the adapter not plugged in, as last
     /// heard: switch when the scanner's state says it is.
@@ -3233,11 +3239,14 @@ impl App {
         self.caps.offers(Source::Negative) || self.caps.offers(Source::Slide)
     }
 
-    /// "Negativi", "Negativi B/N" or "Diapositive" chosen. Between negatives and slides the
-    /// measures, frames found and the preview were of the other film: they go (the areas drawn
-    /// by hand and the photos scanned stay). Black and white negatives are read as negatives and
-    /// made grey: the film's colour becomes "Grigio", and "Colore" again when colour negatives
-    /// come back. Not during a scan.
+    /// "Negativi", "Negativi B/N" or "Diapositive" chosen: another film, so the measures, the
+    /// frames found and the preview, which were of the one before, go (the areas drawn by hand
+    /// and the photos scanned stay); between colour and black and white negatives too, whose
+    /// bases differ (the orange of a colour film against the near grey of a black and white
+    /// one: kept, the base of one made the other's pictures cast). Another film is another roll:
+    /// the last strip's base goes, and the roll's, if locked, is unlocked. Black and white
+    /// negatives are read as negatives and made grey: the film's colour becomes "Grigio", and
+    /// "Colore" again when colour negatives come back. Not during a scan.
     fn set_holder(&mut self, holder: Holder) {
         let slides = holder == Holder::Slides;
         let bw = holder == Holder::BwNegatives;
@@ -3250,6 +3259,9 @@ impl App {
             self.film_settings.colour = Colour::Rgb;
         }
         self.bw = bw;
+        self.slides = slides;
+        self.strip_base = None;
+        let unlocked = self.roll_base.take().is_some();
         let note = match (slides, bw) {
             (true, _) => tr("Diapositive nel supporto: ognuna diventa un'immagine"),
             (false, true) => {
@@ -3257,13 +3269,14 @@ impl App {
             }
             (false, false) => tr("Negativi nel supporto: ogni fotogramma diventa un'immagine"),
         };
-        if self.slides == slides {
-            if self.filming() {
-                self.note = note.into();
-            }
-            return;
-        }
-        self.slides = slides;
+        let note = if unlocked {
+            trf(
+                "{note} · base del rullino sbloccata: è un'altra pellicola",
+                &[("note", &note)],
+            )
+        } else {
+            note.into()
+        };
         if !self.filming() {
             return;
         }
@@ -3274,7 +3287,7 @@ impl App {
         self.film_preview = None;
         // The preview showed the other film, developed as such.
         self.preview = None;
-        self.note = note.into();
+        self.note = note;
     }
 
     /// "Negativi", "Negativi B/N" and, for an adapter that takes them too, "Diapositive".
@@ -3429,6 +3442,9 @@ impl App {
         let own = own_base
             .filter(|_| film == Film::Negative)
             .and_then(|b| film::Negative::measure(&deep, Some(b)));
+        // A roll's base locked: the strip's own is not measured.
+        let own_strip =
+            own_base.is_none() && measured.is_none() && roll.is_none() && film == Film::Negative;
         let (measures, gaps, strips, frames) = match (own, measured, film) {
             (Some(n), ..) => (Some(Measures::Negative(n)), None, Vec::new(), Vec::new()),
             (None, Some(m), _) => (Some(m), None, Vec::new(), frames.to_vec()),
@@ -3463,6 +3479,7 @@ impl App {
                 deep: samples16,
                 measures: None,
                 gaps: None,
+                own_strip,
                 strips: Vec::new(),
                 frames: Vec::new(),
             };
@@ -3491,6 +3508,7 @@ impl App {
             deep: Some(positive),
             measures: Some(m),
             gaps,
+            own_strip,
             strips,
             frames,
         }
@@ -6603,7 +6621,14 @@ impl App {
                 let film = self.filming();
                 let kind = self.film_kind();
                 let transmission = film.then(|| at_dpi(image.clone(), PREVIEW_DPI));
-                let (image, samples16) = if film && self.settings().untouched {
+                let untouched = film && self.settings().untouched;
+                let (image, samples16) = if untouched {
+                    // A strip seen but not measured: none of the strip
+                    // before's measures, nor a base of it to lock.
+                    self.measures = None;
+                    self.strips.clear();
+                    self.frames.clear();
+                    self.strip_base = None;
                     Self::plain(kind, image, samples16, self.settings().keep_negative)
                 } else if film {
                     let dpi = image.dpi;
@@ -6627,7 +6652,9 @@ impl App {
                     };
                     self.strips = on_bed(d.strips);
                     self.frames = on_bed(d.frames);
-                    if d.gaps.is_some() {
+                    // The last strip measured: its base, or none if it
+                    // showed no gap (never an older strip's).
+                    if d.own_strip {
                         self.strip_base = d.gaps;
                     }
                     (d.picture, d.deep)
@@ -6658,10 +6685,10 @@ impl App {
                 self.tab = Tab::Preview;
                 let n = if self.settings().auto_crop { n } else { 0 };
                 self.note = match (film, self.measures) {
-                    (true, None) => {
+                    (true, None) if !untouched => {
                         tr("Anteprima pronta: nessuna pellicola riconosciuta nel supporto").into()
                     }
-                    (true, Some(_)) => Self::frames_note(n),
+                    (true, _) => Self::frames_note(n),
                     (false, _) => Self::found_note(n),
                 };
             }
@@ -6747,7 +6774,9 @@ impl App {
                         correction,
                         colour_noise,
                     );
-                    if d.gaps.is_some() {
+                    // The last strip measured: its base, or none if it
+                    // showed no gap (never an older strip's).
+                    if d.own_strip {
                         self.strip_base = d.gaps;
                     }
                     (d.picture, d.deep)
