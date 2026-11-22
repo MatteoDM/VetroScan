@@ -257,7 +257,8 @@ The same in Document, Photo and Film: on the preview there can be **several area
   the list of the **Scan** tab, removes that one.
 - With the **keyboard**: the arrows move the area chosen by 1 mm (**Shift** 10 mm, **Alt** a
   pixel of the preview, 0.13 mm); **Ctrl** + arrows change its size, from the right and bottom
-  edges; **Home** puts it in the middle of the glass. It stops at the edges of the glass.
+  edges (along its angle, for a turned area); **Home** puts it in the middle of the glass. It
+  stops at the edges of the glass (a turned area may stick out of it, its centre stays on it).
 - **Tilt** (−1°, −0.1°, +0.1°, +1°, **Upright**), in the **Scan** tab, turns the area chosen:
   the image is cut out at that angle and straightened. A turned area is drawn at its angle,
   with its handles, and the handles move its sides along it.

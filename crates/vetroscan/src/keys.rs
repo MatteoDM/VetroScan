@@ -117,8 +117,10 @@ fn moved(s: Selection, m: Move, d: f32, (w, h): (f32, f32), least: f32) -> Selec
             size: false,
             ..
         } => {
-            let mx = (f32::from(dx) * d).clamp(-l, (w - r).max(-l));
-            let my = (f32::from(dy) * d).clamp(-t, (h - b).max(-t));
+            // No further off, but no jump back on either (a turned area
+            // may stick out).
+            let mx = (f32::from(dx) * d).clamp((-l).min(0.0), (w - r).max(0.0));
+            let my = (f32::from(dy) * d).clamp((-t).min(0.0), (h - b).max(0.0));
             Selection {
                 x: l + mx,
                 y: t + my,
@@ -350,7 +352,16 @@ impl App {
             Move::By { step, .. } => step.mm(1.0 / per_mm) * per_mm,
             Move::Centre => 0.0,
         };
-        let new = moved(s, m, d, (glass.width, glass.height), 4.0);
+        let angle = self.chosen_angle();
+        let new = match m {
+            // A turned area grows along its angle, as its handles move it.
+            Move::By {
+                dx, dy, size: true, ..
+            } if angle != 0.0 => {
+                crate::areas::grown(s, angle, f32::from(dx) * d, f32::from(dy) * d, 4.0, glass)
+            }
+            _ => moved(s, m, d, (glass.width, glass.height), 4.0),
+        };
         (new != s).then_some(Message::Select(Some(new)))
     }
 
@@ -466,5 +477,17 @@ mod tests {
         // Home: in the middle.
         let c = moved(s, Move::Centre, 0.0, (100.0, 50.0), 2.0);
         assert_eq!((c.x, c.y), (45.0, 20.0));
+        // Sticking out on the left (a turned area): no jump back on.
+        let out = Selection { x: -3.0, ..s };
+        let up = moved(out, by(0, -1, false), 1.0, (100.0, 100.0), 2.0);
+        assert_eq!((up.x, up.y), (-3.0, 4.0));
+        assert_eq!(
+            moved(out, by(-1, 0, false), 1.0, (100.0, 100.0), 2.0).x,
+            -3.0
+        );
+        assert_eq!(
+            moved(out, by(1, 0, false), 1.0, (100.0, 100.0), 2.0).x,
+            -2.0
+        );
     }
 }

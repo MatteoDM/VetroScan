@@ -178,6 +178,11 @@ impl Ui {
         self.settle();
     }
 
+    /// The area chosen on the preview.
+    fn regions_chosen(&self) -> scan_imaging::detect::Found {
+        self.app.regions[self.app.chosen.expect("an area chosen")].at
+    }
+
     /// Presses a key (as the keyboard subscription would deliver it).
     fn key(&mut self, key: iced::keyboard::key::Named) {
         let iced::Event::Keyboard(event) = iced_test::simulator::press_key(key, None) else {
@@ -3674,6 +3679,37 @@ fn the_area_to_scan_moves_and_grows_from_the_keyboard() {
         arrow(&mut ui, Named::ArrowLeft, CTRL | SHIFT);
     }
     assert!(ui.app.chosen_rect().unwrap().width >= 4.0);
+}
+
+/// Ctrl + arrows grow a turned area along its angle, as its handles do:
+/// its top left corner stays where it is.
+#[test]
+fn a_turned_area_grows_along_its_angle_from_the_keyboard() {
+    use crate::areas::AreaMsg;
+    use crate::viewer::Selection;
+    use iced::keyboard::key::Named;
+    let mut ui = Ui::new();
+    ui.click("Anteprima");
+    ui.send(Message::Select(Some(Selection {
+        x: 300.0,
+        y: 300.0,
+        width: 400.0,
+        height: 300.0,
+    })));
+    for _ in 0..3 {
+        ui.send(Message::Area(AreaMsg::Tilt(10.0)));
+    }
+    let before = ui.regions_chosen();
+    assert_eq!(before.angle, 30.0);
+    arrow(&mut ui, Named::ArrowRight, CTRL | SHIFT);
+    arrow(&mut ui, Named::ArrowDown, CTRL);
+    let after = ui.regions_chosen();
+    let mm = 200.0 / 25.4;
+    assert!(near(after.width, 400.0 + 10.0 * mm), "{after:?}");
+    assert!(near(after.height, 300.0 + mm), "{after:?}");
+    assert_eq!(after.angle, 30.0);
+    let ([a, ..], [b, ..]) = (before.corners(), after.corners());
+    assert!(near(a[0], b[0]) && near(a[1], b[1]), "{a:?} → {b:?}");
 }
 
 #[test]

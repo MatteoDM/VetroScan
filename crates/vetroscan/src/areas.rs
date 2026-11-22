@@ -15,7 +15,7 @@ use crate::i18n::{tr, trf};
 use crate::viewer::Selection;
 use crate::{heading, App, Job, Kind, Message, MmField, Tab, PREVIEW_DPI};
 use iced::widget::{button, checkbox, row, text, Column};
-use iced::{Alignment, Length};
+use iced::{Alignment, Length, Size};
 use scan_imaging::detect::Found;
 
 /// The smallest side of an area, millimetres: below it an area drawn by a
@@ -81,6 +81,28 @@ pub fn resized(f: Found, s: Selection, k: f32) -> Found {
         width: s.width / k,
         height: s.height / k,
         angle: f.angle,
+    }
+}
+
+/// `s` (as if upright, turned by `angle` degrees around its centre)
+/// widened by `dw` and heightened by `dh` from its right and bottom sides,
+/// along its angle, as Ctrl + arrows do: its left and top sides stay where
+/// they are (unless its centre would leave the glass, where it stays), no
+/// side gets shorter than `least` nor longer than `glass` (unless it
+/// already was).
+pub fn grown(s: Selection, angle: f32, dw: f32, dh: f32, least: f32, glass: Size) -> Selection {
+    let width = (s.width + dw).clamp(least.min(s.width), glass.width.max(s.width));
+    let height = (s.height + dh).clamp(least.min(s.height), glass.height.max(s.height));
+    // The centre goes half the way, along the sides.
+    let (u, v) = ((width - s.width) / 2.0, (height - s.height) / 2.0);
+    let (sin, cos) = angle.to_radians().sin_cos();
+    let cx = (s.x + s.width / 2.0 + u * cos - v * sin).clamp(0.0, glass.width);
+    let cy = (s.y + s.height / 2.0 + u * sin + v * cos).clamp(0.0, glass.height);
+    Selection {
+        x: cx - width / 2.0,
+        y: cy - height / 2.0,
+        width,
+        height,
     }
 }
 
@@ -535,5 +557,64 @@ impl App {
     /// Whether the keys move an area on the preview.
     pub fn moving_area(&self) -> bool {
         self.tab == Tab::Preview && self.chosen_shown().is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const S: Selection = Selection {
+        x: 100.0,
+        y: 200.0,
+        width: 300.0,
+        height: 150.0,
+    };
+    const GLASS: Size = Size::new(1000.0, 1000.0);
+
+    fn top_left(s: Selection, angle: f32) -> [f32; 2] {
+        let f = resized(
+            Found {
+                cx: 0.0,
+                cy: 0.0,
+                width: 0.0,
+                height: 0.0,
+                angle,
+            },
+            s,
+            1.0,
+        );
+        f.corners()[0]
+    }
+
+    #[test]
+    fn a_turned_area_grows_from_its_right_and_bottom_sides() {
+        for angle in [0.0, 7.5, -30.0, 45.0] {
+            let g = grown(S, angle, 20.0, -10.0, 4.0, GLASS);
+            assert!((g.width - 320.0).abs() < 1e-3 && (g.height - 140.0).abs() < 1e-3);
+            let (a, b) = (top_left(S, angle), top_left(g, angle));
+            assert!(
+                (a[0] - b[0]).abs() < 1e-3 && (a[1] - b[1]).abs() < 1e-3,
+                "{angle}: {a:?} → {b:?}"
+            );
+        }
+        // Upright, as the arrows always did.
+        let g = grown(S, 0.0, 20.0, 5.0, 4.0, GLASS);
+        assert_eq!((g.x, g.y, g.width, g.height), (100.0, 200.0, 320.0, 155.0));
+    }
+
+    #[test]
+    fn a_turned_area_grows_within_its_bounds() {
+        let g = grown(S, 20.0, -1000.0, 0.0, 4.0, GLASS);
+        assert_eq!(g.width, 4.0);
+        // Already below the least size: it stays.
+        let thin = Selection { width: 2.0, ..S };
+        assert_eq!(grown(thin, 20.0, -1.0, 0.0, 4.0, GLASS).width, 2.0);
+        let g = grown(S, 20.0, 5000.0, 5000.0, 4.0, GLASS);
+        assert_eq!((g.width, g.height), (1000.0, 1000.0));
+        assert!((0.0..=1000.0).contains(&(g.x + g.width / 2.0)));
+        // Already larger than the glass: no smaller for a press that grows.
+        let wide = Selection { width: 1200.0, ..S };
+        assert_eq!(grown(wide, 20.0, 10.0, 0.0, 4.0, GLASS).width, 1200.0);
     }
 }
