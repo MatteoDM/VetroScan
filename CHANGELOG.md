@@ -18,6 +18,10 @@ GitHub; here they are in English.
 ## [Unreleased]
 
 ### Fixed
+- On macOS the Epson Perfection 4490 was listed but could not be opened ("interface not
+  found"): macOS leaves a device of its kind unconfigured when no driver of the system takes
+  it. The app now sets its configuration before taking it, as Linux and Windows do by
+  themselves when it is plugged in.
 - An area turned on the preview (an original found askew, or one turned with **Tilt**) and in
   **Split** showed, besides its outline at its angle, a second frame upright with the handles
   and the shade, which was the one the handles moved. The area chosen is now drawn only at its

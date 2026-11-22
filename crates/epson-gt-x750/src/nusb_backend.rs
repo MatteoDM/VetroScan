@@ -79,6 +79,7 @@ impl NusbTransport {
             .open()
             .wait()
             .map_err(|e| err("opening the device", e))?;
+        configure(&device)?;
         let interface = device
             .claim_interface(INTERFACE)
             .wait()
@@ -112,6 +113,36 @@ impl NusbTransport {
             location: location.to_owned(),
         })
     }
+}
+
+/// Sets the scanner's configuration if no one has. Linux and Windows set it when the scanner is
+/// plugged in; macOS sets none on a device of vendor class (`FF`, as the 4490 is) that no driver
+/// of the system takes, and its interface 0 is not there to claim until one is set (seen on
+/// 22 November 2026: configuration 0, no interface, then `SET_CONFIGURATION 1` and the
+/// interface was claimed). The request is the one every system sends at plugging in.
+#[cfg(not(windows))]
+fn configure(device: &nusb::Device) -> Result<()> {
+    if device.active_configuration().is_ok() {
+        return Ok(());
+    }
+    let value = device
+        .configurations()
+        .next()
+        .map(|c| c.configuration_value())
+        .ok_or_else(|| Error::Other("the scanner declares no configuration".into()))?;
+    device.set_configuration(value).wait().map_err(|e| {
+        err(
+            &format!("setting configuration {value} (is another program using the scanner?)"),
+            e,
+        )
+    })
+}
+
+/// On Windows the driver bound to the scanner (WinUSB) has set its configuration, and WinUSB
+/// cannot set one: a scanner without it fails at the claim, which says why.
+#[cfg(windows)]
+fn configure(_device: &nusb::Device) -> Result<()> {
+    Ok(())
 }
 
 impl Transport for NusbTransport {
