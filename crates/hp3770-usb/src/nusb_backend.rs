@@ -72,6 +72,43 @@ fn note(_d: &DeviceInfo) -> Option<String> {
     None
 }
 
+/// Claims interface 0 of a scanner that no one has configured, after setting its only
+/// configuration; `None` if it has one, and the claim's own error stands. Asked only when the
+/// claim failed: a scanner that opens keeps the path it always had. Linux and Windows configure
+/// it at plugging in, and so did the Mac it was tried on (22 November 2026), but macOS sets none
+/// on a device of vendor class that no driver of the system takes, as it did with the Epson
+/// 4490: this is the same request, a fallback for a Mac that does so with the 3770.
+#[cfg(not(windows))]
+fn claim_unconfigured(device: &nusb::Device) -> Option<Result<Interface>> {
+    if device.active_configuration().is_ok() {
+        return None;
+    }
+    let value = device.configurations().next()?.configuration_value();
+    let claimed = device
+        .set_configuration(value)
+        .wait()
+        .map_err(|e| {
+            err(
+                &format!("setting configuration {value} (is another program using the scanner?)"),
+                e,
+            )
+        })
+        .and_then(|()| {
+            device
+                .claim_interface(INTERFACE)
+                .wait()
+                .map_err(|e| err("claiming interface 0 after setting the configuration", e))
+        });
+    Some(claimed)
+}
+
+/// On Windows the driver bound to the scanner (WinUSB) has set its configuration, and WinUSB
+/// cannot set one: the claim's error stands.
+#[cfg(windows)]
+fn claim_unconfigured(_device: &nusb::Device) -> Option<Result<Interface>> {
+    None
+}
+
 fn control_type(setup: SetupPacket) -> Result<(ControlType, Recipient)> {
     let ty = match (setup.request_type >> 5) & 0x03 {
         0 => ControlType::Standard,
@@ -128,10 +165,13 @@ impl NusbScanner {
             .open()
             .wait()
             .map_err(|e| err("opening the device", e))?;
-        let interface = device
-            .claim_interface(INTERFACE)
-            .wait()
-            .map_err(|e| err("claiming interface 0", e))?;
+        let interface = match device.claim_interface(INTERFACE).wait() {
+            Ok(interface) => interface,
+            Err(e) => match claim_unconfigured(&device) {
+                Some(claimed) => claimed?,
+                None => return Err(err("claiming interface 0", e)),
+            },
+        };
         let bulk_in = interface
             .endpoint::<Bulk, In>(EP_BULK_IN)
             .map_err(|e| err("bulk IN endpoint", e))?;
