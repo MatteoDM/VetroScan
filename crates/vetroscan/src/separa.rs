@@ -5,9 +5,8 @@
 //!
 //! An area is chosen with a click and moved or resized with the handles
 //! of the viewer; one is added by dragging on an empty part, one left out
-//! from the panel. The handles move the sides as if the area were
-//! upright; its outline shows the cut, at its angle, which the panel
-//! changes.
+//! from the panel. The area chosen is drawn at its angle, which the panel
+//! changes, and its handles move its sides along it.
 
 use crate::i18n::{tr, trf};
 use crate::viewer::{self, Picture, Selection};
@@ -54,8 +53,8 @@ impl Separating {
             .collect()
     }
 
-    /// The area chosen as the viewer edits it: upright, around its centre,
-    /// in pixels of the scan.
+    /// The area chosen as the viewer edits it: as if upright, around its
+    /// centre, in pixels of the scan (the viewer turns it by its angle).
     fn selection(&self) -> Option<Selection> {
         let f = self.found.get(self.chosen?)?;
         Some(Selection {
@@ -261,6 +260,9 @@ impl App {
             "",
             self.result_view,
             sep.selection(),
+            sep.chosen
+                .and_then(|i| sep.found.get(i))
+                .map_or(0.0, |f| f.angle),
             sep.found
                 .iter()
                 .map(|f| f.scaled(sep.k, 0.0, 0.0).corners())

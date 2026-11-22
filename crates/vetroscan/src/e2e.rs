@@ -2021,6 +2021,8 @@ fn foto_the_originals_found_are_corrected_and_one_drawn_is_added() {
         "{}",
         turned.angle
     );
+    // The viewer draws and moves it at its angle, not upright.
+    assert_eq!(ui.app.chosen_angle(), turned.angle);
     // One drawn where nothing was found (the lid below the photos).
     ui.send(Message::Select(None));
     let drawn = Selection {

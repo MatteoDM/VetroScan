@@ -18,6 +18,10 @@ GitHub; here they are in English.
 ## [Unreleased]
 
 ### Fixed
+- An area turned on the preview (an original found askew, or one turned with **Tilt**) and in
+  **Split** showed, besides its outline at its angle, a second frame upright with the handles
+  and the shade, which was the one the handles moved. The area chosen is now drawn only at its
+  angle, handles and shade included, and the handles move its sides along it.
 - Switching between **Negatives** and **B&W negatives** kept the preview, its measures and
   the base of the strip measured as the other film: a colour negative developed on a black and
   white strip's base came out with a strong blue cast, and the frames found could be the other

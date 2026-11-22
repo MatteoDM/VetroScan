@@ -7645,6 +7645,7 @@ impl App {
                     },
                     self.preview_view,
                     self.chosen_rect(),
+                    self.chosen_angle(),
                     self.shown_regions()
                         .iter()
                         .map(|r| r.at.corners())
@@ -7705,6 +7706,7 @@ impl App {
                     tr("Nessuna scansione: premi «Scansiona»"),
                     self.result_view,
                     self.crop_selection(),
+                    0.0,
                     Vec::new(),
                     Message::View,
                     self.cropping()

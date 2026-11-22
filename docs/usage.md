@@ -259,7 +259,8 @@ The same in Document, Photo and Film: on the preview there can be **several area
   pixel of the preview, 0.13 mm); **Ctrl** + arrows change its size, from the right and bottom
   edges; **Home** puts it in the middle of the glass. It stops at the edges of the glass.
 - **Tilt** (−1°, −0.1°, +0.1°, +1°, **Upright**), in the **Scan** tab, turns the area chosen:
-  the image is cut out at that angle and straightened.
+  the image is cut out at that angle and straightened. A turned area is drawn at its angle,
+  with its handles, and the handles move its sides along it.
 
 The **Scan** tab lists the areas with their size, and for the area chosen says where it starts
 and how large it is, in millimetres (**From the left**, **From the top**, **Width**,
@@ -559,7 +560,7 @@ and the panel lists them, to correct first:
 - **drag** on an empty spot to add an area the app did not see;
 - **Leave out** (or **Delete** on the area chosen) leaves one out;
 - **Tilt** turns the area chosen by 0.1° or 1° at a time, **Upright** puts it straight
-  (the handles move its sides as if it were upright; its outline shows the cut);
+  (the area is drawn at its angle, and its handles move its sides along it);
 - **Find again** goes back to the areas found by the app.
 
 **Split into N** (or **Enter**) cuts them out, each a picture of its own in the place of the

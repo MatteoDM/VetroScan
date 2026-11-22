@@ -55,7 +55,8 @@ impl Region {
         !self.auto && self.at.angle == 0.0
     }
 
-    /// The area as the handles move it: upright, around its centre.
+    /// The area as the viewer's handles move it: as if upright, around its
+    /// centre (the viewer turns it by its angle).
     pub fn rect(&self) -> Selection {
         upright(&self.at, 1.0)
     }
@@ -167,6 +168,14 @@ impl App {
     /// The area chosen, upright, as the viewer's handles move it.
     pub fn chosen_rect(&self) -> Option<Selection> {
         self.regions.get(self.chosen_shown()?).map(Region::rect)
+    }
+
+    /// The turn of the area chosen, degrees (0 when none is chosen): the
+    /// viewer draws it and moves its sides at this angle.
+    pub fn chosen_angle(&self) -> f32 {
+        self.chosen_shown()
+            .and_then(|c| self.regions.get(c))
+            .map_or(0.0, |r| r.at.angle)
     }
 
     /// The area chosen, to change, while it is shown.

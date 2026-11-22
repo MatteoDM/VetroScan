@@ -12,6 +12,10 @@
 //! Mouse: wheel zooms on the pointer, right or middle button drags the
 //! image, left button draws the selection (where selecting is allowed,
 //! else it drags too).
+//!
+//! A selection may be turned (an original laid askew on the glass): its
+//! outline, handles and shade are drawn at its angle, and its handles move
+//! its sides along it.
 
 use iced::mouse;
 use iced::widget::canvas::{self, Action, Event, Frame, Geometry, Path, Stroke};
@@ -174,6 +178,7 @@ pub fn viewer<'a, Message: Clone + 'a>(
     hint: &'a str,
     view: View,
     selection: Option<Selection>,
+    angle: f32,
     marks: Vec<[[f32; 2]; 4]>,
     on_view: fn(View) -> Message,
     on_select: Option<fn(Option<Selection>) -> Message>,
@@ -195,6 +200,7 @@ pub fn viewer<'a, Message: Clone + 'a>(
         size,
         view,
         selection,
+        angle,
         marks,
         on_view,
         on_select,
@@ -256,7 +262,11 @@ impl<Message> canvas::Program<Message> for ImageLayer<'_> {
 struct Overlay<Message> {
     size: Size,
     view: View,
+    /// The selection as if it were upright, around its centre.
     selection: Option<Selection>,
+    /// The selection's turn around its centre, degrees clockwise on screen
+    /// (as [`scan_imaging::detect::Found::angle`]).
+    angle: f32,
     /// Originals found on the glass (corners in image pixels), numbered.
     marks: Vec<[[f32; 2]; 4]>,
     on_view: fn(View) -> Message,
@@ -314,6 +324,110 @@ fn handles(r: Rectangle) -> [(Point, Grip); 8] {
     ]
 }
 
+/// `p` turned by `angle` degrees (clockwise on screen) around `c`.
+fn turned(p: Point, c: Point, angle: f32) -> Point {
+    if angle == 0.0 {
+        return p;
+    }
+    let (sin, cos) = angle.to_radians().sin_cos();
+    let (dx, dy) = (p.x - c.x, p.y - c.y);
+    Point::new(c.x + dx * cos - dy * sin, c.y + dx * sin + dy * cos)
+}
+
+/// The part of a convex outline inside `r` (Sutherland–Hodgman).
+fn clipped(outline: &[Point], r: Rectangle) -> Vec<Point> {
+    // How far inside each side of `r` a point is.
+    let sides: [&dyn Fn(Point) -> f32; 4] = [
+        &|p| p.x - r.x,
+        &|p| r.x + r.width - p.x,
+        &|p| p.y - r.y,
+        &|p| r.y + r.height - p.y,
+    ];
+    let mut out = outline.to_vec();
+    for inside in sides {
+        let points = std::mem::take(&mut out);
+        for (i, &a) in points.iter().enumerate() {
+            let b = points[(i + 1) % points.len()];
+            let (da, db) = (inside(a), inside(b));
+            if da >= 0.0 {
+                out.push(a);
+            }
+            if (da >= 0.0) != (db >= 0.0) {
+                let t = da / (da - db);
+                out.push(Point::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t));
+            }
+        }
+    }
+    out
+}
+
+/// Selection `s` (as if upright, turned by `angle` around its centre)
+/// moved or resized by `grip` dragged by (`dx`, `dy`) image pixels, within
+/// an image of `size`: a turned one's sides move along its angle, its
+/// centre stays on the image and its sides no longer than the image's.
+fn edited(grip: Grip, s: Selection, dx: f32, dy: f32, angle: f32, size: Size) -> Selection {
+    let (w, h) = (size.width, size.height);
+    let (mut l, mut t, mut r, mut b) = (s.x, s.y, s.x + s.width, s.y + s.height);
+    match grip {
+        Grip::Move => {
+            // No further off the image, but no jump back onto it either (a
+            // turned area may stick out of it).
+            let dx = dx.clamp((-l).min(0.0), (w - r).max(0.0));
+            let dy = dy.clamp((-t).min(0.0), (h - b).max(0.0));
+            l += dx;
+            r += dx;
+            t += dy;
+            b += dy;
+        }
+        Grip::Edges(el, et, er, eb) if angle != 0.0 => {
+            // The drag along the selection's sides.
+            let (sin, cos) = angle.to_radians().sin_cos();
+            let du = dx * cos + dy * sin;
+            let dv = -dx * sin + dy * cos;
+            let (hw, hh) = (s.width / 2.0, s.height / 2.0);
+            let (mut l2, mut t2, mut r2, mut b2) = (-hw, -hh, hw, hh);
+            // The side taken no farther from the opposite one than the
+            // image is long, which stays where it is.
+            if el {
+                l2 = (l2 + du).clamp(r2 - w, r2 + w);
+            }
+            if et {
+                t2 = (t2 + dv).clamp(b2 - h, b2 + h);
+            }
+            if er {
+                r2 = (r2 + du).clamp(l2 - w, l2 + w);
+            }
+            if eb {
+                b2 = (b2 + dv).clamp(t2 - h, t2 + h);
+            }
+            let c = Point::new(s.x + hw, s.y + hh);
+            let mid = turned(
+                Point::new(c.x + (l2 + r2) / 2.0, c.y + (t2 + b2) / 2.0),
+                c,
+                angle,
+            );
+            let mid = Point::new(mid.x.clamp(0.0, w), mid.y.clamp(0.0, h));
+            let (hw, hh) = ((r2 - l2).abs() / 2.0, (b2 - t2).abs() / 2.0);
+            (l, t, r, b) = (mid.x - hw, mid.y - hh, mid.x + hw, mid.y + hh);
+        }
+        Grip::Edges(el, et, er, eb) => {
+            if el {
+                l = (l + dx).clamp(0.0, w);
+            }
+            if et {
+                t = (t + dy).clamp(0.0, h);
+            }
+            if er {
+                r = (r + dx).clamp(0.0, w);
+            }
+            if eb {
+                b = (b + dy).clamp(0.0, h);
+            }
+        }
+    }
+    Selection::from_corners(Point::new(l, t), Point::new(r, b))
+}
+
 impl<Message> Overlay<Message> {
     /// The selection on screen.
     fn selection_rect(&self, bounds: Size) -> Option<Rectangle> {
@@ -330,6 +444,8 @@ impl<Message> Overlay<Message> {
     /// Which part of the selection is under a canvas point.
     fn grip_at(&self, bounds: Size, p: Point) -> Option<Grip> {
         let r = self.selection_rect(bounds)?;
+        // Seen from the selection, upright.
+        let p = turned(p, r.center(), -self.angle);
         for (at, grip) in handles(r) {
             if (p.x - at.x).abs() <= HANDLE && (p.y - at.y).abs() <= HANDLE {
                 return Some(grip);
@@ -415,16 +531,18 @@ impl<Message> canvas::Program<Message> for Overlay<Message> {
                 }
                 match (button, self.on_select) {
                     (mouse::Button::Left, Some(on_select)) => {
-                        let (rect, _) = self.view.placement(size, self.size);
-                        if !rect.contains(p) {
-                            return None;
-                        }
                         let start = self.image_point(size, p);
+                        // A handle is taken also where it lies off the image
+                        // (a turned area's corner).
                         if let (Some(grip), Some(selection)) =
                             (self.grip_at(size, p), self.selection)
                         {
                             *drag = Drag::Edit(grip, selection, start);
                             return Some(Action::capture());
+                        }
+                        let (rect, _) = self.view.placement(size, self.size);
+                        if !rect.contains(p) {
+                            return None;
                         }
                         if let Some(i) = self.on_mark.and_then(|_| self.mark_at(start)) {
                             let on_mark = self.on_mark?;
@@ -461,35 +579,8 @@ impl<Message> canvas::Program<Message> for Overlay<Message> {
                     let on_select = self.on_select?;
                     let p = self.image_point(size, at?);
                     let (dx, dy) = (p.x - from.x, p.y - from.y);
-                    let (w, h) = (self.size.width, self.size.height);
-                    let (mut l, mut t, mut r, mut b) = (s.x, s.y, s.x + s.width, s.y + s.height);
-                    match grip {
-                        Grip::Move => {
-                            let dx = dx.clamp(-l, w - r);
-                            let dy = dy.clamp(-t, h - b);
-                            l += dx;
-                            r += dx;
-                            t += dy;
-                            b += dy;
-                        }
-                        Grip::Edges(el, et, er, eb) => {
-                            if el {
-                                l = (l + dx).clamp(0.0, w);
-                            }
-                            if et {
-                                t = (t + dy).clamp(0.0, h);
-                            }
-                            if er {
-                                r = (r + dx).clamp(0.0, w);
-                            }
-                            if eb {
-                                b = (b + dy).clamp(0.0, h);
-                            }
-                        }
-                    }
-                    Some(Action::publish(on_select(Some(Selection::from_corners(
-                        Point::new(l, t),
-                        Point::new(r, b),
+                    Some(Action::publish(on_select(Some(edited(
+                        grip, s, dx, dy, self.angle, self.size,
                     )))))
                 }
                 Drag::Pan(from, center) => {
@@ -566,25 +657,51 @@ impl<Message> canvas::Program<Message> for Overlay<Message> {
                 ..Color::BLACK
             };
             let r = rect;
-            for (x, y, w, h) in [
-                (r.x, r.y, r.width, top_left.y - r.y),
-                (
-                    r.x,
-                    top_left.y + size.height,
-                    r.width,
-                    r.y + r.height - top_left.y - size.height,
-                ),
-                (r.x, top_left.y, top_left.x - r.x, size.height),
-                (
-                    top_left.x + size.width,
-                    top_left.y,
-                    r.x + r.width - top_left.x - size.width,
-                    size.height,
-                ),
-            ] {
-                if w > 0.0 && h > 0.0 {
-                    frame.fill_rectangle(Point::new(x, y), Size::new(w, h), shade);
+            let c = Point::new(
+                top_left.x + size.width / 2.0,
+                top_left.y + size.height / 2.0,
+            );
+            // A point of the selection, as if upright, where it is drawn.
+            let at = |x: f32, y: f32| turned(Point::new(x, y), c, self.angle);
+            let (right, bottom) = (top_left.x + size.width, top_left.y + size.height);
+            let outline = [
+                at(top_left.x, top_left.y),
+                at(right, top_left.y),
+                at(right, bottom),
+                at(top_left.x, bottom),
+            ];
+            if self.angle == 0.0 {
+                for (x, y, w, h) in [
+                    (r.x, r.y, r.width, top_left.y - r.y),
+                    (r.x, bottom, r.width, r.y + r.height - bottom),
+                    (r.x, top_left.y, top_left.x - r.x, size.height),
+                    (right, top_left.y, r.x + r.width - right, size.height),
+                ] {
+                    if w > 0.0 && h > 0.0 {
+                        frame.fill_rectangle(Point::new(x, y), Size::new(w, h), shade);
+                    }
                 }
+            } else {
+                // The image with a hole where the selection is (the part of
+                // it on the image: a hole outside would be filled).
+                let hole = clipped(&outline, r);
+                let shaded = Path::new(|p| {
+                    p.rectangle(r.position(), r.size());
+                    if let Some((first, rest)) = hole.split_first().filter(|_| hole.len() >= 3) {
+                        p.move_to(*first);
+                        for q in rest {
+                            p.line_to(*q);
+                        }
+                        p.close();
+                    }
+                });
+                frame.fill(
+                    &shaded,
+                    canvas::Fill {
+                        style: canvas::Style::Solid(shade),
+                        rule: canvas::fill::Rule::EvenOdd,
+                    },
+                );
             }
             if self.grid {
                 // Dark under light: seen on white paper and on dark photos.
@@ -600,31 +717,26 @@ impl<Message> canvas::Program<Message> for Overlay<Message> {
                     let x = top_left.x + size.width * k;
                     let y = top_left.y + size.height * k;
                     for stroke in [dark, line] {
-                        frame.stroke(
-                            &Path::line(
-                                Point::new(x, top_left.y),
-                                Point::new(x, top_left.y + size.height),
-                            ),
-                            stroke,
-                        );
-                        frame.stroke(
-                            &Path::line(
-                                Point::new(top_left.x, y),
-                                Point::new(top_left.x + size.width, y),
-                            ),
-                            stroke,
-                        );
+                        frame.stroke(&Path::line(at(x, top_left.y), at(x, bottom)), stroke);
+                        frame.stroke(&Path::line(at(top_left.x, y), at(right, y)), stroke);
                     }
                 }
             }
             frame.stroke(
-                &Path::rectangle(top_left, size),
+                &Path::new(|p| {
+                    p.move_to(outline[0]);
+                    for q in &outline[1..] {
+                        p.line_to(*q);
+                    }
+                    p.close();
+                }),
                 Stroke::default().with_width(2.0).with_color(primary),
             );
             if self.on_select.is_some() {
                 let r = Rectangle::new(top_left, size);
-                for (at, _) in handles(r) {
-                    let corner = Point::new(at.x - HANDLE / 2.0, at.y - HANDLE / 2.0);
+                for (h, _) in handles(r) {
+                    let h = at(h.x, h.y);
+                    let corner = Point::new(h.x - HANDLE / 2.0, h.y - HANDLE / 2.0);
                     frame.fill_rectangle(corner, Size::new(HANDLE, HANDLE), Color::WHITE);
                     frame.stroke(
                         &Path::rectangle(corner, Size::new(HANDLE, HANDLE)),
@@ -637,15 +749,18 @@ impl<Message> canvas::Program<Message> for Overlay<Message> {
                         s.width * self.mm_per_pixel,
                         s.height * self.mm_per_pixel
                     );
-                    let at = Point::new(top_left.x, (top_left.y - 26.0).max(0.0));
+                    // Above the outline, at its left.
+                    let left = outline.iter().map(|p| p.x).fold(f32::MAX, f32::min);
+                    let top = outline.iter().map(|p| p.y).fold(f32::MAX, f32::min);
+                    let place = Point::new(left, (top - 26.0).max(0.0));
                     frame.fill_rectangle(
-                        at,
+                        place,
                         Size::new(8.0 + 7.5 * label.len() as f32, 20.0),
                         primary,
                     );
                     frame.fill_text(canvas::Text {
                         content: label,
-                        position: Point::new(at.x + 6.0, at.y + 3.0),
+                        position: Point::new(place.x + 6.0, place.y + 3.0),
                         color: Color::WHITE,
                         size: 13.0.into(),
                         ..canvas::Text::default()
@@ -697,5 +812,188 @@ impl<Message> canvas::Program<Message> for Overlay<Message> {
                 None => mouse::Interaction::default(),
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use scan_imaging::detect::Found;
+
+    fn close(a: Point, b: Point) -> bool {
+        (a.x - b.x).abs() < 1e-3 && (a.y - b.y).abs() < 1e-3
+    }
+
+    fn found(s: Selection, angle: f32) -> Found {
+        Found {
+            cx: s.x + s.width / 2.0,
+            cy: s.y + s.height / 2.0,
+            width: s.width,
+            height: s.height,
+            angle,
+        }
+    }
+
+    const S: Selection = Selection {
+        x: 100.0,
+        y: 200.0,
+        width: 300.0,
+        height: 150.0,
+    };
+
+    /// The outline drawn is the area cut: the corners of the selection
+    /// turned by its angle are those of the original found.
+    #[test]
+    fn the_outline_turns_as_the_area_found() {
+        let c = Point::new(S.x + S.width / 2.0, S.y + S.height / 2.0);
+        let (r, b) = (S.x + S.width, S.y + S.height);
+        let upright = [(S.x, S.y), (r, S.y), (r, b), (S.x, b)];
+        for angle in [-30.0, 0.0, 12.5, 45.0] {
+            let corners = found(S, angle).corners();
+            for ((x, y), [fx, fy]) in upright.into_iter().zip(corners) {
+                assert!(close(
+                    turned(Point::new(x, y), c, angle),
+                    Point::new(fx, fy)
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn an_upright_selection_moves_its_sides_as_before() {
+        let size = Size::new(1000.0, 1000.0);
+        let right = Grip::Edges(false, false, true, false);
+        let s = edited(right, S, 10.0, 7.0, 0.0, size);
+        assert_eq!((s.x, s.y, s.width, s.height), (100.0, 200.0, 310.0, 150.0));
+        // Within the image.
+        let s = edited(right, S, 900.0, 0.0, 0.0, size);
+        assert_eq!(s.x + s.width, 1000.0);
+        let s = edited(Grip::Move, S, -500.0, 0.0, 0.0, size);
+        assert_eq!((s.x, s.width), (0.0, 300.0));
+    }
+
+    /// A turned selection's side moves along its angle, the opposite side
+    /// stays where it is.
+    #[test]
+    fn a_turned_selection_moves_its_sides_along_its_angle() {
+        let size = Size::new(1000.0, 1000.0);
+        let right = Grip::Edges(false, false, true, false);
+        // At 90° the right side faces down: a drag across it does nothing.
+        let s = edited(right, S, 10.0, 0.0, 90.0, size);
+        assert!((s.width - S.width).abs() < 1e-3, "{s:?}");
+        let s = edited(right, S, 0.0, 10.0, 90.0, size);
+        assert!((s.width - 310.0).abs() < 1e-3, "{s:?}");
+        for (grip, angle) in [
+            (right, 30.0),
+            (Grip::Edges(true, true, false, false), -20.0),
+            (Grip::Edges(false, false, false, true), 7.5),
+        ] {
+            let after = edited(grip, S, 23.0, -11.0, angle, size);
+            let (old, new) = (found(S, angle).corners(), found(after, angle).corners());
+            // The corner opposite the one (or the side) taken stays.
+            let kept = if grip == Grip::Edges(true, true, false, false) {
+                2
+            } else {
+                0
+            };
+            let (a, b) = (old[kept], new[kept]);
+            assert!(
+                close(Point::new(a[0], a[1]), Point::new(b[0], b[1])),
+                "{grip:?} {angle}: {a:?} → {b:?}"
+            );
+        }
+    }
+
+    /// A turned area grows no larger than the image, and one sticking out
+    /// of it moves without jumping back (nor panicking).
+    #[test]
+    fn a_turned_selection_stays_no_larger_than_the_image() {
+        let size = Size::new(1000.0, 1000.0);
+        let wide = Selection {
+            x: 10.0,
+            y: 400.0,
+            width: 980.0,
+            height: 200.0,
+        };
+        let right = Grip::Edges(false, false, true, false);
+        let s = edited(right, wide, 3000.0, 0.0, 0.1, size);
+        assert!(s.width <= size.width + 1e-3, "{s:?}");
+        // Its left side where it was.
+        let ([a, ..], [b, ..]) = (found(wide, 0.1).corners(), found(s, 0.1).corners());
+        assert!(
+            close(Point::new(a[0], a[1]), Point::new(b[0], b[1])),
+            "{a:?} → {b:?}"
+        );
+        let s = edited(right, wide, -3000.0, 0.0, 0.1, size);
+        assert!(s.width <= size.width + 1e-3, "{s:?}");
+        let moved = edited(Grip::Move, s, 1.0, 0.0, 0.1, size);
+        assert!((moved.x - s.x).abs() <= 1.0 + 1e-3, "{s:?} → {moved:?}");
+        let left = Grip::Edges(true, false, false, false);
+        let out = edited(left, S, -400.0, 0.0, 20.0, size);
+        assert!(out.x < 0.0, "{out:?}");
+        let moved = edited(Grip::Move, out, 1.0, 0.0, 20.0, size);
+        assert!((moved.x - out.x - 1.0).abs() < 1e-3, "{out:?} → {moved:?}");
+        let moved = edited(Grip::Move, out, -1.0, 0.0, 20.0, size);
+        assert_eq!(moved.x, out.x);
+    }
+
+    #[test]
+    fn the_part_of_an_outline_on_the_image() {
+        let r = Rectangle::new(Point::ORIGIN, Size::new(100.0, 100.0));
+        let square = [
+            Point::new(50.0, 50.0),
+            Point::new(150.0, 50.0),
+            Point::new(150.0, 150.0),
+            Point::new(50.0, 150.0),
+        ];
+        let cut = clipped(&square, r);
+        assert_eq!(cut.len(), 4);
+        assert!(cut
+            .iter()
+            .all(|p| r.contains(*p) || p.x == 100.0 || p.y == 100.0));
+        let outside = square.map(|p| Point::new(p.x + 200.0, p.y));
+        assert!(clipped(&outside, r).is_empty());
+        assert_eq!(
+            clipped(&square.map(|p| Point::new(p.x - 40.0, p.y - 40.0)), r).len(),
+            4
+        );
+    }
+
+    /// The handles are taken where they are drawn, at the selection's angle.
+    #[test]
+    fn a_turned_selection_is_taken_by_its_turned_handles() {
+        let overlay = |angle: f32| Overlay::<()> {
+            size: Size::new(1000.0, 1000.0),
+            view: View {
+                scale: Some(1.0),
+                center: None,
+            },
+            selection: Some(S),
+            angle,
+            marks: Vec::new(),
+            on_view: |_| (),
+            on_select: None,
+            on_pick: None,
+            on_mark: None,
+            mm_per_pixel: 0.0,
+            grid: false,
+        };
+        let bounds = Size::new(1000.0, 1000.0);
+        let turned_overlay = overlay(30.0);
+        let [tl, _, br, _] = found(S, 30.0).corners();
+        assert_eq!(
+            turned_overlay.grip_at(bounds, Point::new(tl[0], tl[1])),
+            Some(Grip::Edges(true, true, false, false))
+        );
+        assert_eq!(
+            turned_overlay.grip_at(bounds, Point::new(br[0], br[1])),
+            Some(Grip::Edges(false, false, true, true))
+        );
+        // The upright corner, outside the turned area, is no handle.
+        assert_eq!(turned_overlay.grip_at(bounds, Point::new(S.x, S.y)), None);
+        assert_eq!(
+            overlay(0.0).grip_at(bounds, Point::new(S.x, S.y)),
+            Some(Grip::Edges(true, true, false, false))
+        );
     }
 }
