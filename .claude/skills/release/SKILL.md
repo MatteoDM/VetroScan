@@ -1,6 +1,6 @@
 ---
 name: release
-description: Publishes a version of VetroScan — raises the workspace version, moves what is new in the CHANGELOG, checks and commits; then either the vX.Y.Z tag lets the "CI and Release" workflow build and publish the packages, or, while GitHub Actions cannot run, the Windows and Linux packages are made locally (package.ps1, WSL) and published with gh release create; also installs the new version on this PC and recovers from a failed release. Use it when asked to release, publish, tag, raise the version, build the packages or install the new version.
+description: Publishes a version of VetroScan — raises the workspace version, moves what is new in the CHANGELOG, checks and commits; then the vX.Y.Z tag lets the "CI and Release" workflow build and publish the packages (only if GitHub Actions cannot run, the Windows and Linux packages are made locally and published with gh release create); also installs the new version on this PC and recovers from a failed release. Use it when asked to release, publish, tag, raise the version, build the packages or install the new version.
 disable-model-invocation: true
 model: sonnet
 ---
@@ -59,15 +59,14 @@ the tags: it is not touched at every release.
    cargo fmt --all --check
    cargo clippy --workspace --all-targets --locked -- -D warnings
    ```
-   While the workflow cannot run, these are Windows' only: also run the Linux checks in WSL
-   and the macOS clippy described in `CLAUDE.md` (*Checks · The other systems*), and say in
-   the release's report that macOS was checked by clippy only (the app crate not built, no
-   test run).
+   These are Windows' only: the push to `main` runs the tests on Linux, Windows and macOS.
+   Do not build the Linux or macOS packages, nor run the WSL checks, here: the pipeline does
+   (Matteo, 22 November 2026).
 4. Commit: `Release vX.Y.Z` with `Cargo.toml`, `Cargo.lock` and `CHANGELOG.md`.
-   Then check whether the workflow can run at all (`gh run list --limit 3`): since 10 November
-   2026 the repository is private and GitHub Actions do not start (the account's billing), so
-   steps 5-7 cannot be done: go to *While the workflow cannot run* below instead. Pushing and
-   tagging are Matteo's either way: give him the commands.
+   The workflow runs (`gh run list --limit 3`: the repository is public again since
+   22 November 2026; from 10 to 22 November it was private and Actions did not start, the
+   reason for *While the workflow cannot run* below). Pushing and tagging are Matteo's: give
+   him the commands.
 5. Push `main` and **do the dress rehearsal**: *Actions → CI and Release → Run workflow* on
    `main` (or `gh workflow run release.yml --ref main`). It runs the tests, `prepare` and the
    five `build`s but not `release`. Only an all-green rehearsal guarantees that the tag will
@@ -82,7 +81,7 @@ the tags: it is not touched at every release.
    at the end `gh release view vX.Y.Z` must list 12 files (2 Windows, 2 macOS, 4 per Linux
    architecture) plus `SHA256SUMS.txt`.
 
-## While the workflow cannot run (since 10 November 2026)
+## While the workflow cannot run (10-22 November 2026; only if it happens again)
 
 The packages are made on this Windows PC and Matteo publishes them. v0.5.0 and v0.6.0 were
 released this way, with Windows and Linux x86_64 only (macOS and Linux aarch64 need the

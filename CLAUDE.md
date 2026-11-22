@@ -83,16 +83,14 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 - The app's e2e (`crates/vetroscan/src/e2e.rs`, about 130 tests) takes about 5 minutes: run the
   tests in the background and read their real exit code; never pipe cargo through `grep`, it
   hides a failure.
-- **The other systems**, while GitHub Actions cannot run (they test Linux, Windows and macOS):
-  - Linux: the same checks in WSL on the committed HEAD (clone `/mnt/c/.../repo` into
-    `$HOME`, `cargo fmt`, `clippy -D warnings`, `cargo test --workspace --locked`), from Git
-    Bash with `MSYS_NO_PATHCONV=1 wsl -d Ubuntu -- bash -lc '…'`; commit first.
-  - macOS: `CARGO_TARGET_DIR=target/mac cargo clippy --workspace --exclude vetroscan
-    --all-targets --locked --target aarch64-apple-darwin -- -D warnings` (and
-    `x86_64-apple-darwin`). The app itself cannot be built here (its notifications need
-    Apple's compiler), nor any test run: say that macOS is checked only so far.
-  - A change that touches `#[cfg(...)]` code, USB access or packaging is not done until both
-    have passed.
+- **The other systems**: the repository is public and GitHub Actions run (since 22 November
+  2026 again): every push to `main` tests Linux, Windows and macOS (`gh run list`), so a
+  change that touches `#[cfg(...)]` code, USB access or packaging is done when that run is
+  green. Before pushing, a quick macOS check here: `CARGO_TARGET_DIR=target/mac cargo clippy
+  --workspace --exclude vetroscan --all-targets --locked --target aarch64-apple-darwin -- -D
+  warnings` (and `x86_64-apple-darwin`; the app itself cannot be built here). The WSL checks
+  (clone the committed HEAD into `$HOME`, from Git Bash with
+  `MSYS_NO_PATHCONV=1 wsl -d Ubuntu -- bash -lc '…'`) only if the CI cannot run again.
 - On the real scanner, only when Matteo has it connected:
   `cargo test -p hp3770-cli --test hardware -- --ignored --test-threads 1`.
 - To let Matteo try a change: `cargo build --release`, then start `target\release\vetroscan.exe`
