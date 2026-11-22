@@ -1036,7 +1036,7 @@ dependencies = [
 
 [[package]]
 name = "epson-gt-x750"
-version = "0.11.3"
+version = "0.11.4"
 dependencies = [
  "nusb",
  "png",
@@ -1598,14 +1598,14 @@ checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 
 [[package]]
 name = "hp3770-capture"
-version = "0.11.3"
+version = "0.11.4"
 dependencies = [
  "hp3770-core",
 ]
 
 [[package]]
 name = "hp3770-cli"
-version = "0.11.3"
+version = "0.11.4"
 dependencies = [
  "clap",
  "hp3770-capture",
@@ -1618,7 +1618,7 @@ dependencies = [
 
 [[package]]
 name = "hp3770-core"
-version = "0.11.3"
+version = "0.11.4"
 dependencies = [
  "scan-imaging",
  "scanner-api",
@@ -1626,7 +1626,7 @@ dependencies = [
 
 [[package]]
 name = "hp3770-usb"
-version = "0.11.3"
+version = "0.11.4"
 dependencies = [
  "hp3770-core",
  "nusb",
@@ -3648,11 +3648,11 @@ dependencies = [
 
 [[package]]
 name = "scan-imaging"
-version = "0.11.3"
+version = "0.11.4"
 
 [[package]]
 name = "scanner-api"
-version = "0.11.3"
+version = "0.11.4"
 dependencies = [
  "scan-imaging",
 ]
@@ -4397,7 +4397,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vetroscan"
-version = "0.11.3"
+version = "0.11.4"
 dependencies = [
  "dirs",
  "epson-gt-x750",
@@ -4421,7 +4421,7 @@ dependencies = [
 
 [[package]]
 name = "vetroscan-export"
-version = "0.11.3"
+version = "0.11.4"
 dependencies = [
  "flate2",
  "hp3770-core",

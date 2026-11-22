@@ -17,6 +17,8 @@ GitHub; here they are in English.
 
 ## [Unreleased]
 
+## [0.11.4] - 2026-11-22
+
 ### Fixed
 - On macOS the Epson Perfection 4490 was listed but could not be opened ("interface not
   found"): macOS leaves a device of its kind unconfigured when no driver of the system takes
@@ -703,7 +705,8 @@ First version.
 - Texts with a run of spaces in the middle (note on RAW, on 16 bits and on the buttons in
   Windows); the button of the default folder uses the system's separator.
 
-[Unreleased]: https://github.com/MatteoDM/VetroScan/compare/v0.11.3...HEAD
+[Unreleased]: https://github.com/MatteoDM/VetroScan/compare/v0.11.4...HEAD
+[0.11.4]: https://github.com/MatteoDM/VetroScan/compare/v0.11.3...v0.11.4
 [0.11.3]: https://github.com/MatteoDM/VetroScan/compare/v0.11.2...v0.11.3
 [0.11.2]: https://github.com/MatteoDM/VetroScan/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/MatteoDM/VetroScan/compare/v0.11.0...v0.11.1
